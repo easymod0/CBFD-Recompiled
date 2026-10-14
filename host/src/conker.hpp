@@ -169,6 +169,10 @@ namespace conker {
     // no menus). Their readers fall back to the defaults without them.
     bool graphics_config_ready();
 
+    // conker_config.cpp: General's Start Game Directly (issue #133), read from the General tab's saved file
+    // (main asks before the tabs exist).
+    bool start_game_directly();
+
     // sound_volumes.cpp: the Sound tab's Music, Sound Effects and Speech volumes.
     namespace sound_volumes {
         // conker_config.cpp: the options, on the Sound tab.

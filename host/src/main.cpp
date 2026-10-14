@@ -473,6 +473,14 @@ int main(int argc, char** argv) {
     conker::register_overlays();
     conker::register_mod_exports();
 
+#if defined(CONKER_RT64)
+    // General: Start Game Directly (issue #133): the game starts without the launcher once a ROM has been
+    // picked (and the launcher is shown as ever without one).
+    if (!headless && !start_directly && rom_path.empty() && conker::start_game_directly()) {
+        recomp::check_all_stored_roms();
+        start_directly = recomp::is_rom_valid(game_id);
+    }
+#endif
     if (!select_rom(rom_path, start_directly)) {
         return EXIT_FAILURE;
     }

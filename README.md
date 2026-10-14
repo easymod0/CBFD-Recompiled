@@ -231,7 +231,9 @@ IDO's macOS build from
 Run `host/build/ConkerRecomp` (Linux and macOS) or `host\build-win\ConkerRecomp.exe`
 (Windows). The first time, pick **Load ROM** in the launcher and select your ROM
 (the same `baserom.us.z64` works). After that it's remembered, so just choose
-**Start Game**.
+**Start Game**. With **Start Game Directly** on the General tab, the game starts as
+soon as the program opens, without the launcher (turn it off in the settings while
+playing to get the launcher back).
 
 - **Settings** (in the launcher, or Esc / the controller's menu button in game)
   has its options by tab: General (deadzone, rumble), Camera (turning, the free
