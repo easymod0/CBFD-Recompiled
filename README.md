@@ -275,7 +275,7 @@ included here):
 - **US Russian**, the Russian fan translation.
 - **US German**, [ConkerDeutschMod](https://github.com/niehoff90/ConkerDeutschMod) 0.2.0,
   German voices and text.
-- **US Portuguese** and **US Portuguese Uncensored**, the Brazilian Portuguese
+- **US Brazilian Portuguese** and **US Brazilian Portuguese Uncensored**, the
   translation by João13, Mumm-Ra and By FTR (1.0.1). Its own boot screen isn't shown:
   the recompiled game doesn't run the ROM's boot code, and the rest plays as it is.
 

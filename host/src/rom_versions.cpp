@@ -24,6 +24,7 @@
 // those two left out too.
 
 #include <algorithm>
+#include <cctype>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -66,8 +67,8 @@ namespace {
         { 0xAC445026C8F77A94ULL, "uncensored", "US Uncensored" }, // the bleeped words restored
         { 0xB97E9AFFEA6ED925ULL, "russian", "US Russian" },       // the fan translation into Russian
         { 0xFA76F05BA7E6D7D9ULL, "german", "US German" },         // the German voices and text (ConkerDeutschMod 0.2.0, issue #129)
-        { 0x140A66314ED14EE4ULL, "portuguese", "US Portuguese" }, // the Brazilian Portuguese translation (1.0.1, issue #131)
-        { 0x02D824D676A58D29ULL, "portuguese-uncensored", "US Portuguese Uncensored" }, // its uncensored version
+        { 0x140A66314ED14EE4ULL, "portuguese", "US Brazilian Portuguese" }, // the Brazilian Portuguese translation (1.0.1, issue #131)
+        { 0x02D824D676A58D29ULL, "portuguese-uncensored", "US Brazilian Portuguese Uncensored" }, // its uncensored version
     };
 
     // Where the code is in the ROM (recomp/unpack_rom.py): .init as it is from code_start to
@@ -172,7 +173,27 @@ namespace {
             }
         }
         // hack-<hash>: the hash's first 8 digits tell hacks apart.
-        return "US ROM hack (" + slug.substr(5, 8) + ")";
+        if (slug.rfind("hack-", 0) == 0 && slug.size() > 5) {
+            return "US ROM hack (" + slug.substr(5, 8) + ")";
+        }
+        // A version another build of the program named (kept as <slug>.z64), which this one doesn't know: its
+        // slug, its words capitalised ("portuguese-uncensored" is "US Portuguese Uncensored"). It was read as a
+        // hash, and showed a slice of the name ("US ROM hack (guese-un)").
+        std::string name = "US";
+        bool word_start = true;
+        for (char c : slug) {
+            if (c == '-' || c == '_') {
+                word_start = true;
+                continue;
+            }
+            if (word_start) {
+                name += ' ';
+                c = (char)std::toupper((unsigned char)c);
+                word_start = false;
+            }
+            name += c;
+        }
+        return name;
     }
 
     // The versions kept, named ones first in the order above, then hacks.
