@@ -215,8 +215,10 @@ namespace conker {
     namespace local_achievements {
         // At start (frontend.cpp, once the config folder is known): reads the unlocks so far.
         void init();
-        // With the other settings tabs (conker_config.cpp): the Achievements tab.
+        // With the other settings tabs (conker_config.cpp): the Achievements tab, and on the General tab,
+        // Achievement Notifications (issue #128).
         void add_tab();
+        void add_options(recomp::config::Config& config);
         // From the game thread, as the game starts a frame's display list: unlocks what the save has reached.
         void game_frame(uint8_t* rdram);
         // Save states (save_states.cpp), as one is loaded: the scenes it has are put back with the game's memory,

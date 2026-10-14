@@ -166,7 +166,9 @@ void conker::init_config() {
     general_options.has_rumble_strength = false;
     general_options.has_gyro_sensitivity = false;
     general_options.has_mouse_sensitivity = false;
-    conker::rumble::add_options(recompui::config::create_general_tab(general_options));
+    recomp::config::Config& general_config = recompui::config::create_general_tab(general_options);
+    conker::rumble::add_options(general_config);
+    conker::local_achievements::add_options(general_config);
     conker::look_aim::add_camera_options(recompui::config::create_config_tab("Camera", camera_tab_id, false));
     conker::look_aim::add_mouse_gyro_options(recompui::config::create_config_tab("Mouse & Gyro", mouse_gyro_tab_id, false));
 
