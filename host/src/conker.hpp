@@ -204,10 +204,14 @@ namespace conker {
         void game_frame();
     }
 
-    // reticle.cpp: Aiming: Reticle, a ring in the middle of the screen while aiming (issue #74).
+    // reticle.cpp: Aiming: Reticle, a ring, crosshair or dot in the middle of the screen while aiming (issues #74, #124).
     namespace reticle {
-        // look_aim.cpp: whether the setting is on.
-        bool enabled();
+        // Aiming: Reticle (Ring has the key and value the setting's On had) and Aiming: Reticle Size.
+        enum class Style : uint32_t { Ring, Off, Crosshair, Dot };
+        enum class Size : uint32_t { Small, Medium, Large };
+        // look_aim.cpp: the settings.
+        Style style();
+        Size size();
         // From the game thread, each frame a camera aims in the second aiming mode (conker_aim_stick,
         // $s0 the camera state): player 1's shows the reticle, unless zoomed in or in split screen.
         void aim_frame(uint8_t* rdram, gpr camera);
