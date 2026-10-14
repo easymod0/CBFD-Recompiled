@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 79dfc38..237a00d 100644
+index 79dfc38..6467e67 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -327,6 +327,7 @@ set (SOURCES
@@ -18,11 +18,29 @@ index 79dfc38..237a00d 100644
      "${PROJECT_SOURCE_DIR}/src/hle/rt64_rigid_body.cpp"
      "${PROJECT_SOURCE_DIR}/src/hle/rt64_rsp.cpp"
      "${PROJECT_SOURCE_DIR}/src/hle/rt64_state.cpp"
+@@ -518,6 +520,7 @@ build_compute_shader(rt64 "src/shaders/FbWriteDepthCS.hlsl")
+ build_compute_shader(rt64 "src/shaders/FbWriteDepthCS.hlsl" "src/shaders/FbWriteDepthCSMS.hlsl" "-D MULTISAMPLING")
+ build_compute_shader(rt64 "src/shaders/GaussianFilterRGB3x3CS.hlsl")
+ build_compute_shader(rt64 "src/shaders/BoxFilterCS.hlsl")
++build_compute_shader(rt64 "src/shaders/ConkerBlurCS.hlsl")
+ build_compute_shader(rt64 "src/shaders/BicubicScalingCS.hlsl")
+ build_compute_shader(rt64 "src/shaders/HistogramAverageCS.hlsl")
+ build_compute_shader(rt64 "src/shaders/HistogramClearCS.hlsl")
 diff --git a/include/rt64_extended_gbi.h b/include/rt64_extended_gbi.h
-index d387090..75ab87d 100644
+index d387090..45aa593 100644
 --- a/include/rt64_extended_gbi.h
 +++ b/include/rt64_extended_gbi.h
-@@ -113,6 +113,9 @@
+@@ -80,7 +80,8 @@
+ #define G_EX_SETVERTEXSEGMENT_V1        0x000031
+ #define G_EX_SETTEXCOORDWRAPPOINT_V1    0x000032
+ #define G_EX_SETRECTASPECT_V1           0x000033
+-#define G_EX_MAX                        0x000034
++#define G_EX_CONKERBLURFRAMEBUFFER_V1   0x000034 // Conker: see gEXConkerBlurFramebuffer
++#define G_EX_MAX                        0x000035
+ 
+ #define G_EX_ORIGIN_NONE            0x800
+ #define G_EX_ORIGIN_LEFT            0x0
+@@ -113,6 +114,9 @@
  #define G_EX_ASPECT_AUTO            0x0
  #define G_EX_ASPECT_STRETCH         0x1
  #define G_EX_ASPECT_ADJUST          0x2
@@ -32,8 +50,23 @@ index d387090..75ab87d 100644
  
  #define G_EX_VERTEX_POSITION        0x0
  #define G_EX_VERTEX_VELOCITY        0x1
+@@ -579,4 +583,14 @@ typedef union {
+         PARAM(aspect, 2, 0) \
+     )
+ 
++// Conker: once the frame's last framebuffer pair drawing into the color image at address (24 bits) is drawn, its high
++// resolution picture is blurred, by strength (8 bits) quarters of an N64 pixel. A copy of the frame blurred this way
++// stays as sharp as the high resolution picture and as wide as the widened view: the pause menu's background (Conker's
++// own blurs its copy on the CPU, in RDRAM, where it's the N64's 320 pixels and only the 4:3 view).
++#define gEXConkerBlurFramebuffer(cmd, address, strength) \
++    G_EX_COMMAND1(cmd, \
++        PARAM(RT64_EXTENDED_OPCODE, 8, 24) | PARAM(G_EX_CONKERBLURFRAMEBUFFER_V1, 24, 0), \
++        PARAM(strength, 8, 24) | PARAM(address, 24, 0) \
++    )
++
+ #endif // RT64_EXTENDED_GBI
 diff --git a/src/common/rt64_common.h b/src/common/rt64_common.h
-index f79adbf..6e0a6f9 100644
+index f79adbf..e40a61d 100644
 --- a/src/common/rt64_common.h
 +++ b/src/common/rt64_common.h
 @@ -70,6 +70,18 @@ namespace RT64 {
@@ -282,6 +315,31 @@ index 69c35d2..bcea8ec 100644
          Count
      };
  
+diff --git a/src/gbi/rt64_gbi_extended.cpp b/src/gbi/rt64_gbi_extended.cpp
+index 20c0d4d..819b5a2 100644
+--- a/src/gbi/rt64_gbi_extended.cpp
++++ b/src/gbi/rt64_gbi_extended.cpp
+@@ -331,6 +331,12 @@ namespace RT64 {
+             state->rdp->setRectAspect(aspect);
+         }
+ 
++        void conkerBlurFramebufferV1(State *state, DisplayList **dl) {
++            const uint32_t address = (*dl)->p1(0, 24);
++            const uint8_t strength = (*dl)->p1(24, 8);
++            state->setConkerBlurFramebuffer(address, strength);
++        }
++
+         void noOpHook(State *state, DisplayList **dl) {
+             uint32_t magicNumber = (*dl)->p0(0, 24);
+             if (magicNumber == RT64_HOOK_MAGIC_NUMBER) {
+@@ -439,6 +445,7 @@ namespace RT64 {
+             Map[G_EX_SETVERTEXSEGMENT_V1] = &setVertexSegmentV1;
+             Map[G_EX_SETTEXCOORDWRAPPOINT_V1] = &setTexcoordWrapPointV1;
+             Map[G_EX_SETRECTASPECT_V1] = &setRectAspectV1;
++            Map[G_EX_CONKERBLURFRAMEBUFFER_V1] = &conkerBlurFramebufferV1;
+             MapInitialized = true;
+         }
+     }
 diff --git a/src/gbi/rt64_gbi_f3dex2cbfd.cpp b/src/gbi/rt64_gbi_f3dex2cbfd.cpp
 new file mode 100644
 index 0000000..96768bb
@@ -1787,7 +1845,7 @@ index 61bb3b1..782ed13 100644
          void setVertexSegmentV1(bool isEnabled, uint32_t vertexElement, uint32_t vertexAddress, uint32_t baseSegmentAddress);
          template<uint32_t floatCount, uint32_t vertexSize>
 diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
-index 2970e71..9102bbf 100644
+index 2970e71..5358814 100644
 --- a/src/hle/rt64_state.cpp
 +++ b/src/hle/rt64_state.cpp
 @@ -4,6 +4,8 @@
@@ -1888,8 +1946,34 @@ index 2970e71..9102bbf 100644
          // Store the presentation rate in the workload.
          if (extended.refreshRate != UINT16_MAX) {
              workload.viOriginalRate = extended.refreshRate;
+@@ -2727,6 +2776,13 @@ namespace RT64 {
+     void State::setDitherNoiseStrength(float noiseStrength) {
+         extended.ditherNoiseStrength = noiseStrength;
+     }
++
++    // Conker: gEXConkerBlurFramebuffer, for the workload being made (WorkloadQueue blurs the picture as it draws it).
++    void State::setConkerBlurFramebuffer(uint32_t address, uint8_t strength) {
++        Workload &workload = ext.workloadQueue->workloads[ext.workloadQueue->writeCursor];
++        workload.extended.conkerBlurAddress = address & 0x00FFFFFF;
++        workload.extended.conkerBlurStrength = strength;
++    }
+     
+     void State::setExtendedRDRAM(bool isExtended) {
+         extended.extendRDRAM = isExtended;
+diff --git a/src/hle/rt64_state.h b/src/hle/rt64_state.h
+index 7a8c13b..373815a 100644
+--- a/src/hle/rt64_state.h
++++ b/src/hle/rt64_state.h
+@@ -165,6 +165,7 @@ namespace RT64 {
+         void setDitherNoiseStrength(float noiseStrength);
+         void setExtendedRDRAM(bool isExtended);
+         void setTexcoordWrapPoint(int16_t wrapU, int16_t wrapV);
++        void setConkerBlurFramebuffer(uint32_t address, uint8_t strength);
+         void startSpriteCommand(uint64_t replacementHash);
+         void endSpriteCommand();
+         uint8_t *fromRDRAM(uint32_t rdramAddress) const;
 diff --git a/src/hle/rt64_workload.cpp b/src/hle/rt64_workload.cpp
-index b4c85f5..3e5f75e 100644
+index b4c85f5..61c515c 100644
 --- a/src/hle/rt64_workload.cpp
 +++ b/src/hle/rt64_workload.cpp
 @@ -4,7 +4,23 @@
@@ -1916,7 +2000,16 @@ index b4c85f5..3e5f75e 100644
      // Common functions.
  
      static uint64_t roundUp(uint64_t value, uint64_t powerOf2Alignment) {
-@@ -315,6 +331,55 @@ namespace RT64 {
+@@ -22,6 +38,8 @@ namespace RT64 {
+         workloadId = 0;
+         extended.testZIndexCount = 0;
+         extended.ditherNoiseStrength = 1.0f;
++        extended.conkerBlurAddress = 0;
++        extended.conkerBlurStrength = 0;
+ 
+         commandWarnings.clear();
+         spriteCommands.clear();
+@@ -315,6 +333,55 @@ namespace RT64 {
          return addedPair;
      }
  
@@ -1973,7 +2066,7 @@ index b4c85f5..3e5f75e 100644
          if (fbPairCount > 0) {
              return fbPairCount - 1;
 diff --git a/src/hle/rt64_workload.h b/src/hle/rt64_workload.h
-index 8ea27d5..392867f 100644
+index 8ea27d5..5e7cbdc 100644
 --- a/src/hle/rt64_workload.h
 +++ b/src/hle/rt64_workload.h
 @@ -23,6 +23,13 @@
@@ -1990,7 +2083,7 @@ index 8ea27d5..392867f 100644
      struct DrawData {
          std::vector<float> posFloats;
          std::vector<float> velFloats;
-@@ -234,6 +241,8 @@ namespace RT64 {
+@@ -234,11 +241,16 @@ namespace RT64 {
          uint64_t workloadId = 0;
          uint64_t presentId = 0;
          bool paused = false;
@@ -1999,7 +2092,15 @@ index 8ea27d5..392867f 100644
  
          struct {
              uint32_t testZIndexCount = 0;
-@@ -253,5 +262,16 @@ namespace RT64 {
+             float ditherNoiseStrength = 1.0f;
+             hlslpp::float2 texcoordWrapPoint = {};
++            // Conker: the color image whose picture is blurred once drawn, and by how much (gEXConkerBlurFramebuffer).
++            uint32_t conkerBlurAddress = 0;
++            uint8_t conkerBlurStrength = 0;
+         } extended;
+ 
+         void reset();
+@@ -253,5 +265,16 @@ namespace RT64 {
          void begin(uint64_t submissionFrame);
          bool addFramebufferPair(uint32_t colorAddress, uint8_t colorFmt, uint8_t colorSiz, uint16_t colorWidth, uint32_t depthAddress);
          int currentFramebufferPairIndex() const;
@@ -2018,7 +2119,7 @@ index 8ea27d5..392867f 100644
  };
 \ No newline at end of file
 diff --git a/src/hle/rt64_workload_queue.cpp b/src/hle/rt64_workload_queue.cpp
-index 5a331aa..e6c0eae 100644
+index 5a331aa..c2c5f25 100644
 --- a/src/hle/rt64_workload_queue.cpp
 +++ b/src/hle/rt64_workload_queue.cpp
 @@ -4,6 +4,8 @@
@@ -2161,7 +2262,34 @@ index 5a331aa..e6c0eae 100644
                              FramebufferChange *depthFbChange = depthFb->readChangeFromStorage(ext.workloadGraphicsWorker, workload.fbStorage, scratchFbChangePool, Framebuffer::Type::Depth,
                                  G_IM_FMT_DEPTH, f, depthFb->readHeight, readRowCount, ext.shaderLibrary);
  
-@@ -986,7 +1049,7 @@ namespace RT64 {
+@@ -811,6 +874,26 @@ namespace RT64 {
+                         overrideTarget->resolveFromTarget(ext.workloadGraphicsWorker, colorTarget, ext.shaderLibrary);
+                     }
+ 
++                    // Conker: the picture asked for with gEXConkerBlurFramebuffer is blurred once the frame's last pair
++                    // drawing into it is drawn, before anything reads it (its tile copies are made as later pairs start).
++                    const uint32_t conkerBlurAddress = workload.extended.conkerBlurAddress;
++                    if ((conkerBlurAddress != 0) && (colorTarget != nullptr) && (colorFb != nullptr) && ((colorImg.address & 0x00FFFFFF) == conkerBlurAddress)) {
++                        bool lastPair = true;
++                        for (uint32_t g = f + 1; (g < fbPairCount) && lastPair; g++) {
++                            lastPair = ((workload.fbPairs[g].colorImage.address & 0x00FFFFFF) != conkerBlurAddress);
++                        }
++
++                        if (lastPair) {
++                            // The picture's native size at the high resolution, and sigma in N64 pixels, shrunk about as
++                            // much as the resolution is raised: the blur works on a picture about the N64's size.
++                            uint32_t blurWidth = 0, blurHeight = 0, blurMisalignment = 0;
++                            RenderTarget::computeScaledSize(colorFb->width, colorFb->height, fixedResScale, blurWidth, blurHeight, blurMisalignment);
++                            const uint32_t downsample = std::max(uint32_t(fixedResScale.y), 1U);
++                            const float sigma = (float(workload.extended.conkerBlurStrength) / 4.0f) * (fixedResScale.y / float(downsample));
++                            colorTarget->conkerBlur(ext.workloadGraphicsWorker, ext.shaderLibrary, blurWidth, blurHeight, downsample, sigma);
++                        }
++                    }
++
+                     const uint64_t writeTimestamp = fbManager.nextWriteTimestamp();
+                     FixedRect depthFbRect;
+                     if (colorFb != nullptr) {
+@@ -986,7 +1069,7 @@ namespace RT64 {
                      matchingProfiler.log();
  
                      const bool displayRateAboveOriginal = (workload.viOriginalRate > 0) && (workloadConfig.targetRate > workload.viOriginalRate);
@@ -2598,6 +2726,254 @@ index e842dcc..c8cc898 100644
          }
      }
  
+diff --git a/src/render/rt64_render_target.cpp b/src/render/rt64_render_target.cpp
+index 81917bc..34c6034 100644
+--- a/src/render/rt64_render_target.cpp
++++ b/src/render/rt64_render_target.cpp
+@@ -5,6 +5,7 @@
+ #include "rt64_render_target.h"
+ 
+ #include <algorithm>
++#include <cmath>
+ 
+ #include "gbi/rt64_f3d.h"
+ #include "shared/rt64_fb_common.h"
+@@ -51,6 +52,13 @@ namespace RT64 {
+         textureResolveDescSet.reset();
+         filterDescSet.reset();
+         fbWriteDescSet.reset();
++        for (auto &set : conkerBlurSets) {
++            set.reset();
++        }
++
++        conkerBlurSmall[0].reset();
++        conkerBlurSmall[1].reset();
++        conkerBlurFull.reset();
+     }
+ 
+     bool RenderTarget::resize(RenderWorker *worker, uint32_t newWidth, uint32_t newHeight) {
+@@ -407,6 +415,132 @@ namespace RT64 {
+         worker->commandList->dispatch(dispatchX, dispatchY, 1);
+     }
+ 
++    // Conker: blurs the picture's top left blurWidth x blurHeight in place, in the texture the target is read from
++    // (getResolvedTexture: the resolved one with MSAA, which stays as it is until something is drawn into the target
++    // again). Shrunk by downsample (a box filter), blurred across and down by a Gaussian of sigma (in the shrunk
++    // picture's texels), then scaled back up bilinearly and copied in (ConkerBlurCS). For the pause menu's background
++    // (gEXConkerBlurFramebuffer, WorkloadQueue).
++    void RenderTarget::conkerBlur(RenderWorker *worker, const ShaderLibrary *shaderLibrary, uint32_t blurWidth, uint32_t blurHeight, uint32_t downsample, float sigma) {
++        assert(worker != nullptr);
++
++        blurWidth = std::min(blurWidth, width);
++        blurHeight = std::min(blurHeight, height);
++        downsample = std::max(downsample, 1U);
++        if ((texture == nullptr) || (blurWidth == 0) || (blurHeight == 0)) {
++            return;
++        }
++
++        resolveTarget(worker, shaderLibrary);
++
++        RenderTexture *picture = getResolvedTexture();
++        const uint32_t smallWidth = std::max((blurWidth + downsample - 1) / downsample, 1U);
++        const uint32_t smallHeight = std::max((blurHeight + downsample - 1) / downsample, 1U);
++        if ((conkerBlurFull == nullptr) || (conkerBlurRevision != textureRevision) || (conkerBlurWidth != blurWidth) || (conkerBlurHeight != blurHeight) || (conkerBlurDownsample != downsample)) {
++            const RenderTextureFlags flags = RenderTextureFlag::STORAGE | RenderTextureFlag::UNORDERED_ACCESS;
++            for (int i = 0; i < 2; i++) {
++                conkerBlurSmall[i] = worker->device->createTexture(RenderTextureDesc::Texture2D(smallWidth, smallHeight, 1, format, flags));
++                conkerBlurSmall[i]->setName("Render Target Conker Blur Small #" + std::to_string(addressForName));
++            }
++
++            conkerBlurFull = worker->device->createTexture(RenderTextureDesc::Texture2D(blurWidth, blurHeight, 1, format, flags));
++            conkerBlurFull->setName("Render Target Conker Blur #" + std::to_string(addressForName));
++
++            // The four passes: shrink, blur across, blur down, scale back up.
++            RenderTexture *inputs[4] = { picture, conkerBlurSmall[0].get(), conkerBlurSmall[1].get(), conkerBlurSmall[0].get() };
++            RenderTexture *outputs[4] = { conkerBlurSmall[0].get(), conkerBlurSmall[1].get(), conkerBlurSmall[0].get(), conkerBlurFull.get() };
++            for (int i = 0; i < 4; i++) {
++                conkerBlurSets[i] = std::make_unique<BoxFilterDescriptorSet>(worker->device);
++                conkerBlurSets[i]->setTexture(conkerBlurSets[i]->gInput, inputs[i], RenderTextureLayout::SHADER_READ);
++                conkerBlurSets[i]->setTexture(conkerBlurSets[i]->gOutput, outputs[i], RenderTextureLayout::GENERAL);
++            }
++
++            conkerBlurRevision = textureRevision;
++            conkerBlurWidth = blurWidth;
++            conkerBlurHeight = blurHeight;
++            conkerBlurDownsample = downsample;
++        }
++
++        const uint32_t BlockSize = 8;
++        auto dispatch = [&](uint32_t outputWidth, uint32_t outputHeight) {
++            worker->commandList->dispatch((outputWidth + BlockSize - 1) / BlockSize, (outputHeight + BlockSize - 1) / BlockSize, 1);
++        };
++
++        // Shrink, with the box filter.
++        struct BoxFilterCB {
++            interop::int2 Resolution;
++            interop::int2 ResolutionScale;
++            interop::int2 Misalignment;
++        };
++
++        BoxFilterCB boxFilterCB;
++        boxFilterCB.Resolution[0] = int32_t(blurWidth);
++        boxFilterCB.Resolution[1] = int32_t(blurHeight);
++        boxFilterCB.ResolutionScale[0] = int32_t(downsample);
++        boxFilterCB.ResolutionScale[1] = int32_t(downsample);
++        boxFilterCB.Misalignment[0] = 0;
++        boxFilterCB.Misalignment[1] = 0;
++        const RenderTextureBarrier shrinkBarriers[] = {
++            RenderTextureBarrier(picture, RenderTextureLayout::SHADER_READ),
++            RenderTextureBarrier(conkerBlurSmall[0].get(), RenderTextureLayout::GENERAL)
++        };
++
++        worker->commandList->barriers(RenderBarrierStage::COMPUTE, shrinkBarriers, uint32_t(std::size(shrinkBarriers)));
++
++        worker->commandList->setPipeline(shaderLibrary->boxFilter.pipeline.get());
++        worker->commandList->setComputePipelineLayout(shaderLibrary->boxFilter.pipelineLayout.get());
++        worker->commandList->setComputePushConstants(0, &boxFilterCB);
++        worker->commandList->setComputeDescriptorSet(conkerBlurSets[0]->get(), 0);
++        dispatch(smallWidth, smallHeight);
++
++        // Blur across, down, and scale back up.
++        struct ConkerBlurCB {
++            interop::uint2 InputResolution;
++            interop::uint2 OutputResolution;
++            uint32_t Mode;
++            uint32_t Radius;
++            float Sigma;
++            uint32_t Padding;
++        };
++
++        sigma = std::max(sigma, 0.1f);
++        const uint32_t radius = std::min(uint32_t(std::ceil(sigma * 3.0f)), 32U);
++        RenderTexture *passInputs[3] = { conkerBlurSmall[0].get(), conkerBlurSmall[1].get(), conkerBlurSmall[0].get() };
++        RenderTexture *passOutputs[3] = { conkerBlurSmall[1].get(), conkerBlurSmall[0].get(), conkerBlurFull.get() };
++        worker->commandList->setPipeline(shaderLibrary->conkerBlur.pipeline.get());
++        worker->commandList->setComputePipelineLayout(shaderLibrary->conkerBlur.pipelineLayout.get());
++        for (uint32_t pass = 0; pass < 3; pass++) {
++            ConkerBlurCB blurCB;
++            blurCB.InputResolution = { smallWidth, smallHeight };
++            blurCB.OutputResolution = (pass < 2) ? interop::uint2(smallWidth, smallHeight) : interop::uint2(blurWidth, blurHeight);
++            blurCB.Mode = pass;
++            blurCB.Radius = radius;
++            blurCB.Sigma = sigma;
++            blurCB.Padding = 0;
++            const RenderTextureBarrier passBarriers[] = {
++                RenderTextureBarrier(passInputs[pass], RenderTextureLayout::SHADER_READ),
++                RenderTextureBarrier(passOutputs[pass], RenderTextureLayout::GENERAL)
++            };
++
++            worker->commandList->barriers(RenderBarrierStage::COMPUTE, passBarriers, uint32_t(std::size(passBarriers)));
++
++            worker->commandList->setComputePushConstants(0, &blurCB);
++            worker->commandList->setComputeDescriptorSet(conkerBlurSets[pass + 1]->get(), 0);
++            dispatch(blurCB.OutputResolution[0], blurCB.OutputResolution[1]);
++        }
++
++        // Into the picture.
++        const RenderTextureBarrier copyBarriers[] = {
++            RenderTextureBarrier(conkerBlurFull.get(), RenderTextureLayout::COPY_SOURCE),
++            RenderTextureBarrier(picture, RenderTextureLayout::COPY_DEST)
++        };
++
++        worker->commandList->barriers(RenderBarrierStage::COPY, copyBarriers, uint32_t(std::size(copyBarriers)));
++
++        const RenderBox blurBox(0, 0, int32_t(blurWidth), int32_t(blurHeight));
++        worker->commandList->copyTextureRegion(RenderTextureCopyLocation::Subresource(picture), RenderTextureCopyLocation::Subresource(conkerBlurFull.get()), 0, 0, 0, &blurBox);
++        worker->commandList->barriers(RenderBarrierStage::GRAPHICS_AND_COMPUTE, RenderTextureBarrier(picture, RenderTextureLayout::SHADER_READ));
++    }
++
+     void RenderTarget::resolveTarget(RenderWorker *worker, const ShaderLibrary *shaderLibrary) {
+         if (!resolvedTextureDirty || !usesResolve()) {
+             return;
+diff --git a/src/render/rt64_render_target.h b/src/render/rt64_render_target.h
+index 82d8a36..5f20fe8 100644
+--- a/src/render/rt64_render_target.h
++++ b/src/render/rt64_render_target.h
+@@ -35,6 +35,15 @@ namespace RT64 {
+         std::unique_ptr<TextureCopyDescriptorSet> textureResolveDescSet;
+         std::unique_ptr<BoxFilterDescriptorSet> filterDescSet;
+         std::unique_ptr<FramebufferWriteDescriptorTextureSet> fbWriteDescSet;
++        // Conker: conkerBlur's pictures (two small ones and one the target's size) and the descriptor sets of its four
++        // passes, kept for the target's textures and the blurred area's size they were made for.
++        std::unique_ptr<RenderTexture> conkerBlurSmall[2];
++        std::unique_ptr<RenderTexture> conkerBlurFull;
++        std::unique_ptr<BoxFilterDescriptorSet> conkerBlurSets[4];
++        uint64_t conkerBlurRevision = 0;
++        uint32_t conkerBlurWidth = 0;
++        uint32_t conkerBlurHeight = 0;
++        uint32_t conkerBlurDownsample = 0;
+         uint32_t addressForName = 0;
+         uint32_t width = 0;
+         uint32_t height = 0;
+@@ -63,6 +72,7 @@ namespace RT64 {
+         void clearColorTarget(RenderWorker *worker);
+         void clearDepthTarget(RenderWorker *worker);
+         void downsampleTarget(RenderWorker *worker, const ShaderLibrary *shaderLibrary);
++        void conkerBlur(RenderWorker *worker, const ShaderLibrary *shaderLibrary, uint32_t blurWidth, uint32_t blurHeight, uint32_t downsample, float sigma);
+         void resolveTarget(RenderWorker *worker, const ShaderLibrary *shaderLibrary);
+         void recordRasterResolve(RenderWorker *worker, const TextureCopyDescriptorSet *srcDescriptorSet, uint32_t x, uint32_t y, uint32_t width, uint32_t height, const ShaderLibrary *shaderLibrary);
+         void markForResolve();
+diff --git a/src/render/rt64_shader_library.cpp b/src/render/rt64_shader_library.cpp
+index d1c5273..b4d8e15 100644
+--- a/src/render/rt64_shader_library.cpp
++++ b/src/render/rt64_shader_library.cpp
+@@ -19,6 +19,7 @@
+ #include "shaders/FbWriteDepthCSMS.hlsl.spirv.h"
+ #include "shaders/GaussianFilterRGB3x3CS.hlsl.spirv.h"
+ #include "shaders/BoxFilterCS.hlsl.spirv.h"
++#include "shaders/ConkerBlurCS.hlsl.spirv.h"
+ #include "shaders/BicubicScalingCS.hlsl.spirv.h"
+ #include "shaders/HistogramAverageCS.hlsl.spirv.h"
+ #include "shaders/HistogramClearCS.hlsl.spirv.h"
+@@ -65,6 +66,7 @@
+ #   include "shaders/FbWriteDepthCSMS.hlsl.dxil.h"
+ #   include "shaders/GaussianFilterRGB3x3CS.hlsl.dxil.h"
+ #   include "shaders/BoxFilterCS.hlsl.dxil.h"
++#   include "shaders/ConkerBlurCS.hlsl.dxil.h"
+ #   include "shaders/BicubicScalingCS.hlsl.dxil.h"
+ #   include "shaders/HistogramAverageCS.hlsl.dxil.h"
+ #   include "shaders/HistogramClearCS.hlsl.dxil.h"
+@@ -110,6 +112,7 @@
+ #   include "shaders/FbWriteDepthCSMS.hlsl.metal.h"
+ #   include "shaders/GaussianFilterRGB3x3CS.hlsl.metal.h"
+ #   include "shaders/BoxFilterCS.hlsl.metal.h"
++#   include "shaders/ConkerBlurCS.hlsl.metal.h"
+ #   include "shaders/BicubicScalingCS.hlsl.metal.h"
+ #   include "shaders/HistogramAverageCS.hlsl.metal.h"
+ #   include "shaders/HistogramClearCS.hlsl.metal.h"
+@@ -282,6 +285,20 @@ namespace RT64 {
+             boxFilter.pipeline = device->createComputePipeline(pipelineDesc);
+         }
+ 
++        // Conker: the pause menu's blurred background (RenderTarget::conkerBlur), with the box filter's descriptor set.
++        {
++            BoxFilterDescriptorSet descriptorSet;
++            layoutBuilder.begin();
++            layoutBuilder.addPushConstant(0, 0, sizeof(uint32_t) * 8, RenderShaderStageFlag::COMPUTE);
++            layoutBuilder.addDescriptorSet(descriptorSet);
++            layoutBuilder.end();
++            conkerBlur.pipelineLayout = layoutBuilder.create(device);
++
++            std::unique_ptr<RenderShader> computeShader = device->createShader(CREATE_SHADER_INPUTS(ConkerBlurCSBlobDXIL, ConkerBlurCSBlobSPIRV, ConkerBlurCSBlobMSL, "CSMain", shaderFormat));
++            RenderComputePipelineDesc pipelineDesc(conkerBlur.pipelineLayout.get(), computeShader.get(), 8, 8, 1);
++            conkerBlur.pipeline = device->createComputePipeline(pipelineDesc);
++        }
++
+         // Raytracing compose.
+         {
+             RaytracingComposeDescriptorSet descriptorSet(samplerLibrary);
+diff --git a/src/render/rt64_shader_library.h b/src/render/rt64_shader_library.h
+index 641f3ec..28b37fb 100644
+--- a/src/render/rt64_shader_library.h
++++ b/src/render/rt64_shader_library.h
+@@ -20,6 +20,7 @@ namespace RT64 {
+         // All shaders.
+         ShaderRecord bicubicScaling;
+         ShaderRecord boxFilter;
++        ShaderRecord conkerBlur; // Conker: the pause menu's blurred background (RenderTarget::conkerBlur)
+         ShaderRecord compose;
+         ShaderRecord debug;
+         ShaderRecord fbChangesClear;
 diff --git a/src/render/rt64_texture_cache.cpp b/src/render/rt64_texture_cache.cpp
 index 0848f3e..a153536 100644
 --- a/src/render/rt64_texture_cache.cpp
@@ -2843,3 +3219,69 @@ index 8a3782a..6fd46b1 100644
      struct VIRenderer {
          std::unique_ptr<VideoInterfaceDescriptorSet> descriptorSet;
          const RenderSampler *descriptorSetSampler = nullptr;
+diff --git a/src/shaders/ConkerBlurCS.hlsl b/src/shaders/ConkerBlurCS.hlsl
+new file mode 100644
+index 0000000..5abf5f7
+--- /dev/null
++++ b/src/shaders/ConkerBlurCS.hlsl
+@@ -0,0 +1,60 @@
++//
++// RT64
++//
++
++// Conker: the pause menu's blurred background (RenderTarget::conkerBlur). One pass of three, by Mode:
++// 0 and 1 blur a picture across and down (a separable Gaussian, Radius texels each way), and 2 scales
++// the blurred picture back up to the target's size, bilinearly. Texels are read with Load, so no
++// sampler is involved and the picture's edges are clamped to.
++
++#define BLOCK_SIZE 8
++
++struct ConkerBlurCB {
++    uint2 InputResolution;
++    uint2 OutputResolution;
++    uint Mode;
++    uint Radius;
++    float Sigma;
++    uint Padding;
++};
++
++[[vk::push_constant]] ConstantBuffer<ConkerBlurCB> gConstants : register(b0);
++Texture2D<float4> gInput : register(t1);
++RWTexture2D<float4> gOutput : register(u2);
++
++float4 LoadClamped(int2 coord) {
++    int2 maxCoord = int2(gConstants.InputResolution) - int2(1, 1);
++    return gInput.Load(int3(clamp(coord, int2(0, 0), maxCoord), 0));
++}
++
++[numthreads(BLOCK_SIZE, BLOCK_SIZE, 1)]
++void CSMain(uint2 coord : SV_DispatchThreadID) {
++    if ((coord.x >= gConstants.OutputResolution.x) || (coord.y >= gConstants.OutputResolution.y)) {
++        return;
++    }
++
++    if (gConstants.Mode < 2) {
++        const int2 step = (gConstants.Mode == 0) ? int2(1, 0) : int2(0, 1);
++        const float twoSigmaSquared = 2.0f * gConstants.Sigma * gConstants.Sigma;
++        float4 sum = 0.0f;
++        float weightSum = 0.0f;
++        const int radius = int(gConstants.Radius);
++        for (int i = -radius; i <= radius; i++) {
++            const float weight = exp(-float(i * i) / twoSigmaSquared);
++            sum += LoadClamped(int2(coord) + step * i) * weight;
++            weightSum += weight;
++        }
++
++        gOutput[coord] = sum / weightSum;
++    }
++    else {
++        // The output texel's middle, in the input's texels.
++        const float2 scale = float2(gConstants.InputResolution) / float2(gConstants.OutputResolution);
++        const float2 position = (float2(coord) + 0.5f) * scale - 0.5f;
++        const int2 base = int2(floor(position));
++        const float2 t = position - float2(base);
++        const float4 top = lerp(LoadClamped(base), LoadClamped(base + int2(1, 0)), t.x);
++        const float4 bottom = lerp(LoadClamped(base + int2(0, 1)), LoadClamped(base + int2(1, 1)), t.x);
++        gOutput[coord] = lerp(top, bottom, t.y);
++    }
++}
