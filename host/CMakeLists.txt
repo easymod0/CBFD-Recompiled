@@ -217,6 +217,10 @@ elseif (WIN32)
     # Mods replace recompiled functions by patching their machine code, so identical
     # functions must not be folded into one.
     target_link_options(ConkerRecomp PRIVATE /OPT:NOICF)
+    # A GUI app, so no console window opens beside the game's (issue #128), still entered at main
+    # (main.cpp's attach_parent_console keeps the output going to a terminal it's started from).
+    set_target_properties(ConkerRecomp PROPERTIES WIN32_EXECUTABLE TRUE)
+    target_link_options(ConkerRecomp PRIVATE /ENTRY:mainCRTStartup)
 endif()
 if (APPLE)
     # Mods patch the recompiled functions' machine code, which needs __TEXT's maximum protection
