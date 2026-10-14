@@ -1609,7 +1609,7 @@ index 6e3ed18..221ad3d 100644
  }
  
 diff --git a/ultramodern/src/timer.cpp b/ultramodern/src/timer.cpp
-index ee26c45..2cde81b 100644
+index ee26c45..603e5fc 100644
 --- a/ultramodern/src/timer.cpp
 +++ b/ultramodern/src/timer.cpp
 @@ -1,10 +1,15 @@
@@ -1629,7 +1629,7 @@ index ee26c45..2cde81b 100644
  
  #ifdef _WIN32
  #define WIN32_LEAN_AND_MEAN
-@@ -29,21 +34,20 @@ struct OSTimer {
+@@ -29,20 +34,25 @@ struct OSTimer {
      OSMesg msg;
  };
  
@@ -1639,29 +1639,35 @@ index ee26c45..2cde81b 100644
 -
 -struct RemoveTimerAction {
 -    PTR(OSTimer) timer;
--};
--
--using Action = std::variant<AddTimerAction, RemoveTimerAction>;
--
 +// The running timers, for the timer thread. A list, not a set kept in deadline order: the deadlines are
 +// in game memory, which loading a save state overwrites (save_states.hpp), and a timer set again while
 +// it runs gets a new one. There are only ever a few, so the next one is found by looking at each.
- struct {
-     std::thread thread;
--    moodycamel::BlockingConcurrentQueue<Action> action_queue{};
++//
++// Made once and never destroyed: the timer thread is detached and waits on `changed` until the process
++// ends. A static one was destroyed as the program exited, with the thread still waiting on it, and on
++// Linux destroying a condition variable waits for its waiters (glibc's pthread_cond_destroy), so quitting
++// hung (issue #127); the queue it replaced didn't wait.
++struct TimerContext {
++    std::thread thread;
 +    std::mutex mutex;
 +    std::condition_variable changed;
 +    std::vector<PTR(OSTimer)> active;
- } timer_context;
+ };
++TimerContext& timer_context = *new TimerContext{};
  
+-using Action = std::variant<AddTimerAction, RemoveTimerAction>;
+-
+-struct {
+-    std::thread thread;
+-    moodycamel::BlockingConcurrentQueue<Action> action_queue{};
+-} timer_context;
 +// The game's clock is the time since the program started, less this offset, in ticks. Loading a save
 +// state sets it so the clock goes on from the state's time (save_states.hpp).
 +static std::atomic<int64_t> clock_offset = 0;
-+
+ 
  uint64_t duration_to_ticks(std::chrono::high_resolution_clock::duration duration) {
      uint64_t delta_micros = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-     // More accurate than using a floating point timer, will only overflow after running for 12.47 years
-@@ -59,83 +63,52 @@ std::chrono::microseconds ticks_to_duration(uint64_t ticks) {
+@@ -59,83 +69,52 @@ std::chrono::microseconds ticks_to_duration(uint64_t ticks) {
  }
  
  std::chrono::high_resolution_clock::time_point ticks_to_timepoint(uint64_t ticks) {
@@ -1772,7 +1778,7 @@ index ee26c45..2cde81b 100644
          }
      }
  }
-@@ -180,6 +153,7 @@ extern "C" void osSetTime(OSTime t) {
+@@ -180,6 +159,7 @@ extern "C" void osSetTime(OSTime t) {
  
  extern "C" int osSetTimer(RDRAM_ARG PTR(OSTimer) t_, OSTime countdown, OSTime interval, PTR(OSMesgQueue) mq, OSMesg msg) {
      OSTimer* t = TO_PTR(OSTimer, t_);
@@ -1780,7 +1786,7 @@ index ee26c45..2cde81b 100644
  
      // Determine the time when this timer will trigger off
      if (countdown == 0) {
-@@ -192,18 +166,53 @@ extern "C" int osSetTimer(RDRAM_ARG PTR(OSTimer) t_, OSTime countdown, OSTime in
+@@ -192,18 +172,53 @@ extern "C" int osSetTimer(RDRAM_ARG PTR(OSTimer) t_, OSTime countdown, OSTime in
      t->mq = mq;
      t->msg = msg;
  
@@ -1801,19 +1807,19 @@ index ee26c45..2cde81b 100644
 +        timer_context.active.erase(found);
 +        timer_context.changed.notify_all();
 +    }
-+
-+    // TODO libultra returns -1 for a timer that isn't running; 0 as before, so games see no change.
-+    return 0;
-+}
  
 -    // TODO don't blindly return 0 here; requires some response from the timer thread to know what the returned value was
++    // TODO libultra returns -1 for a timer that isn't running; 0 as before, so games see no change.
+     return 0;
+ }
+ 
 +// --- Save states (save_states.hpp) ---
 +
 +int32_t ultramodern::save_states::timer_actions_pending() {
 +    // osSetTimer and osStopTimer change the timers themselves (under the lock), so nothing waits.
-     return 0;
- }
- 
++    return 0;
++}
++
 +void ultramodern::save_states::lock_timers() {
 +    timer_context.mutex.lock();
 +}
