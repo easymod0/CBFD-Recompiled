@@ -169,6 +169,14 @@ namespace conker {
     // no menus). Their readers fall back to the defaults without them.
     bool graphics_config_ready();
 
+    // sound_volumes.cpp: the Sound tab's Music, Sound Effects and Speech volumes.
+    namespace sound_volumes {
+        // conker_config.cpp: the options, on the Sound tab.
+        void add_options(recomp::config::Config& config);
+        // From the game thread, as the game starts a frame's display list: the volumes are read from the settings.
+        void game_frame(uint8_t* rdram);
+    }
+
     // Graphics: Overscan Borders (conker_config.cpp; the crop is set in widescreen.cpp).
     namespace overscan_borders {
         // Hidden: the picture is zoomed so the game's black border at its sides is off the screen.

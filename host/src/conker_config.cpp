@@ -177,7 +177,7 @@ void conker::init_config() {
     set_control_descriptions();
     recompui::config::create_controls_tab();
 
-    recompui::config::create_sound_tab();
+    conker::sound_volumes::add_options(recompui::config::create_sound_tab());
 
     conker::local_achievements::add_tab();
 
