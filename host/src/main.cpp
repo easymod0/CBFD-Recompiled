@@ -210,6 +210,33 @@ static void install_crash_handler() {
 static void install_crash_handler() {}
 #endif
 
+#if defined(_WIN32)
+// On Windows the program is a GUI app (host/CMakeLists.txt: WIN32_EXECUTABLE), so no console window
+// opens beside the game's (issue #128). Its output still goes where it went: a stream already handed
+// over (redirected to a file or a pipe) is kept, and otherwise, started from a terminal, the program
+// writes to that terminal's console. Started from Explorer or Steam there's none, and nothing's shown.
+static void attach_parent_console() {
+    auto handed_over = [](DWORD which) {
+        const HANDLE handle = GetStdHandle(which);
+        return handle != nullptr && handle != INVALID_HANDLE_VALUE && GetFileType(handle) != FILE_TYPE_UNKNOWN;
+    };
+    const bool out_handed_over = handed_over(STD_OUTPUT_HANDLE);
+    const bool err_handed_over = handed_over(STD_ERROR_HANDLE);
+    if ((out_handed_over && err_handed_over) || !AttachConsole(ATTACH_PARENT_PROCESS)) {
+        return;
+    }
+    FILE* stream = nullptr;
+    if (!out_handed_over) {
+        freopen_s(&stream, "CONOUT$", "w", stdout);
+    }
+    if (!err_handed_over) {
+        freopen_s(&stream, "CONOUT$", "w", stderr);
+    }
+}
+#else
+static void attach_parent_console() {}
+#endif
+
 extern "C" void recomp_entrypoint(uint8_t* rdram, recomp_context* ctx);
 // Conker's audio microcode, recompiled by RSPRecomp (recomp/audio_ucode.toml).
 RspExitReason conker_audio_ucode(uint8_t* rdram, uint32_t ucode_addr);
@@ -392,6 +419,7 @@ namespace {
 }
 
 int main(int argc, char** argv) {
+    attach_parent_console();
     // Unbuffered, so diagnostics (e.g. RT64's microcode hashes) survive a crash.
     std::setvbuf(stdout, nullptr, _IONBF, 0);
     install_crash_handler();
@@ -473,6 +501,14 @@ int main(int argc, char** argv) {
     conker::register_overlays();
     conker::register_mod_exports();
 
+#if defined(CONKER_RT64)
+    // General: Start Game Directly (issue #133): the game starts without the launcher once a ROM has been
+    // picked (and the launcher is shown as ever without one).
+    if (!headless && !start_directly && rom_path.empty() && conker::start_game_directly()) {
+        recomp::check_all_stored_roms();
+        start_directly = recomp::is_rom_valid(game_id);
+    }
+#endif
     if (!select_rom(rom_path, start_directly)) {
         return EXIT_FAILURE;
     }

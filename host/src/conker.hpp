@@ -169,6 +169,10 @@ namespace conker {
     // no menus). Their readers fall back to the defaults without them.
     bool graphics_config_ready();
 
+    // conker_config.cpp: General's Start Game Directly (issue #133), read from the General tab's saved file
+    // (main asks before the tabs exist).
+    bool start_game_directly();
+
     // sound_volumes.cpp: the Sound tab's Music, Sound Effects and Speech volumes.
     namespace sound_volumes {
         // conker_config.cpp: the options, on the Sound tab.
@@ -215,8 +219,10 @@ namespace conker {
     namespace local_achievements {
         // At start (frontend.cpp, once the config folder is known): reads the unlocks so far.
         void init();
-        // With the other settings tabs (conker_config.cpp): the Achievements tab.
+        // With the other settings tabs (conker_config.cpp): the Achievements tab, and on the General tab,
+        // Achievement Notifications (issue #128).
         void add_tab();
+        void add_options(recomp::config::Config& config);
         // From the game thread, as the game starts a frame's display list: unlocks what the save has reached.
         void game_frame(uint8_t* rdram);
         // Save states (save_states.cpp), as one is loaded: the scenes it has are put back with the game's memory,
@@ -240,6 +246,8 @@ namespace conker {
     namespace save_states {
         // At start (frontend.cpp): the keys, and the runtime's idle moment that states are taken at.
         void init();
+        // On the General tab (conker_config.cpp): Save State Notifications (issue #133).
+        void add_options(recomp::config::Config& config);
     }
 
     // fps_counter.cpp: Show FPS, the frame rate counter.

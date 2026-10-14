@@ -20,7 +20,8 @@
 // logos, the opening, the bar), nor when many turn on in one frame (data read in, not reached), when some
 // turn off (a new game), or when the pointer moves (another save's).
 //
-// The Achievements settings tab (add_tab) lists them all, unlocked or not, with the date.
+// The Achievements settings tab (add_tab) lists them all, unlocked or not, with the date. General: Achievement
+// Notifications (add_options, issue #128) turns the corner's line off: they're still earned and listed.
 
 #include <atomic>
 #include <cstdint>
@@ -33,6 +34,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "librecomp/game.hpp"
@@ -43,6 +45,21 @@
 #include "elements/ui_scroll_container.h"
 
 #include "conker.hpp"
+
+namespace {
+    // General: Achievement Notifications, On or Off (add_options).
+    const std::string notifications_option = "achievement_notifications";
+    enum class Notifications : uint32_t { On, Off };
+
+    // The corner's line for an unlock, unless Achievement Notifications is Off.
+    void notify_unlock(const char* title) {
+        recomp::config::Config* config = recompui::config::find_option_config(notifications_option);
+        if (config != nullptr && static_cast<Notifications>(std::get<uint32_t>(config->get_option_value(notifications_option))) == Notifications::Off) {
+            return;
+        }
+        conker::notices::show(std::string("Achievement unlocked: ") + title);
+    }
+}
 
 namespace {
     // The pointer to the save's bitfield of scenes reached (D_800D2E4C), and how many scenes there are.
@@ -312,6 +329,17 @@ void conker::local_achievements::state_loaded() {
     state_just_loaded = true;
 }
 
+void conker::local_achievements::add_options(recomp::config::Config& config) {
+    static const std::vector<recomp::config::ConfigOptionEnumOption> choices = {
+        {Notifications::On, "On", "On"},
+        {Notifications::Off, "Off", "Off"},
+    };
+    config.add_enum_option(notifications_option, "Achievement Notifications",
+        "Shows a line in the corner when an achievement unlocks. With <recomp-color primary>Off</recomp-color> they're "
+        "still earned and listed on the Achievements tab, only not announced.",
+        choices, Notifications::On);
+}
+
 void conker::local_achievements::add_tab() {
     recompui::config::create_tab("Achievements", "achievements",
         [](recompui::ContextId context, recompui::Element* parent) {
@@ -388,7 +416,7 @@ void conker::local_achievements::game_frame(uint8_t* rdram) {
         const int scene = achievement_list[i].scene;
         const bool earned = scene == every_scene ? (!was_every && every_scene_reached(bits)) : (bits[scene] && !baseline[scene]);
         if (earned && unlock(i)) {
-            conker::notices::show(std::string("Achievement unlocked: ") + achievement_list[i].title);
+            notify_unlock(achievement_list[i].title);
         }
     }
     baseline = merged(baseline, bits);
@@ -424,7 +452,7 @@ extern "C" void conker_stat_change(uint8_t* rdram, recomp_context* ctx) {
     if ((what == 9 || what == 10) && amount >= 1000000 && scene != scene_logos && scene != scene_opening && scene != scene_bar_menu) {
         for (size_t i = 0; i < achievement_count; i++) {
             if (std::strcmp(achievement_list[i].id, "credits") == 0 && unlock(i)) {
-                conker::notices::show(std::string("Achievement unlocked: ") + achievement_list[i].title);
+                notify_unlock(achievement_list[i].title);
             }
         }
     }
