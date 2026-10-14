@@ -242,6 +242,8 @@ namespace conker {
     namespace save_states {
         // At start (frontend.cpp): the keys, and the runtime's idle moment that states are taken at.
         void init();
+        // On the General tab (conker_config.cpp): Save State Notifications (issue #133).
+        void add_options(recomp::config::Config& config);
     }
 
     // fps_counter.cpp: Show FPS, the frame rate counter.

@@ -5,7 +5,9 @@
 // state is taken at a safe point, when every game thread but the running one waits (and the running
 // one is at a known call), and loaded at a safe point where every thread is where it was in the state.
 // So a key only asks for a save or a load: it's done at the next such moment (within a frame or so),
-// and the result is shown in the messages' corner, top left.
+// and the result is shown in the messages' corner, top left. General: Save State Notifications (add_options,
+// issue #133) turns off the ones saying it was done (saved, loaded, the slot picked); one saying it couldn't
+// be is still shown, as nothing else would tell.
 //
 // A load can only be done where the game's threads wait as they did when the state was taken (the
 // runtime checks it: where each is in the game's code, so a state from an earlier version loads too,
@@ -32,19 +34,36 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <variant>
 #include <vector>
 
 #include <SDL.h>
 
+#include "librecomp/config.hpp"
 #include "librecomp/game.hpp"
 #include "librecomp/save_states.hpp"
 #include "ultramodern/ultramodern.hpp"
 #include "ultramodern/save_states.hpp"
 
+#include "recompui/config.h"
+
 #include "conker.hpp"
 
 namespace {
     using clock = std::chrono::steady_clock;
+
+    // General: Save State Notifications, On or Off (add_options).
+    const std::string notifications_option = "save_state_notifications";
+    enum class Notifications : uint32_t { On, Off };
+
+    // A line saying a save, a load or a slot change was done, unless Save State Notifications is Off.
+    void notify_done(const std::string& text, bool replace = false) {
+        recomp::config::Config* config = recompui::config::find_option_config(notifications_option);
+        if (config != nullptr && static_cast<Notifications>(std::get<uint32_t>(config->get_option_value(notifications_option))) == Notifications::Off) {
+            return;
+        }
+        conker::notices::show(text, replace);
+    }
 
     constexpr char file_magic[8] = { 'C', 'B', 'F', 'D', 'S', 'T', 'A', 'T' };
     constexpr uint32_t file_version = 1;
@@ -236,7 +255,7 @@ namespace {
                 (int)osGetThreadId(rdram, NULLPTR),
                 recomp::save_states::describe_current_threads(rdram).c_str());
             write_state(request_slot, std::move(state), {});
-            conker::notices::show("State saved to slot " + std::to_string(request_slot));
+            notify_done("State saved to slot " + std::to_string(request_slot));
             finish();
             return;
         }
@@ -247,7 +266,7 @@ namespace {
             case recomp::save_states::LoadResult::Loaded:
                 log_line("[load] slot %d loaded after %u tries", request_slot, attempts);
                 conker::local_achievements::state_loaded();
-                conker::notices::show("Loaded the state in slot " + std::to_string(request_slot));
+                notify_done("Loaded the state in slot " + std::to_string(request_slot));
                 finish();
                 break;
             case recomp::save_states::LoadResult::NotNow:
@@ -332,13 +351,25 @@ namespace {
                 break;
             case SDLK_F6:
                 current_slot = current_slot % slot_count + 1;
-                conker::notices::show("Save state slot " + std::to_string(current_slot.load()), true);
+                notify_done("Save state slot " + std::to_string(current_slot.load()), true);
                 break;
             default:
                 break;
         }
         return 0;
     }
+}
+
+void conker::save_states::add_options(recomp::config::Config& config) {
+    static const std::vector<recomp::config::ConfigOptionEnumOption> choices = {
+        {Notifications::On, "On", "On"},
+        {Notifications::Off, "Off", "Off"},
+    };
+    config.add_enum_option(notifications_option, "Save State Notifications",
+        "Shows a line in the corner when a save state is saved or loaded (F5, F7) and when another slot is picked (F6). "
+        "With <recomp-color primary>Off</recomp-color> they aren't shown; a line saying one couldn't be saved or loaded "
+        "still is.",
+        choices, Notifications::On);
 }
 
 void conker::save_states::init() {

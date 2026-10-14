@@ -251,7 +251,9 @@ Run `host/build/ConkerRecomp` (Linux and macOS) or `host\build-win\ConkerRecomp.
   to the executable to keep them there instead.
 - **Save states**: F5 saves the game exactly as it is, F7 loads it back, F6
   picks the next of the nine slots. They never touch the game's own saves. See
-  [docs/save-states.md](docs/save-states.md).
+  [docs/save-states.md](docs/save-states.md). **Save State Notifications** on the
+  General tab turns off the line in the corner saying a state was saved or loaded,
+  or another slot picked (one saying it couldn't be still shows).
 - Default keyboard controls: move with WASD, A = Space, B = Left Shift,
   Z = Q, L = E, R = R, Start = Enter, C buttons = arrow keys, D-pad = IJKL.
   Everything can be remapped in Controls.
