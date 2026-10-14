@@ -319,19 +319,64 @@ extern "C" void conker_bubble_end(uint8_t* rdram, recomp_context* ctx) {
 // frame, then copies the frame into it. That copy is RT64's widened frame and is drawn back
 // across the whole width already, and zooming it each frame zoomed the last frame's ghost
 // again on every pass, dragging the picture into streaks.
+//
+// Nor for the pause menu's copy of the frame, which is RT64's high resolution picture now, as wide
+// as the window and blurred by RT64 (below): it's copied and drawn stretched, across the whole width.
 namespace {
     constexpr uint32_t motion_blur_copy = 0x800BE570; // D_800BE570
     constexpr uint32_t g_ex_setrectaspect_v1 = 0x000033;
     constexpr uint32_t g_ex_aspect_auto = 0x0;
+    constexpr uint32_t g_ex_aspect_stretch = 0x1;
     constexpr uint32_t g_ex_aspect_zoom = 0x3;
     constexpr uint32_t g_texrect = 0xE4;
 
     gpr frame_copy_dl_start = 0;
+    // The function running now copies the frame into the pause's picture, or draws the picture.
+    bool frame_copy_fills_pause = false;
+    bool frame_copy_draws_pause = false;
 
     bool is_sync(uint8_t* rdram, gpr cmd) {
         uint32_t w0 = (uint32_t)MEM_W(0, cmd);
         return (w0 == 0xE6000000 || w0 == 0xE7000000 || w0 == 0xE8000000) && MEM_W(4, cmd) == 0;
     }
+}
+
+// The pause menu's background. When the game pauses, func_150198FC copies the last frame into a
+// picture of its own (D_800BE9C4, with func_151D5E90 while the pause counter D_80082F90 is 0), blurs it
+// in place on the CPU over the next frames (func_151D61B0, the counter 2 to 5), and draws it behind the
+// menu (func_151D5E90 from it). RT64 makes the copy on the GPU, from its high resolution picture of the
+// frame: as sharp as the window and as wide (the native coordinates of a widened picture span all of
+// it). But the CPU's blur changes the picture in RDRAM, where it's the N64's 320 pixels of the 4:3 view
+// only, and RT64 then draws the picture from there: soft, and in widescreen the sides missing, which
+// zooming it to the window's width (above) made up for by cropping its top and bottom.
+//
+// So the CPU's blur is skipped, and RT64 blurs its high resolution copy instead, once it has drawn it
+// (gEXConkerBlurFramebuffer, rt64.patch: shrunk to about the N64's size, blurred with a Gaussian and
+// scaled back up). The copy and the picture's tiles are stretched across the whole width. Idea from
+// ConkerBFDReloaded (by dahmedvall95, MIT, github.com/DahSidiAbdallah/ConkerBFDReloaded), which kept the
+// game's blur and had RT64 squeeze the whole widened view into the 320 pixels instead.
+namespace {
+    constexpr uint32_t pause_picture = 0x800BE9C4; // D_800BE9C4, the pause's copy of the frame
+    constexpr uint32_t g_ex_conkerblurframebuffer_v1 = 0x000034;
+    // How much RT64 blurs the copy, in quarters of an N64 pixel (the Gaussian's sigma): about the
+    // game's own blur, four passes over the 320 pixels.
+    constexpr uint32_t pause_blur_strength = 8;
+
+    // Whether $a0, the start of a display list just written, follows a G_SETCIMG of the image.
+    bool follows_color_image(uint8_t* rdram, gpr dl, uint32_t image) {
+        return ((uint32_t)MEM_W(-16, dl) >> 24) == 0xFF && (uint32_t)MEM_W(-12, dl) == image;
+    }
+}
+
+// func_151D61B0, at its first instruction: $a0 is the picture it blurs. Returns 1 to skip it,
+// for the pause's copy of the frame, which RT64 blurs (above).
+extern "C" int conker_pause_skip_blur(uint8_t* rdram, recomp_context* ctx) {
+#if defined(CONKER_RT64)
+    const uint32_t picture = (uint32_t)MEM_W(0, (gpr)(int32_t)pause_picture);
+    return (picture != 0 && (uint32_t)ctx->r4 == picture) ? 1 : 0;
+#else
+    return 0;
+#endif
 }
 
 // The motion blur blends each frame with its copy of the last one. RT64's frames between the game's
@@ -348,6 +393,13 @@ extern "C" void conker_motion_blur(uint8_t* rdram, recomp_context* ctx) {
 // draws from.
 extern "C" void conker_frame_copy_begin(uint8_t* rdram, recomp_context* ctx) {
     frame_copy_dl_start = ctx->r4;
+    const uint32_t picture = (uint32_t)MEM_W(0, (gpr)(int32_t)pause_picture);
+#if defined(CONKER_RT64)
+    frame_copy_fills_pause = picture != 0 && follows_color_image(rdram, ctx->r4, picture);
+    frame_copy_draws_pause = picture != 0 && (uint32_t)ctx->r5 == picture;
+#else
+    frame_copy_fills_pause = frame_copy_draws_pause = false;
+#endif
     const uint32_t blur_copy = (uint32_t)MEM_W(0, (gpr)(int32_t)motion_blur_copy);
     if (blur_copy == 0) {
         return;
@@ -355,7 +407,7 @@ extern "C" void conker_frame_copy_begin(uint8_t* rdram, recomp_context* ctx) {
     // The motion blur draws its copy (func_151D6418 from D_800BE570), or copies the frame into
     // it (func_151D5E90 just after its colour image was set to D_800BE570).
     const bool draws_copy = (uint32_t)ctx->r5 == blur_copy;
-    const bool fills_copy = ((uint32_t)MEM_W(-16, ctx->r4) >> 24) == 0xFF && (uint32_t)MEM_W(-12, ctx->r4) == blur_copy;
+    const bool fills_copy = follows_color_image(rdram, ctx->r4, blur_copy);
     if (draws_copy || fills_copy) {
         frame_copy_dl_start = 0;
     }
@@ -369,10 +421,14 @@ extern "C" void conker_frame_copy_end(uint8_t* rdram, recomp_context* ctx) {
     if (start == 0 || end <= start || end - start > 0x10000) {
         return;
     }
+    const bool fills_pause = frame_copy_fills_pause;
+    const bool draws_pause = frame_copy_draws_pause;
+    frame_copy_fills_pause = frame_copy_draws_pause = false;
     gpr syncs_before[2] = { 0, 0 };
     int before_count = 0;
     gpr last_rect = 0;
     gpr last_sync = 0;
+    gpr middle_sync = 0; // one between the rectangles, for the pause's blur
     for (gpr cmd = start; cmd < end; cmd += 8) {
         if (((uint32_t)MEM_W(0, cmd) >> 24) == g_texrect) {
             last_rect = cmd;
@@ -381,6 +437,9 @@ extern "C" void conker_frame_copy_end(uint8_t* rdram, recomp_context* ctx) {
         else if (is_sync(rdram, cmd)) {
             if (last_rect == 0 && before_count < 2) {
                 syncs_before[before_count++] = cmd;
+            }
+            else if (last_rect != 0 && middle_sync == 0) {
+                middle_sync = cmd;
             }
             last_sync = cmd;
         }
@@ -391,9 +450,15 @@ extern "C" void conker_frame_copy_end(uint8_t* rdram, recomp_context* ctx) {
     gpr dl = syncs_before[0];
     put_command(rdram, dl, (rt64_hook_opcode << 24) | rt64_hook_magic, (rt64_hook_op_enable << 28) | rt64_extended_opcode);
     dl = syncs_before[1];
-    put_command(rdram, dl, (rt64_extended_opcode << 24) | g_ex_setrectaspect_v1, g_ex_aspect_zoom);
+    put_command(rdram, dl, (rt64_extended_opcode << 24) | g_ex_setrectaspect_v1, (fills_pause || draws_pause) ? g_ex_aspect_stretch : g_ex_aspect_zoom);
     dl = last_sync;
     put_command(rdram, dl, (rt64_extended_opcode << 24) | g_ex_setrectaspect_v1, g_ex_aspect_auto);
+    // The copy into the pause's picture: RT64 blurs the picture once it's drawn.
+    if (fills_pause && middle_sync != 0 && middle_sync != last_sync) {
+        const uint32_t picture = (uint32_t)MEM_W(0, (gpr)(int32_t)pause_picture);
+        dl = middle_sync;
+        put_command(rdram, dl, (rt64_extended_opcode << 24) | g_ex_conkerblurframebuffer_v1, (pause_blur_strength << 24) | (picture & 0x00FFFFFF));
+    }
 }
 
 // func_15180580 draws the circle wipe of spawning, dying and changing levels: black

@@ -443,8 +443,8 @@ func = "func_15111AF4"
 before_vram = 0x15111BC4
 text = "{ extern void conker_widen_backdrop_sectors(uint8_t*, recomp_context*); conker_widen_backdrop_sectors(rdram, ctx); }"
 
-# Widescreen: the pause menu's blurred background, a saved copy of the 4:3 frame
-# drawn as tiles, is stretched over the whole width (host/src/widescreen.cpp).
+# Widescreen: a saved copy of the frame drawn as tiles is stretched over the whole
+# width, and the pause menu's is blurred by RT64 (host/src/widescreen.cpp).
 [[patches.hook]]
 func = "func_151D5E90"
 before_vram = 0x151D5E94
@@ -464,6 +464,13 @@ text = "{ extern void conker_frame_copy_begin(uint8_t*, recomp_context*); conker
 func = "func_151D6418"
 before_vram = 0x151D66E8
 text = "{ extern void conker_frame_copy_end(uint8_t*, recomp_context*); conker_frame_copy_end(rdram, ctx); }"
+
+# The pause's copy of the frame isn't blurred on the CPU by func_151D61B0 ($a0, the picture):
+# RT64 blurs its high resolution copy instead (host/src/widescreen.cpp).
+[[patches.hook]]
+func = "func_151D61B0"
+before_vram = 0x151D61B0
+text = "{ extern int conker_pause_skip_blur(uint8_t*, recomp_context*); if (conker_pause_skip_blur(rdram, ctx)) return; }"
 
 # Graphics: Conker's Detail: each game frame func_1502C6E8 picks every object's model by how far
 # it is from the camera; at 0x1502C92C the level is picked ($v1) and not yet compared with the
