@@ -226,6 +226,16 @@ namespace conker {
         void state_loaded();
     }
 
+    // achievement_popup.cpp: the pop-up as an achievement unlocks, its picture, name and description.
+    namespace achievement_popup {
+        // From any thread (local_achievements.cpp, as one unlocks).
+        void show(const std::string& title, const std::string& description);
+        // From the launcher's init (frontend.cpp): recompui's UI exists now, so the pop-up can be made.
+        void on_ui_ready();
+        // On the main thread (update_gfx): shows, moves and hides the pop-up.
+        void update();
+    }
+
     // notices.cpp: a line in the top-left corner for a few seconds, one at a time (an unlock, a save state's
     // "State saved"...).
     namespace notices {

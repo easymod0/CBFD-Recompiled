@@ -21,7 +21,7 @@
 // turn off (a new game), or when the pointer moves (another save's).
 //
 // The Achievements settings tab (add_tab) lists them all, unlocked or not, with the date. General: Achievement
-// Notifications (add_options, issue #128) turns the corner's line off: they're still earned and listed.
+// Notifications (add_options, issue #128) turns the pop-up off (achievement_popup.cpp): they're still earned and listed.
 
 #include <atomic>
 #include <cstdint>
@@ -51,13 +51,13 @@ namespace {
     const std::string notifications_option = "achievement_notifications";
     enum class Notifications : uint32_t { On, Off };
 
-    // The corner's line for an unlock, unless Achievement Notifications is Off.
-    void notify_unlock(const char* title) {
+    // The pop-up for an unlock (achievement_popup.cpp), unless Achievement Notifications is Off.
+    void notify_unlock(const char* title, const char* description) {
         recomp::config::Config* config = recompui::config::find_option_config(notifications_option);
         if (config != nullptr && static_cast<Notifications>(std::get<uint32_t>(config->get_option_value(notifications_option))) == Notifications::Off) {
             return;
         }
-        conker::notices::show(std::string("Achievement unlocked: ") + title);
+        conker::achievement_popup::show(title, description);
     }
 }
 
@@ -335,7 +335,7 @@ void conker::local_achievements::add_options(recomp::config::Config& config) {
         {Notifications::Off, "Off", "Off"},
     };
     config.add_enum_option(notifications_option, "Achievement Notifications",
-        "Shows a line in the corner when an achievement unlocks. With <recomp-color primary>Off</recomp-color> they're "
+        "Shows a pop-up in the corner when an achievement unlocks. With <recomp-color primary>Off</recomp-color> they're "
         "still earned and listed on the Achievements tab, only not announced.",
         choices, Notifications::On);
 }
@@ -416,7 +416,7 @@ void conker::local_achievements::game_frame(uint8_t* rdram) {
         const int scene = achievement_list[i].scene;
         const bool earned = scene == every_scene ? (!was_every && every_scene_reached(bits)) : (bits[scene] && !baseline[scene]);
         if (earned && unlock(i)) {
-            notify_unlock(achievement_list[i].title);
+            notify_unlock(achievement_list[i].title, achievement_list[i].description);
         }
     }
     baseline = merged(baseline, bits);
@@ -452,7 +452,7 @@ extern "C" void conker_stat_change(uint8_t* rdram, recomp_context* ctx) {
     if ((what == 9 || what == 10) && amount >= 1000000 && scene != scene_logos && scene != scene_opening && scene != scene_bar_menu) {
         for (size_t i = 0; i < achievement_count; i++) {
             if (std::strcmp(achievement_list[i].id, "credits") == 0 && unlock(i)) {
-                notify_unlock(achievement_list[i].title);
+                notify_unlock(achievement_list[i].title, achievement_list[i].description);
             }
         }
     }

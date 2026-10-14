@@ -243,7 +243,7 @@ Run `host/build/ConkerRecomp` (Linux and macOS) or `host\build-win\ConkerRecomp.
   kept on this computer, in `achievements.txt` with the settings, and the
   Achievements tab lists them. Only what you do in play counts: scenes a save
   had already reached unlock when a new game reaches them. **Achievement
-  Notifications** on the General tab turns off the line in the corner as one
+  Notifications** on the General tab turns off the pop-up in the corner as one
   unlocks; they still unlock and are listed.
 - Saves, settings and the stored ROM live in `~/.config/ConkerRecompiled` on
   Linux, `~/Library/Application Support/ConkerRecompiled` on macOS and
