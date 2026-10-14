@@ -41,7 +41,8 @@ yourself instead, read on.
   setting.
 - An aiming **Reticle**, a green ring like Live & Reloaded's, and **Swap Sticks**
   and **Lock-On** options for aiming.
-- Full audio: music, sound effects and the voice acting.
+- Full audio: music, sound effects and the voice acting, each with a volume of its
+  own (Music, Sound Effects and Speech, under the Main Volume).
 - Saving (EEPROM), stored per user.
 - A launcher with settings, controls and a mod menu (RecompFrontend, as in
   Zelda 64: Recompiled and Banjo: Recompiled).
