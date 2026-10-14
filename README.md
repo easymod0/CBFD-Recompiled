@@ -55,7 +55,7 @@ yourself instead, read on.
   Russian translation ROMs, with the launcher switching between them.
 - Mod support (`.nrm` mods: function patches and hooks). Three mods are
   included: **Skip Intro**, **Skip Any Cutscene** and **Cheats**.
-- Texture packs (RT64's `.rtz`, and GLideN64's `.htc`), for HD textures and
+- Texture packs (RT64's `.rtz`, and GLideN64's `.htc` and `.hts`), for HD textures and
   other replacements.
 - Save states: save anywhere with F5 and load with F7, in nine slots
   ([how to use them, and how they work](docs/save-states.md)).
@@ -318,7 +318,7 @@ the next start. Its default, **Set in the Mods Menu**, leaves them to the
 take precedence).
 
 GLideN64 texture packs (for Project64 and RetroArch) work too. Install the
-pack's `.htc` file the same way (**Install Mods** or dropped onto the Mods menu),
+pack's `.htc` or `.hts` file the same way (**Install Mods** or dropped onto the Mods menu),
 or put it in the `mods` folder and start the game or press the Mods menu's
 refresh button: it's unpacked, once, into a pack folder beside it, with its
 progress shown (a large pack takes a minute or so), and turned on. It's then in
