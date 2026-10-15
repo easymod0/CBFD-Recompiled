@@ -124,6 +124,7 @@ if (CONKER_NETPLAY)
     set(CONKER_BUILD_ID_CPP "${CMAKE_CURRENT_BINARY_DIR}/netplay_build_id.cpp")
     add_custom_target(conker_build_id
         COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=${REPO_ROOT} -DOUT=${CONKER_BUILD_ID_CPP}
+            "-DPLATFORM=${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}-${CMAKE_CXX_COMPILER_ID}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/src/netplay/build_id.cmake"
         BYPRODUCTS "${CONKER_BUILD_ID_CPP}")
     target_sources(ConkerRecomp PRIVATE "${CONKER_BUILD_ID_CPP}")
