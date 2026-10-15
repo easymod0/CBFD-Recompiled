@@ -522,9 +522,8 @@ int main(int argc, char** argv) {
     game.entrypoint_address = (gpr)(int32_t)0x80001000u;
     game.entrypoint = recomp_entrypoint;
 #if defined(CONKER_NETPLAY)
-    if (conker::harness::active()) {
-        game.entrypoint = conker::harness::entrypoint;
-    }
+    // Always: a netplay match can be started from the menu.
+    game.entrypoint = conker::harness::entrypoint;
 #endif
     game.on_init_callback = on_init;
     game.thread_create_callback = on_thread_create;

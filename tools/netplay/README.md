@@ -158,8 +158,14 @@ Each peer starts from boot with an empty save, on the timeline and with the sett
     ConkerRecomp --netplay-host 27015 --players 2           (port 1 is the host's)
     ConkerRecomp --netplay-join SC07-21V9-GX40              (or --netplay-join 203.0.113.7:27015)
 
-The game waits at its start for every player. Each plays with their first controller. There's no menu
-for it yet (#9), and the host has to forward its UDP port if it's behind a router.
+The game waits at its start for every player. Each plays with their first controller, and the host
+has to forward its UDP port if it's behind a router.
+
+In a window, the launcher's **Netplay** menu (`host/src/netplay/menu.cpp`, #9) does the same: host
+(players, port, and the host's own address, from which it shows the join code to send) or join by code
+or address. It says how the connecting goes and why a peer was refused, and the game starts on every
+machine once all are in. When a match started there ends (a desync, a player gone), a prompt says why
+instead of the game quitting.
 
 With `--replay`, a peer's own pads come from its port in the recording instead: `lockstep.sh` plays two
 copies against each other on this machine (`--data` gives each its own folder) and checks that each

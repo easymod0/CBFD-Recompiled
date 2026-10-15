@@ -13,7 +13,10 @@
 #include "xxHash/xxhash.h"
 
 conker::netplay::Hello conker::netplay::local_hello() {
-    const std::span<const uint8_t> rom = recomp::get_rom();
+    return hello_for_rom(recomp::get_rom());
+}
+
+conker::netplay::Hello conker::netplay::hello_for_rom(std::span<const uint8_t> rom) {
     Hello hello;
     hello.build = XXH3_64bits(build_id(), std::strlen(build_id()));
     hello.rom = XXH3_64bits(rom.data(), rom.size());

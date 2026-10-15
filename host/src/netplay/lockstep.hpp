@@ -23,6 +23,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <string>
 
 #include "ultramodern/input.hpp"
 
@@ -33,10 +34,26 @@ namespace conker::lockstep {
     bool parse_option(int argc, char** argv, int& i);
     // Hosting or joining.
     bool active();
-    // Checks the options and starts the networking, before the game starts (false: a message was printed).
+    // The same as the options, from the menu (frontend's netplay.cpp).
+    void set_host(int port, int players);
+    void set_join(const std::string& where);
+    // Checks the options, before the game starts (false: a message was printed).
     bool prepare();
-    // Hosts or joins, and waits until every player is in and the match starts, before any of the game's
-    // code runs (false: it couldn't, and a message was printed).
+
+    // Connecting, a step at a time, so a menu can show how it goes (and the networking is started the
+    // first time): begin hosts or joins (false: `error` says why), then poll_connect until every player
+    // is in and the match starts, or it fails. `status` says how it's going, in a sentence for the
+    // player. cancel says goodbye and stops.
+    enum class Progress { waiting, started, failed };
+    bool begin(const netplay::Hello& me, std::string& error);
+    Progress poll_connect(std::string& status);
+    void cancel();
+    // The match has started (from the menu or connect).
+    bool connected();
+    // The Hello begin was given.
+    const netplay::Hello& sent_hello();
+    // begin, then poll_connect until the match starts, printing how it goes (the command line's way, in
+    // harness::start; false: it couldn't, and a message was printed).
     bool connect(const netplay::Hello& me);
     // This peer's port and the match's players, once connected.
     int port();
@@ -51,6 +68,10 @@ namespace conker::lockstep {
     // can't go on.
     bool on_read(uint64_t read, ultramodern::input::Pad* pads, const PadSource& source,
         const std::function<uint64_t()>& hash, uint8_t* rdram);
+    // Ends the match for `reason`, saying `why` (the reason is the peers').
+    void end(netplay::Reason reason, const char* why);
+    // Why the match ended, in a sentence for the player (after on_read returned false).
+    const std::string& why_ended();
     // Says goodbye (after the last read of a replay): what's been sent still arrives.
     void leave();
     // Says goodbye if not yet, and stops the networking, as the game quits.

@@ -53,6 +53,7 @@ namespace {
     bool initial_sent = false;
     bool ended = false;         // the match is over for this peer: nothing more is sent
     bool left = false;
+    std::string why_over;       // why the match ended, for the player
 
     std::array<std::vector<Pad>, conker::netplay::max_players> received;
     std::array<bool, conker::netplay::max_players> gone{};
@@ -68,6 +69,7 @@ namespace {
 
     void end_match(Reason reason, const char* why) {
         std::printf("[netplay] the match is over: %s\n", why);
+        why_over = why;
         if (!left && session != nullptr) {
             session->leave(reason);
             left = true;
@@ -205,87 +207,176 @@ bool conker::lockstep::active() {
     return host_port > 0 || !join_where.empty();
 }
 
+void conker::lockstep::set_host(int port, int players) {
+    host_port = port;
+    wanted_players = players;
+    join_where.clear();
+}
+
+void conker::lockstep::set_join(const std::string& where) {
+    host_port = -1;
+    join_where = where;
+}
+
 bool conker::lockstep::prepare() {
     if (!options_valid) {
         return false;
-    }
-    if (!active()) {
-        return true;
     }
     if (host_port > 0 && !join_where.empty()) {
         std::fprintf(stderr, "[netplay] --netplay-host and --netplay-join can't be used together\n");
         return false;
     }
-    std::string error;
-    if (!netplay::startup(error)) {
-        std::fprintf(stderr, "[netplay] couldn't start the networking: %s\n", error.c_str());
-        return false;
-    }
-    library_started = true;
     return true;
 }
 
-bool conker::lockstep::connect(const netplay::Hello& me) {
+namespace {
+    int joined = 0;             // host: the players in so far, the host too
+    double connecting_since = 0;
+    bool match_started = false;
+    conker::netplay::Hello sent;
+}
+
+bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
+    if (!library_started) {
+        if (!netplay::startup(error)) {
+            error = "couldn't start the networking: " + error;
+            return false;
+        }
+        library_started = true;
+    }
+    cancel();
     session = new netplay::Session();
-    std::string error;
     const bool hosting = host_port > 0;
     if (hosting ? !session->host((uint16_t)host_port, wanted_players, me, error) : !session->join(join_where, me, error)) {
-        std::fprintf(stderr, "[netplay] %s\n", error.c_str());
+        delete session;
+        session = nullptr;
         return false;
     }
+    sent = me;
+    own_port = hosting ? 0 : -1;
+    match_players = hosting ? wanted_players : 0;
+    joined = 1;
+    connecting_since = now();
+    match_started = false;
+    ended = false;
+    left = false;
+    why_over.clear();
+    initial_sent = false;
+    for (auto& pads : received) pads.clear();
+    gone = {};
+    own_hashes.clear();
+    their_hashes.clear();
     if (hosting) {
-        own_port = 0;
-        match_players = wanted_players;
         std::printf("[netplay] hosting a match of %d on UDP port %d: waiting for the players\n", wanted_players, host_port);
     }
     else {
         std::printf("[netplay] joining %s\n", join_where.c_str());
     }
+    return true;
+}
 
-    int joined = 1;
-    bool started = false;
-    const double since = now();
-    while (!started) {
-        for (const Event& event : session->poll()) {
-            switch (event.type) {
-                case Event::Type::joined:
-                    joined++;
-                    std::printf("[netplay] port %d joined (%d of %d)\n", event.port + 1, joined, match_players);
-                    if (joined == match_players && session->start()) {
-                        started = true;
-                    }
-                    break;
-                case Event::Type::left:
-                    // Before the start, a joiner leaving frees its port.
-                    joined--;
-                    std::printf("[netplay] port %d left: %s\n", event.port + 1, netplay::describe(event.reason));
-                    break;
-                case Event::Type::welcomed:
-                    own_port = event.port;
-                    match_players = event.players;
-                    std::printf("[netplay] in, on port %d of %d: waiting for the others\n", own_port + 1, match_players);
-                    break;
-                case Event::Type::started:
-                    started = true;
-                    break;
-                case Event::Type::ended:
-                    std::fprintf(stderr, "[netplay] couldn't join: %s (%s)\n", netplay::describe(event.reason), event.detail.c_str());
-                    return false;
-                case Event::Type::packet:
-                    handle(event);
-                    break;
-            }
+conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
+    if (session == nullptr) {
+        status = "Not connecting.";
+        return Progress::failed;
+    }
+    const bool hosting = session->hosting();
+    for (const Event& event : session->poll()) {
+        switch (event.type) {
+            case Event::Type::joined:
+                joined++;
+                std::printf("[netplay] port %d joined (%d of %d)\n", event.port + 1, joined, match_players);
+                if (joined == match_players && session->start()) {
+                    match_started = true;
+                }
+                break;
+            case Event::Type::left:
+                // Before the start, a joiner leaving frees its port.
+                joined--;
+                std::printf("[netplay] port %d left: %s\n", event.port + 1, netplay::describe(event.reason));
+                break;
+            case Event::Type::welcomed:
+                own_port = event.port;
+                match_players = event.players;
+                std::printf("[netplay] in, on port %d of %d: waiting for the others\n", own_port + 1, match_players);
+                break;
+            case Event::Type::started:
+                match_started = true;
+                break;
+            case Event::Type::ended:
+                std::printf("[netplay] couldn't join: %s (%s)\n", netplay::describe(event.reason), event.detail.c_str());
+                status = std::string("Couldn't join: ") + netplay::describe(event.reason) + ".";
+                left = true;
+                cancel();
+                return Progress::failed;
+            case Event::Type::packet:
+                handle(event);
+                break;
         }
-        if (hosting && now() - since > join_seconds) {
-            std::fprintf(stderr, "[netplay] not every player joined in %.0f minutes\n", join_seconds / 60);
+    }
+    if (match_started) {
+        std::printf("[netplay] the match starts: %d players, this is port %d, input delay %d reads\n", match_players,
+            own_port + 1, delay);
+        status = "The match starts.";
+        return Progress::started;
+    }
+    if (hosting && now() - connecting_since > join_seconds) {
+        std::printf("[netplay] not every player joined in %.0f minutes\n", join_seconds / 60);
+        status = "Not every player joined in " + std::to_string((int)(join_seconds / 60)) + " minutes.";
+        cancel();
+        return Progress::failed;
+    }
+    if (hosting) {
+        status = "Waiting for players: " + std::to_string(joined) + " of " + std::to_string(match_players) + " in.";
+    }
+    else if (own_port < 0) {
+        status = "Connecting...";
+    }
+    else {
+        status = "In, as player " + std::to_string(own_port + 1) + " of " + std::to_string(match_players) +
+            ": waiting for the others.";
+    }
+    return Progress::waiting;
+}
+
+void conker::lockstep::cancel() {
+    if (session != nullptr) {
+        if (!left) {
             session->leave(Reason::quit);
-            return false;
+        }
+        delete session;
+        session = nullptr;
+    }
+    match_started = false;
+}
+
+bool conker::lockstep::connected() {
+    return session != nullptr && match_started;
+}
+
+const conker::netplay::Hello& conker::lockstep::sent_hello() {
+    return sent;
+}
+
+bool conker::lockstep::connect(const netplay::Hello& me) {
+    std::string error;
+    if (!begin(me, error)) {
+        std::fprintf(stderr, "[netplay] %s\n", error.c_str());
+        return false;
+    }
+    std::string status;
+    while (true) {
+        switch (poll_connect(status)) {
+            case Progress::started:
+                return true;
+            case Progress::failed:
+                std::fprintf(stderr, "[netplay] %s\n", status.c_str());
+                return false;
+            case Progress::waiting:
+                break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     }
-    std::printf("[netplay] the match starts: %d players, this is port %d, input delay %d reads\n", match_players,
-        own_port + 1, delay);
-    return true;
 }
 
 int conker::lockstep::port() {
@@ -357,6 +448,14 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, con
         pads[port] = { pad.buttons, pad.stick_x, pad.stick_y, pad.err_no };
     }
     return true;
+}
+
+void conker::lockstep::end(netplay::Reason reason, const char* why) {
+    end_match(reason, why);
+}
+
+const std::string& conker::lockstep::why_ended() {
+    return why_over;
 }
 
 void conker::lockstep::leave() {

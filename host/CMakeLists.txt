@@ -198,6 +198,10 @@ if (CONKER_RT64)
 
     # CONKER_RT64 selects the window build; the rest are what rt64 compiles its own headers with.
     target_compile_definitions(ConkerRecomp PRIVATE CONKER_RT64 HLSL_CPU)
+    if (CONKER_NETPLAY)
+        # The launcher's Netplay menu.
+        target_sources(ConkerRecomp PRIVATE src/netplay/menu.cpp)
+    endif()
     if (WIN32)
         target_compile_definitions(ConkerRecomp PRIVATE NOMINMAX)
     endif()

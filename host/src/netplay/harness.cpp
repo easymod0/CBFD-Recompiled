@@ -51,6 +51,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <functional>
 #include <mutex>
 #include <span>
 #include <string>
@@ -115,6 +116,10 @@ namespace {
     uint64_t reads = 0;
     // A netplay match that has ended: the game gets no more input.
     bool match_over = false;
+    // A match started from the menu says it's over through this (frontend's netplay.cpp) instead of
+    // quitting.
+    std::function<void(const std::string&)> match_over_callback;
+    bool activated = false;
 
     // The game is quit from a thread of its own, not the game thread that reads the controllers.
     std::thread quitter;
@@ -396,8 +401,14 @@ namespace {
             if (hash_log != nullptr) {
                 std::fflush(hash_log);
             }
-            std::printf("[harness] read %llu: the netplay match is over: quitting\n", (unsigned long long)read);
-            request_quit();
+            if (match_over_callback) {
+                std::printf("[harness] read %llu: the netplay match is over\n", (unsigned long long)read);
+                match_over_callback(conker::lockstep::why_ended());
+            }
+            else {
+                std::printf("[harness] read %llu: the netplay match is over: quitting\n", (unsigned long long)read);
+                request_quit();
+            }
             return;
         }
 
@@ -433,6 +444,8 @@ namespace {
         }
     }
 }
+
+static void activate();
 
 bool conker::harness::parse_option(int argc, char** argv, int& i) {
     if (conker::lockstep::parse_option(argc, argv, i)) {
@@ -589,8 +602,17 @@ bool conker::harness::prepare() {
         return false;
     }
 
-    conker::netplay_profile::set_active(true);
+    activate();
+    return true;
+}
 
+// The settings profile and the quitting thread, once the harness is to be used.
+static void activate() {
+    if (activated) {
+        return;
+    }
+    activated = true;
+    conker::netplay_profile::set_active(true);
     quitter = std::thread([] {
         std::unique_lock lock(quit_mutex);
         quit_wanted.wait(lock, [] { return quit_requested || quit_finished; });
@@ -599,7 +621,11 @@ bool conker::harness::prepare() {
             ultramodern::quit();
         }
     });
-    return true;
+}
+
+void conker::harness::begin_menu_match(std::function<void(const std::string&)> on_match_over) {
+    match_over_callback = std::move(on_match_over);
+    activate();
 }
 
 bool conker::harness::replaying() {
@@ -623,6 +649,10 @@ extern "C" void recomp_entrypoint(uint8_t* rdram, recomp_context* ctx);
 // the player's own save is left alone. The save file is switched once saving has started, before any
 // of the game's code runs.
 void conker::harness::entrypoint(uint8_t* game_rdram, recomp_context* ctx) {
+    if (!::active()) {
+        recomp_entrypoint(game_rdram, ctx);
+        return;
+    }
     const std::filesystem::path folder = ultramodern::get_save_file_path().parent_path() / "harness";
     std::error_code error;
     std::filesystem::remove_all(folder, error);
@@ -678,7 +708,19 @@ void conker::harness::start(uint8_t* game_rdram) {
     }
     // A netplay match: every player in before the game starts, with as many ports as players.
     if (conker::lockstep::active()) {
-        if (!conker::lockstep::connect(hello)) {
+        if (conker::lockstep::connected()) {
+            // Connected from the menu, with the stored ROM's hash: it's the one loaded, unless something
+            // changed it since.
+            if (!(conker::lockstep::sent_hello() == hello)) {
+                std::fprintf(stderr, "[harness] the game loaded isn't the one the match was joined with\n");
+                conker::lockstep::end(conker::netplay::Reason::rom, "the ROM loaded isn't the one the match was joined with");
+                match_over = true;
+                if (match_over_callback) {
+                    match_over_callback(conker::lockstep::why_ended());
+                }
+            }
+        }
+        else if (!conker::lockstep::connect(hello)) {
             conker::lockstep::finish();
             refuse();
         }
