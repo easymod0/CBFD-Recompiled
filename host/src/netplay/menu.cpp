@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+#include <SDL.h>
+
 #include "recompui/recompui.h"
 #include "elements/ui_button.h"
 #include "elements/ui_container.h"
@@ -53,6 +55,8 @@ namespace {
         recompui::TextInput* address_input = nullptr;
         recompui::TextInput* join_input = nullptr;
         recompui::Label* code_label = nullptr;
+        recompui::Button* copy_button = nullptr;
+        std::string shown_code;             // the join code on show, for Copy
         recompui::Label* status_label = nullptr;
         recompui::Button* host_button = nullptr;
         recompui::Button* join_button = nullptr;
@@ -104,6 +108,11 @@ namespace {
         void show_code() {
             const bool blank = address_text.find_first_not_of(' ') == std::string::npos;
             const std::string code = hosting ? conker::lockstep::join_code(address_text) : std::string();
+            if (code != shown_code) {
+                copy_button->set_text("Copy");
+            }
+            shown_code = code;
+            copy_button->set_display(code.empty() ? recompui::Display::None : recompui::Display::Flex);
             if (blank) {
                 code_label->set_text("Give your address: the join code is made from it when you host.");
             }
@@ -261,7 +270,16 @@ namespace {
             screens_radio->add_option("Players choose");
             screens_radio->set_index(0);
             screens_radio->add_index_changed_callback([this](uint32_t index) { own_view_for_everyone = index == 0; });
-            code_label = text(host, "", Typography::Body, color::TextDim);
+            recompui::Element* code_row = row(host);
+            code_label = text(code_row, "", Typography::LabelMD);
+            copy_button = context.create_element<recompui::Button>(code_row, "Copy", recompui::ButtonStyle::Tertiary);
+            copy_button->add_pressed_callback([this]() {
+                // Said on the button: the status line is busy while waiting for players.
+                if (!shown_code.empty() && SDL_SetClipboardText(shown_code.c_str()) == 0) {
+                    copy_button->set_text("Copied");
+                    queue_update();
+                }
+            });
             text(host, "The others connect to that port on your computer: if you're behind a router, forward it "
                 "(UDP) to this computer. Look up your public address on any \"what is my IP\" site; at home, "
                 "your local one works too.", Typography::Body, color::TextDim);
@@ -275,8 +293,23 @@ namespace {
             text(join, "Join a match", Typography::LabelLG);
             recompui::Element* join_row = row(join);
             text(join_row, "Join code", Typography::LabelMD);
-            join_input = input(join_row, "", 360.0f);
+            join_input = input(join_row, "", 520.0f);
             join_input->add_text_changed_callback([this](const std::string& value) { join_text = value; });
+            recompui::Button* paste_button = context.create_element<recompui::Button>(join_row, "Paste", recompui::ButtonStyle::Tertiary);
+            paste_button->add_pressed_callback([this]() {
+                char* pasted = SDL_GetClipboardText();
+                if (pasted != nullptr) {
+                    // One line, without the spaces around it (the code reads dashes and spaces anyway).
+                    std::string text = pasted;
+                    SDL_free(pasted);
+                    text = text.substr(0, text.find_first_of("\r\n"));
+                    while (!text.empty() && text.back() == ' ') text.pop_back();
+                    while (!text.empty() && text.front() == ' ') text.erase(text.begin());
+                    join_text = text.substr(0, 64);
+                    join_input->set_text(join_text);
+                    queue_update();     // which applies the field's new value
+                }
+            });
             join_button = context.create_element<recompui::Button>(join, "Join", recompui::ButtonStyle::Primary);
             join_button->add_pressed_callback([this]() { on_join(); });
 
