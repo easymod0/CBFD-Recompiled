@@ -134,6 +134,9 @@ namespace {
             host_button->set_enabled(state == State::idle);
             join_button->set_enabled(state == State::idle);
             cancel_button->set_display(state == State::connecting ? recompui::Display::Flex : recompui::Display::None);
+            if (state == State::connecting) {
+                queue_update();
+            }
         }
 
         // Hosting or joining: the Hello from the stored ROM, then lockstep's begin.
@@ -205,8 +208,9 @@ namespace {
                         recompui::hide_all_contexts();
                         return;
                 }
+                // Polled again next frame while connecting (set_state starts it).
+                queue_update();
             }
-            queue_update();
         }
 
     public:

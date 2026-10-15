@@ -8,6 +8,7 @@
 #include "recomp.h"
 #include "librecomp/addresses.hpp"
 #include "librecomp/game.hpp"
+#include "ultramodern/timeline.hpp"
 #include "ultramodern/error_handling.hpp"
 #include "ultramodern/ultra64.h"
 
@@ -67,6 +68,14 @@ extern "C" void conker_spin_wait_pass(uint8_t* rdram, recomp_context* ctx) {
 // plays, when the game stops it, or after 500 ms (should the song never start), on the game's clock:
 // in a replay or netplay that's the virtual timeline's (ultramodern/timeline.hpp), the same every run.
 extern "C" uint32_t osGetCount();
+
+namespace {
+    // The time the song marks go by: the game's clock, or in deterministic mode the timeline's time, which
+    // reading doesn't move (reading the game's clock there moves it a step, which the game would then see).
+    uint32_t song_clock() {
+        return ultramodern::timeline::enabled() ? (uint32_t)ultramodern::timeline::delivery_time() : osGetCount();
+    }
+}
 namespace {
     constexpr int sequence_players = 3; // D_8003C900
     uint32_t song_started_at[sequence_players];
@@ -99,7 +108,7 @@ extern "C" void conker_song_started(uint8_t* rdram, recomp_context* ctx) {
         return;
     }
     song_just_started[player] = true;
-    song_started_at[player] = osGetCount();
+    song_started_at[player] = song_clock();
 }
 
 // func_10008F24 (stop a player) at its start: $a0 the player number.
@@ -118,7 +127,7 @@ extern "C" void conker_song_state(uint8_t* rdram, recomp_context* ctx) {
         return;
     }
     // (A difference of counts, so it's right across the count's wrap.)
-    if ((int32_t)ctx->r2 != 0 || osGetCount() - song_started_at[player] > start_limit) {
+    if ((int32_t)ctx->r2 != 0 || song_clock() - song_started_at[player] > start_limit) {
         song_just_started[player] = false;
         return;
     }

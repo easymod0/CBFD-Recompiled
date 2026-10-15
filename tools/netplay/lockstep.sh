@@ -165,7 +165,9 @@ sleep 1
 start desync-join --netplay-join 127.0.0.1:27312
 if finish "the netplay match is over" desync-host desync-join; then
     for name in desync-host desync-join; do
-        if grep -q "desync" "$OUT/$name.out"; then
+        # The desync itself: this peer's comparison found it ("desync at read"), or the other's did and
+        # said so (a desync); not merely the host's note that it changed its memory.
+        if grep -q '\[netplay\] desync at read\|(a desync)' "$OUT/$name.out"; then
             echo "  $name: $(grep -m1 '\[netplay\] desync at\|the match is over' "$OUT/$name.out")"
         else
             echo "  $name stopped, but not for a desync"

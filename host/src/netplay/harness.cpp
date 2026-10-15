@@ -347,6 +347,13 @@ namespace {
     // On the game thread, at each controller read, with the pads the game is about to get.
     void on_read_data(ultramodern::input::Pad* pads, int count) {
         const uint64_t read = reads++;
+        // The ports past --ports (or the match's players) have no controller, whatever is plugged into this
+        // machine: the game polls all four, and a pad there would reach this game only (a recording's, or a
+        // match's, would then differ from what the others or a replay give it).
+        constexpr uint8_t no_controller = 0x08; // CONT_NO_RESPONSE_ERROR
+        for (int i = ports; i < max_pads; i++) {
+            pads[i] = { 0, 0, 0, no_controller };
+        }
         // Each once (after the load the game passes read <l> again).
         if (read == state_save_at || read == state_load_at) {
             state_request = read == state_save_at ? StateRequest::Save : StateRequest::Load;

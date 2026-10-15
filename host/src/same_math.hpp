@@ -1,5 +1,6 @@
 // Trigonometry that gives the same result on every platform, for the host code that writes into the game's
-// memory (widescreen.cpp's frustum and backdrop, field_of_view.cpp). The C library's sin, cos, tan and atan
+// memory in netplay (through game_trig.hpp: widescreen.cpp's frustum and backdrop, field_of_view.cpp). The
+// C library's sin, cos, tan and atan
 // aren't required to be correctly rounded, and glibc's and Microsoft's round some results' last bit
 // differently: a netplay match between Linux and Windows then had different frustum planes for a frame
 // (0x3F57F095's sine came out ...C7 on one and ...C8 on the other), which can change what the game culls.
@@ -7,7 +8,8 @@
 // These use only addition, subtraction, multiplication, division and square roots, which IEEE 754 rounds
 // exactly the same everywhere (with no fused multiply-adds: host/CMakeLists.txt), in double precision,
 // and round to float once at the end. They're accurate to about 1e-15 for the angles used here (a few
-// turns at most), far below a float's precision.
+// turns at most), far below a float's precision. Inputs that aren't finite, or beyond a million radians (none
+// of the callers' come near), give NaN rather than whatever converting them to an integer would give.
 
 #pragma once
 
@@ -73,7 +75,7 @@ namespace conker::same_math {
             }
         }
 
-        // atan of x in [0, tan(pi/12)]: its series to the x^23 term.
+        // atan of x in [-tan(pi/12), tan(pi/12)]: its series to the x^23 term.
         inline double atan_small(double x) {
             const double x2 = x * x;
             double power = x, sum = x;
@@ -96,9 +98,12 @@ namespace conker::same_math {
         }
     }
 
-    inline float sin(float x) { return (float)detail::sin_d((double)x); }
-    inline float cos(float x) { return (float)detail::cos_d((double)x); }
-    inline float tan(float x) { return (float)(detail::sin_d((double)x) / detail::cos_d((double)x)); }
+    namespace detail {
+        inline bool in_range(float x) { return std::isfinite(x) && std::fabs(x) <= 1.0e6f; }
+    }
+    inline float sin(float x) { return detail::in_range(x) ? (float)detail::sin_d((double)x) : NAN; }
+    inline float cos(float x) { return detail::in_range(x) ? (float)detail::cos_d((double)x) : NAN; }
+    inline float tan(float x) { return detail::in_range(x) ? (float)(detail::sin_d((double)x) / detail::cos_d((double)x)) : NAN; }
     inline float atan(float x) { return (float)detail::atan_d((double)x); }
     inline float asin(float x) {
         const double d = (double)x;
