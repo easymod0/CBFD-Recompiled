@@ -41,34 +41,41 @@ namespace conker::netplay {
             return (uint8_t)reason >= 1 && (uint8_t)reason <= last_reason;
         }
 
+        // Each kind's fields (plain overloads: MSVC misreads `p.count < 1 || p.count > n` in a generic
+        // lambda as a template's arguments).
+        bool valid_fields(const Hello&) {
+            return true;
+        }
+        bool valid_fields(const Welcome& p) {
+            return p.players >= 2 && p.players <= max_players && p.port < p.players;
+        }
+        bool valid_fields(const Refuse& p) {
+            return valid_reason(p.reason);
+        }
+        bool valid_fields(const Inputs& p) {
+            if (p.port >= max_players || p.count < 1 || p.count > input_window ||
+                p.first_read > UINT32_MAX - (uint32_t)(p.count - 1)) {
+                return false;
+            }
+            for (int i = 0; i < input_window; i++) {
+                if (i < p.count ? !valid(p.pads[i]) : !(p.pads[i] == Pad{})) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        bool valid_fields(const Hash&) {
+            return true;
+        }
+        bool valid_fields(const Bye& p) {
+            return valid_reason(p.reason);
+        }
+        bool valid_fields(const Start& p) {
+            return p.players >= 2 && p.players <= max_players;
+        }
+
         bool valid_packet(const Packet& packet) {
-            return std::visit([](const auto& p) {
-                using T = std::decay_t<decltype(p)>;
-                if constexpr (std::is_same_v<T, Welcome>) {
-                    return p.players >= 2 && p.players <= max_players && p.port < p.players;
-                }
-                else if constexpr (std::is_same_v<T, Refuse> || std::is_same_v<T, Bye>) {
-                    return valid_reason(p.reason);
-                }
-                else if constexpr (std::is_same_v<T, Start>) {
-                    return p.players >= 2 && p.players <= max_players;
-                }
-                else if constexpr (std::is_same_v<T, Inputs>) {
-                    if (p.port >= max_players || p.count < 1 || p.count > input_window ||
-                        p.first_read > UINT32_MAX - (p.count - 1)) {
-                        return false;
-                    }
-                    for (int i = 0; i < input_window; i++) {
-                        if (i < p.count ? !valid(p.pads[i]) : !(p.pads[i] == Pad{})) {
-                            return false;
-                        }
-                    }
-                    return true;
-                }
-                else {
-                    return true;
-                }
-            }, packet);
+            return std::visit([](const auto& p) { return valid_fields(p); }, packet);
         }
 
         struct Writer {
