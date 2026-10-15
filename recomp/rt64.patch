@@ -90,18 +90,19 @@ index f79adbf..e40a61d 100644
          int32_t uly;
 diff --git a/src/common/rt64_conker_view_focus.h b/src/common/rt64_conker_view_focus.h
 new file mode 100644
-index 0000000..c5cdc4c
+index 0000000..0a7ad73
 --- /dev/null
 +++ b/src/common/rt64_conker_view_focus.h
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,128 @@
 +//
 +// RT64
 +//
 +
 +// Conker: netplay's "my view only", drawn anew (the host's netplay/view.cpp). While it's on, one player's view of
 +// the split screen is drawn across the whole frame instead of its part of it, and the other views aren't drawn:
-+// the view's viewport and scissor are moved to the whole frame (RSP::setViewport, RDP::setScissor), and its
-+// projection is made taller by as much as the frame is taller than the view (ProjectionProcessor), so nothing is
++// the view's viewport and scissor are stretched with it to the whole frame (RSP::setViewport, RDP::setScissor;
++// a smaller one inside the view goes to the same place in the stretched view), and its projection is made
++// taller by as much as the stretch isn't uniform (ProjectionProcessor), so nothing is
 +// stretched and more of the scene shows. The widescreen widening then widens it like any full-frame view. The
 +// other views' viewports are collapsed to nothing and their scissors emptied, which also leaves out their 2D.
 +// Rectangles in pixels of the frame, which is frameWidth by frameHeight. Only the renderer changes: the game's
@@ -125,6 +126,18 @@ index 0000000..c5cdc4c
 +    // Set by the game's host each frame (defined in rt64_vi_renderer.cpp).
 +    void setViewFocusRedraw(bool on, float left, float top, float right, float bottom, float frameWidth, float frameHeight);
 +    ConkerViewFocus conkerViewFocus();
++
++    // Whether the focus applies to what's drawn now: only to the frame itself, an image as wide as the frame.
++    // The game also draws into small images of its own (a shadow's silhouette, 64 pixels wide), which the
++    // frame's views have nothing to do with.
++    inline bool conkerFocusApplies(const ConkerViewFocus &f, uint16_t colorImageWidth) {
++        return f.on && (f.frameWidth > 0.0f) && (colorImageWidth == uint16_t(f.frameWidth));
++    }
++
++    // A point of the focused view, where it goes in the frame: the view stretched to the whole frame. (Its
++    // projection is made taller by as much as the stretch isn't uniform, so what's drawn isn't stretched.)
++    inline float conkerMapX(const ConkerViewFocus &f, float x) { return (x - f.left) * f.frameWidth / (f.right - f.left); }
++    inline float conkerMapY(const ConkerViewFocus &f, float y) { return (y - f.top) * f.frameHeight / (f.bottom - f.top); }
 +
 +    // Where a rectangle (in pixels) stands: the whole frame (left alone), the focused view (moved to the whole
 +    // frame), or another view (not drawn). Judged by its middle, so a view's own slightly different edges match.
@@ -190,10 +203,15 @@ index 0000000..c5cdc4c
 +            };
 +            moveX = edgeMove((left + right) / 2.0f, f.left, f.right, f.frameWidth);
 +            moveY = edgeMove((top + bottom) / 2.0f, f.top, f.bottom, f.frameHeight);
-+            // Kept inside the frame (a piece hanging over the view's edge would go past the frame's).
++            // Kept inside the frame (a piece hanging over the view's edge would go past the frame's), where
++            // it fits in it at all.
 +            const float inset = 2.0f;
-+            moveX = std::clamp(moveX, inset - left, (f.frameWidth - inset) - right);
-+            moveY = std::clamp(moveY, inset - top, (f.frameHeight - inset) - bottom);
++            if ((right - left) <= f.frameWidth - 2.0f * inset) {
++                moveX = std::clamp(moveX, inset - left, (f.frameWidth - inset) - right);
++            }
++            if ((bottom - top) <= f.frameHeight - 2.0f * inset) {
++                moveY = std::clamp(moveY, inset - top, (f.frameHeight - inset) - bottom);
++            }
 +        }
 +        const int32_t dx = int32_t(std::lround(moveX * 4.0f));
 +        const int32_t dy = int32_t(std::lround(moveY * 4.0f));
@@ -1135,7 +1153,7 @@ index e08b02c..084ccfd 100644
          struct External {
              ApplicationWindow *appWindow = nullptr;
 diff --git a/src/hle/rt64_rdp.cpp b/src/hle/rt64_rdp.cpp
-index a10c11a..27552f1 100644
+index a10c11a..026d138 100644
 --- a/src/hle/rt64_rdp.cpp
 +++ b/src/hle/rt64_rdp.cpp
 @@ -4,7 +4,10 @@
@@ -1149,20 +1167,24 @@ index a10c11a..27552f1 100644
  
  #include "../include/rt64_extended_gbi.h"
  
-@@ -977,6 +980,23 @@ namespace RT64 {
+@@ -977,6 +980,27 @@ namespace RT64 {
          scissorRect.uly = std::clamp(uly + extAlignment.topOffset, extAlignment.topBound, extAlignment.bottomBound);
          scissorRect.lrx = std::clamp(movedFromOrigin(lrx + extAlignment.rightOffset, extAlignment.rightOrigin), extAlignment.leftBound, extAlignment.rightBound);
          scissorRect.lry = std::clamp(lry + extAlignment.bottomOffset, extAlignment.topBound, extAlignment.bottomBound);
 +
 +        // Conker: netplay's "my view only", drawn anew (rt64_conker_view_focus.h). The rectangle is in quarter pixels.
 +        const ConkerViewFocus focus = conkerViewFocus();
-+        if (focus.on) {
++        if (conkerFocusApplies(focus, colorImage.width)) {
 +            const ConkerViewPart part = conkerViewPart(focus, scissorRect.ulx / 4.0f, scissorRect.uly / 4.0f, scissorRect.lrx / 4.0f, scissorRect.lry / 4.0f);
 +            if (part == ConkerViewPart::Focused) {
-+                scissorRect.ulx = 0;
-+                scissorRect.uly = 0;
-+                scissorRect.lrx = int32_t(focus.frameWidth * 4.0f);
-+                scissorRect.lry = int32_t(focus.frameHeight * 4.0f);
++                // Stretched with the view (the view's own scissor to the whole frame), within the frame.
++                auto mapped = [](float v, float limit) { return int32_t(std::lround(std::clamp(v, 0.0f, limit) * 4.0f)); };
++                const float left = conkerMapX(focus, scissorRect.ulx / 4.0f), right = conkerMapX(focus, scissorRect.lrx / 4.0f);
++                const float top = conkerMapY(focus, scissorRect.uly / 4.0f), bottom = conkerMapY(focus, scissorRect.lry / 4.0f);
++                scissorRect.ulx = mapped(left, focus.frameWidth);
++                scissorRect.uly = mapped(top, focus.frameHeight);
++                scissorRect.lrx = mapped(right, focus.frameWidth);
++                scissorRect.lry = mapped(bottom, focus.frameHeight);
 +            }
 +            else if (part == ConkerViewPart::Other) {
 +                scissorRect.lrx = scissorRect.ulx;
@@ -1173,7 +1195,7 @@ index a10c11a..27552f1 100644
          scissorModeStack[scissorStackSize - 1] = mode;
          extended.scissorLeftOriginStack[scissorStackSize - 1] = extAlignment.leftOrigin;
          extended.scissorRightOriginStack[scissorStackSize - 1] = extAlignment.rightOrigin;
-@@ -1192,11 +1212,17 @@ namespace RT64 {
+@@ -1192,11 +1216,17 @@ namespace RT64 {
              }
          }
  
@@ -1185,7 +1207,7 @@ index a10c11a..27552f1 100644
  
 +        // Conker: netplay's "my view only", drawn anew (rt64_conker_view_focus.h): the view's 2D goes with it.
 +        const ConkerViewFocus focus = conkerViewFocus();
-+        if (focus.on && !conkerMoveRect(focus, usesFillMode, drawRect)) {
++        if (conkerFocusApplies(focus, colorImage.width) && !conkerMoveRect(focus, usesFillMode, drawRect)) {
 +            return;
 +        }
 +
@@ -1657,7 +1679,7 @@ index 778e08b..f53d597 100644
          void updatePerspective(const hlslpp::float4x4 &prevTransform, const hlslpp::float4x4 &curTransform, uint8_t perspInterpolation);
  
 diff --git a/src/hle/rt64_rsp.cpp b/src/hle/rt64_rsp.cpp
-index 1da2550..5c0daca 100644
+index 1da2550..e296934 100644
 --- a/src/hle/rt64_rsp.cpp
 +++ b/src/hle/rt64_rsp.cpp
 @@ -4,7 +4,11 @@
@@ -1974,7 +1996,7 @@ index 1da2550..5c0daca 100644
              const uint32_t rdramAddress = fromSegmentedMasked(branchDl);
              *dl = reinterpret_cast<DisplayList *>(state->fromRDRAM(rdramAddress)) - 1;
          }
-@@ -910,6 +1157,30 @@ namespace RT64 {
+@@ -910,6 +1157,33 @@ namespace RT64 {
          viewport.translate.y = float(vp->vtrans[0] + offy) / 4.0f;
          viewport.translate.z = float(vp->vtrans[3]) / DepthRange;
          extended.viewportOriginStack[viewportStackSize - 1] = ori;
@@ -1982,18 +2004,21 @@ index 1da2550..5c0daca 100644
 +        // Conker: netplay's "my view only", drawn anew (rt64_conker_view_focus.h).
 +        float focusYScale = 1.0f;
 +        const ConkerViewFocus focus = conkerViewFocus();
-+        if (focus.on) {
++        if (conkerFocusApplies(focus, state->rdp->colorImage.width)) {
 +            const float halfWidth = std::fabs(viewport.scale.x);
 +            const float halfHeight = std::fabs(viewport.scale.y);
 +            const ConkerViewPart part = conkerViewPart(focus, viewport.translate.x - halfWidth, viewport.translate.y - halfHeight,
 +                viewport.translate.x + halfWidth, viewport.translate.y + halfHeight);
 +            if ((part == ConkerViewPart::Focused) && (halfWidth > 0.0f) && (halfHeight > 0.0f)) {
-+                // Uniformly: the frame's pixels per view's pixel across, both ways.
-+                focusYScale = (halfHeight * focus.frameWidth) / (focus.frameHeight * halfWidth);
-+                viewport.scale.x = std::copysign(focus.frameWidth / 2.0f, viewport.scale.x);
-+                viewport.scale.y = std::copysign(focus.frameHeight / 2.0f, viewport.scale.y);
-+                viewport.translate.x = focus.frameWidth / 2.0f;
-+                viewport.translate.y = focus.frameHeight / 2.0f;
++                // Stretched with the view to the whole frame; the projection made taller by as much as the stretch
++                // across is more than the stretch down, so what's drawn keeps its shape.
++                const float stretchX = focus.frameWidth / (focus.right - focus.left);
++                const float stretchY = focus.frameHeight / (focus.bottom - focus.top);
++                focusYScale = stretchY / stretchX;
++                viewport.translate.x = conkerMapX(focus, viewport.translate.x);
++                viewport.translate.y = conkerMapY(focus, viewport.translate.y);
++                viewport.scale.x *= stretchX;
++                viewport.scale.y *= stretchY;
 +            }
 +            else if (part == ConkerViewPart::Other) {
 +                viewport.scale.x = 0.0f;
@@ -2005,7 +2030,7 @@ index 1da2550..5c0daca 100644
          viewportChanged = true;
      }
  
-@@ -917,6 +1188,7 @@ namespace RT64 {
+@@ -917,6 +1191,7 @@ namespace RT64 {
          if (viewportStackSize < RSP_EXTENDED_STACK_SIZE) {
              viewportStack[viewportStackSize] = viewportStack[viewportStackSize - 1];
              extended.viewportOriginStack[viewportStackSize] = extended.viewportOriginStack[viewportStackSize - 1];
@@ -2013,7 +2038,7 @@ index 1da2550..5c0daca 100644
              viewportStackSize++;
          }
      }
-@@ -1152,6 +1424,16 @@ namespace RT64 {
+@@ -1152,6 +1427,16 @@ namespace RT64 {
  
              const interop::RSPViewport &viewport = viewportStack[viewportStackSize - 1];
              const FixedRect viewportClipRect = viewport.rect(clipRatios.data());
@@ -3482,10 +3507,10 @@ index 9131697..488e5be 100644
          void reloadReplacements(bool clearQueue, uint64_t exclusiveDbHash = 0);
          bool loadReplacementDirectory(const ReplacementDirectory &replacementDirectory);
 diff --git a/src/render/rt64_vi_renderer.cpp b/src/render/rt64_vi_renderer.cpp
-index b4ff4e9..43f7e66 100644
+index b4ff4e9..a984aee 100644
 --- a/src/render/rt64_vi_renderer.cpp
 +++ b/src/render/rt64_vi_renderer.cpp
-@@ -4,10 +4,56 @@
+@@ -4,10 +4,42 @@
  
  #include "rt64_vi_renderer.h"
  
@@ -3525,24 +3550,10 @@ index b4ff4e9..43f7e66 100644
 +        return viewFocus;
 +    }
 +
-+    // Conker: the presentation focus (see rt64_vi_renderer.h), packed into one atomic as four 16-bit shares.
-+    static std::atomic<uint64_t> presentationFocusPacked{ 0xFFFFFFFF00000000ull };
-+
-+    void setPresentationFocus(float left, float top, float right, float bottom) {
-+        auto share = [](float v) { return uint64_t(std::lround(std::clamp(v, 0.0f, 1.0f) * 65535.0f)); };
-+        presentationFocusPacked = share(left) | (share(top) << 16) | (share(right) << 32) | (share(bottom) << 48);
-+    }
-+
-+    static hlslpp::float4 presentationFocus() {
-+        const uint64_t packed = presentationFocusPacked;
-+        auto share = [&](int i) { return float((packed >> (16 * i)) & 0xFFFF) / 65535.0f; };
-+        return hlslpp::float4(share(0), share(1), share(2), share(3));
-+    }
-+
      // VIRenderer
  
      VIRenderer::VIRenderer() { }
-@@ -108,6 +154,42 @@ namespace RT64 {
+@@ -108,6 +140,18 @@ namespace RT64 {
          hlslpp::float4 viViewRect = vi.viewRectangle() * sdSize.xyxy;
          hlslpp::float4 viCropRect = vi.cropRectangle() * sdSize.xyxy;
  
@@ -3558,38 +3569,14 @@ index b4ff4e9..43f7e66 100644
 +            viViewRect = hlslpp::float4(x, y, width, height);
 +        }
 +
-+        // Conker: the presentation focus. The picture is scaled by as much both ways for the focused part to
-+        // fill as much of its area as it can, with that part's middle at the area's; the scissor then keeps
-+        // only the focused part.
-+        const hlslpp::float4 focus = presentationFocus();
-+        const float focusWidth = float(focus.z) - float(focus.x);
-+        const float focusHeight = float(focus.w) - float(focus.y);
-+        if ((focusWidth > 0.01f) && (focusHeight > 0.01f) && ((focusWidth < 0.999f) || (focusHeight < 0.999f))) {
-+            const float zoom = std::min(1.0f / focusWidth, 1.0f / focusHeight);
-+            const float areaMiddleX = float(viViewRect.x) + float(viViewRect.z) / 2.0f;
-+            const float areaMiddleY = float(viViewRect.y) + float(viViewRect.w) / 2.0f;
-+            const float width = float(viViewRect.z) * zoom;
-+            const float height = float(viViewRect.w) * zoom;
-+            const float focusMiddleX = (float(focus.x) + float(focus.z)) / 2.0f;
-+            const float focusMiddleY = (float(focus.y) + float(focus.w)) / 2.0f;
-+            viViewRect = hlslpp::float4(areaMiddleX - focusMiddleX * width, areaMiddleY - focusMiddleY * height, width, height);
-+            const float keptWidth = focusWidth * width;
-+            const float keptHeight = focusHeight * height;
-+            const float left = std::max(float(viCropRect.x), areaMiddleX - keptWidth / 2.0f);
-+            const float top = std::max(float(viCropRect.y), areaMiddleY - keptHeight / 2.0f);
-+            const float right = std::min(float(viCropRect.x + viCropRect.z), areaMiddleX + keptWidth / 2.0f);
-+            const float bottom = std::min(float(viCropRect.y + viCropRect.w), areaMiddleY + keptHeight / 2.0f);
-+            viCropRect = hlslpp::float4(left, top, right - left, bottom - top);
-+        }
-+
          // Scale all the rectangles to the space of the Window.
          hlslpp::float2 topLeftViewport = fromSDtoHD({ float(viViewRect.x), float(viViewRect.y) }, sdSize, hdSize);
          hlslpp::float2 bottomRightViewport = fromSDtoHD({ float(viViewRect.x + viViewRect.z), float(viViewRect.y + viViewRect.w) }, sdSize, hdSize);
 diff --git a/src/render/rt64_vi_renderer.h b/src/render/rt64_vi_renderer.h
-index 8a3782a..e4923a6 100644
+index 8a3782a..6fd46b1 100644
 --- a/src/render/rt64_vi_renderer.h
 +++ b/src/render/rt64_vi_renderer.h
-@@ -11,6 +11,18 @@
+@@ -11,6 +11,13 @@
  #include "rt64_shader_library.h"
  
  namespace RT64 {
@@ -3599,11 +3586,6 @@ index 8a3782a..e4923a6 100644
 +    // a black border the N64 left for the TV's overscan (issue #72). Set by the game's host.
 +    void setPresentationCrop(float shareEachSide);
 +    float presentationCrop();
-+
-+    // Conker: a part of the picture to show alone, scaled up to fill it without stretching (the rest of the
-+    // picture's area left black), as shares of the picture: left, top, right, bottom. (0, 0, 1, 1) shows it
-+    // all. Netplay's "my view only": one player's view of the split screen. Set by the game's host.
-+    void setPresentationFocus(float left, float top, float right, float bottom);
 +
      struct VIRenderer {
          std::unique_ptr<VideoInterfaceDescriptorSet> descriptorSet;

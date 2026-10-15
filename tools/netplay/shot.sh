@@ -1,5 +1,5 @@
 #!/bin/sh
-# Replays a recording in a window, as fast as it goes, and saves a screenshot of its last moment: for
+# Replays a recording in a window, as fast as it goes, and saves a screenshot near its end: for
 # looking at what's drawn at a point a recording reaches (make_match.py's matches, with --my-view-only...).
 # X11 only (under Wayland the game is run with SDL_VIDEODRIVER=x11); needs python-xlib and ImageMagick.
 #
@@ -20,12 +20,16 @@ ROM=$(cd "$(dirname "${ROM:-conker/baserom.us.z64}")" && pwd)/$(basename "${ROM:
 data=$(mktemp -d "${TMPDIR:-/tmp}/netplay-shot.XXXXXX")
 out=$data/out.txt
 
-SDL_VIDEODRIVER=x11 "$EXE" --rom "$ROM" --data "$data/data" --window "${WINDOW:-960x540}" --replay "$pads" --fast "$@" > "$out" 2>&1 &
+# The game quits at the recording's last read, so the shot is taken a little before it: once the hash log
+# reaches 300 reads short of the end (the recording's reads: its size less a version 2 header, 21 bytes each).
+reads=$(( ($(wc -c < "$pads") - 32) / 21 ))
+log=$data/hashes.log
+SDL_VIDEODRIVER=x11 "$EXE" --rom "$ROM" --data "$data/data" --window "${WINDOW:-960x540}" --replay "$pads" --fast \
+    --hash-log "$log" "$@" > "$out" 2>&1 &
 pid=$!
 result=1
-for _ in $(seq 1 150); do
-    if grep -q "was the last" "$out"; then
-        sleep 2
+for _ in $(seq 1 1500); do
+    if [ -f "$log" ] && [ "$(wc -l < "$log")" -ge $((reads - 300)) ]; then
         python3 tools/netplay/xwin.py --pid $pid --scale "${SCALE:-1}" shot "$shot" && result=0
         break
     fi
@@ -34,7 +38,7 @@ for _ in $(seq 1 150); do
         grep -v '^\[rt64\]' "$out" | tail -n 5
         break
     fi
-    sleep 2
+    sleep 0.2
 done
 kill -9 $pid 2>/dev/null
 wait $pid 2>/dev/null

@@ -401,23 +401,24 @@ renderer zooms the picture about its middle by as much both ways, so it isn't
 stretched and as much comes off its top and bottom. Widening the 3D scissor to
 the full frame instead pillarboxed the picture.
 
-Netplay's "my view only" (`host/src/netplay/view.cpp`, fork issue #9) draws one
-player's view of the split screen across the whole frame
-(`src/common/rt64_conker_view_focus.h`, set with `RT64::setViewFocusRedraw` from
-that player's camera rectangle while the split is on and the game isn't
-paused). `RSP::setViewport` moves that view's viewport to the whole frame and
-records how much taller the frame is than the view; the projection processor
-scales the projection's height by as much, so nothing is stretched and more of
-the scene shows, and the widescreen widening then widens it as any full-frame
-view. The other views' viewports collapse to nothing. `RDP::setScissor` moves
-the view's scissor to the whole frame and empties the others'. `RDP::drawRect`
-moves the 2D: the view's own with its nearest edges (never scaled: the game
-draws a split's 2D at full size), its clears to the whole frame, what's at the
-line between the top and bottom views (the match timer, War's and Beach's team
-scores, Heist's $$$ row) to the bottom, and leaves the other views' out. Game
-memory is untouched (Render to RAM is off in netplay), so it can't desync.
-`setPresentationFocus` (the picture's part zoomed as it's shown) is kept for a
-fit instead of a redraw.
+Netplay's "my view only" (`host/src/netplay/view.cpp`) draws one player's view
+of the split screen across the whole frame (`src/common/rt64_conker_view_focus.h`,
+set with `RT64::setViewFocusRedraw` from that player's camera rectangle while the
+split is on and the game isn't paused). It applies only to what's drawn into the
+frame itself (an image as wide as it), not the game's small images of its own,
+such as a shadow's 64-pixel silhouette. `RSP::setViewport` stretches the view's
+viewport with it to the whole frame (one inside the view goes to the same place
+in the stretched view) and records how much more it stretched across than down;
+the projection processor scales the projection's height by as much, so nothing
+is stretched and more of the scene shows, and the widescreen widening then widens
+it as any full-frame view. The other views' viewports collapse to nothing.
+`RDP::setScissor` stretches the view's scissors the same way and empties the
+others'. `RDP::drawRect` moves the 2D: the view's own with its nearest edges
+(never scaled: the game draws a split's 2D at full size), its clears to the whole
+frame, what's at the line between the top and bottom views (the match timer,
+War's and Beach's team scores, Heist's $$$ row) to the bottom, and leaves the
+other views' out. Game memory is untouched (Render to RAM is off in netplay), so
+it can't desync.
 
 The patch also changes frame interpolation (a frame rate above the game's 30).
 RT64 draws frames between the game's by pairing each transform with last

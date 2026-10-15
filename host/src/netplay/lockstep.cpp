@@ -9,12 +9,14 @@
 #include "lockstep.hpp"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -57,9 +59,21 @@ namespace {
 
     std::array<std::vector<Pad>, conker::netplay::max_players> received;
     std::array<bool, conker::netplay::max_players> gone{};
-    // Whether a peer that's gone stopped answering, rather than saying goodbye: a game quitting can stop
-    // sending before its goodbye goes out (upstream issue 127), so it's told as maybe having quit.
+    // Whether a peer that's gone stopped answering, rather than saying goodbye (a crash, a lost connection),
+    // so it's told as maybe having quit.
     bool gone_silently = false;
+    // The read the game is at, and how far ahead of it the others' Inputs and hashes may be: a peer runs at
+    // most the input delay ahead of the slowest (it waits for their pads), and sends its own pads the delay
+    // ahead again, so twice the delay, an Inputs packet's reads and some spare. Anything further is a broken
+    // or hostile peer, and refused, so a peer can't make this one keep pads or hashes without end.
+    uint64_t current_read = 0;
+    uint64_t horizon() { return current_read + 2 * (uint64_t)delay + conker::netplay::input_window + 16; }
+
+    // The session is used by the thread connecting (the menu's, or the game's), then the game's, and by the
+    // main thread as the program quits (finish): one at a time. `stopping` is set by finish, after which
+    // the game thread leaves the session alone.
+    std::recursive_mutex session_mutex;
+    std::atomic<bool> stopping = false;
     // This peer's hashes, and those of the others (the host's for a joiner, every joiner's for the host),
     // until they're compared.
     std::map<uint32_t, uint64_t> own_hashes;
@@ -134,14 +148,23 @@ namespace {
             case Event::Type::packet:
                 if (const Inputs* inputs = std::get_if<Inputs>(&event.packet)) {
                     std::vector<Pad>& pads = received[inputs->port];
-                    if (inputs->port == own_port || inputs->port >= match_players || inputs->first_read != pads.size()) {
+                    if (inputs->port == own_port || inputs->port >= match_players || inputs->first_read != pads.size() ||
+                        (uint64_t)inputs->first_read + inputs->count > horizon()) {
                         end_match(Reason::protocol, "a player's inputs came out of order");
                         return;
                     }
                     pads.insert(pads.end(), inputs->pads.begin(), inputs->pads.begin() + inputs->count);
                 }
                 else if (const Hash* hash = std::get_if<Hash>(&event.packet)) {
-                    their_hashes[{ event.port, hash->read }] = hash->hash;
+                    // Hashes come every hash_every reads, within the horizon; one for a read this peer no
+                    // longer has its own of can't be compared, and is dropped.
+                    if (hash->read % hash_every != 0 || hash->read > horizon()) {
+                        end_match(Reason::protocol, "a player sent a broken hash");
+                        return;
+                    }
+                    if (own_hashes.empty() || hash->read >= own_hashes.begin()->first) {
+                        their_hashes[{ event.port, hash->read }] = hash->hash;
+                    }
                 }
                 break;
         }
@@ -252,6 +275,7 @@ namespace {
 }
 
 bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
+    std::scoped_lock lock(session_mutex);
     if (!library_started) {
         if (!netplay::startup(error)) {
             error = "couldn't start the networking: " + error;
@@ -275,6 +299,7 @@ bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
     match_started = false;
     ended = false;
     left = false;
+    current_read = 0;
     why_over.clear();
     initial_sent = false;
     for (auto& pads : received) pads.clear();
@@ -292,6 +317,7 @@ bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
 }
 
 conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
+    std::scoped_lock lock(session_mutex);
     if (session == nullptr) {
         status = "Not connecting.";
         return Progress::failed;
@@ -307,8 +333,10 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
                 }
                 break;
             case Event::Type::left:
-                // Before the start, a joiner leaving frees its port.
+                // Before the start, a joiner leaving frees its port, for the next to start afresh.
                 joined--;
+                received[event.port].clear();
+                gone[event.port] = false;
                 std::printf("[netplay] port %d left: %s\n", event.port + 1, netplay::describe(event.reason));
                 break;
             case Event::Type::welcomed:
@@ -356,6 +384,7 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
 }
 
 void conker::lockstep::cancel() {
+    std::scoped_lock lock(session_mutex);
     if (session != nullptr) {
         if (!left) {
             session->leave(Reason::quit);
@@ -405,9 +434,12 @@ int conker::lockstep::players() {
 
 bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, const PadSource& source,
     const std::function<uint64_t()>& hash, uint8_t* rdram) {
-    if (ended) {
+    std::unique_lock lock(session_mutex);
+    if (ended || stopping) {
         return false;
     }
+    current_read = read;
+    session->set_horizon(horizon());
     if (!initial_sent) {
         for (int r = 0; r < delay; r++) {
             send_own((uint64_t)r, source((uint64_t)r, nullptr));
@@ -456,7 +488,12 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, con
             std::printf("[netplay] read %llu: waiting for the other players\n", (unsigned long long)read);
             last_note = t;
         }
+        lock.unlock();
         std::this_thread::sleep_for(std::chrono::microseconds(200));
+        lock.lock();
+        if (stopping) {
+            return false;
+        }
     }
 
     for (int port = 0; port < match_players; port++) {
@@ -467,6 +504,7 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, con
 }
 
 void conker::lockstep::end(netplay::Reason reason, const char* why) {
+    std::scoped_lock lock(session_mutex);
     end_match(reason, why);
 }
 
@@ -475,6 +513,7 @@ const std::string& conker::lockstep::why_ended() {
 }
 
 void conker::lockstep::leave() {
+    std::scoped_lock lock(session_mutex);
     if (session != nullptr && !left) {
         session->leave(Reason::quit);
         left = true;
@@ -483,9 +522,22 @@ void conker::lockstep::leave() {
 }
 
 void conker::lockstep::finish() {
-    // The session isn't deleted: quitting can still be going on elsewhere (issue #127), and the library
-    // is stopped next anyway.
-    leave();
+    // On the main thread as the program quits: the game thread may still be in on_read, so it's told to
+    // stop first, and the session is only touched under the lock. The session isn't deleted (the game
+    // thread may still look at it), and the library is stopped next anyway.
+    stopping = true;
+    std::scoped_lock lock(session_mutex);
+    if (session != nullptr && !left) {
+        session->leave(Reason::quit);
+        left = true;
+        // The goodbye is sent as the library is polled: poll a moment for it to go out, or the others
+        // only hear the match is over when their connection times out.
+        for (int i = 0; i < 30; i++) {
+            session->poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    ended = true;
     if (library_started) {
         netplay::shutdown();
         library_started = false;

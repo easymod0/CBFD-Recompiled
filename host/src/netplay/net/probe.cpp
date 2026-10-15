@@ -10,6 +10,8 @@
 //     --loss <percent>   the library drops this share of the packets sent (they're resent)
 //     --build/--rom/--profile/--mods <hex>   the handshake's hashes (all 1 by default), to test refusals
 //     --silent           connect but never say Hello: the host must drop it after its handshake time
+//     --hostile early    (joining) send Inputs before the match starts: the host must drop it
+//     --hostile far      (joining) send Inputs far beyond the reads it could have got to: dropped too
 //
 // It exits 0 once it has every other port's pads for every read and they're all right, 1 otherwise;
 // --silent, once the host has closed the connection for a timeout. `code` prints the address's join code.
@@ -121,6 +123,7 @@ int main(int argc, char** argv) {
     uint32_t reads = 300;
     float loss = 0;
     Hello me{ 1, 1, 1, 1 };
+    std::string hostile;
     for (int i = 3; i + 1 < argc; i += 2) {
         const std::string option = argv[i];
         const char* value = argv[i + 1];
@@ -131,6 +134,7 @@ int main(int argc, char** argv) {
         else if (option == "--rom") me.rom = std::strtoull(value, nullptr, 16);
         else if (option == "--profile") me.profile = std::strtoull(value, nullptr, 16);
         else if (option == "--mods") me.mods = std::strtoull(value, nullptr, 16);
+        else if (option == "--hostile") hostile = value;
         else return usage();
     }
     const bool silent = !hosting && argc == 4 && std::strcmp(argv[3], "--silent") == 0;
@@ -183,10 +187,18 @@ int main(int argc, char** argv) {
                         case Event::Type::welcomed:
                             players = event.players;
                             std::printf("welcomed: port %d of %d\n", event.port, event.players);
+                            if (hostile == "early") {
+                                session.send(inputs_for(event.port, 0));
+                                std::printf("sent Inputs before the start\n");
+                            }
                             break;
                         case Event::Type::started:
                             playing = true;
                             std::printf("started\n");
+                            if (hostile == "far") {
+                                session.send(inputs_for(session.port(), 100000));
+                                std::printf("sent Inputs far ahead\n");
+                            }
                             break;
                         case Event::Type::left:
                             std::printf("port %d left: %s (%s)\n", event.port, describe(event.reason), event.detail.c_str());
@@ -218,6 +230,10 @@ int main(int argc, char** argv) {
                     next_tick = now;
                 }
                 else if (now >= next_tick && sent < reads) {
+                    // The peers here aren't in lockstep, only sending 30 reads a second each: they may run
+                    // a few seconds apart (the joiners start as Start reaches them), so their Inputs may be
+                    // that far ahead of this one's.
+                    session.set_horizon(sent + 150);
                     next_tick += std::chrono::microseconds(33333);
                     session.send(inputs_for(session.port(), sent));
                     sent++;

@@ -70,6 +70,10 @@ namespace conker::netplay {
         void send(const Hash& hash);
         // Says goodbye to every peer and closes the connections.
         void leave(Reason reason);
+        // The furthest read a peer's Inputs may reach (their first read plus their count); beyond it they're
+        // refused as broken or hostile, before the host passes them on. Lockstep sets it as the game goes;
+        // until then, the first reads only.
+        void set_horizon(uint64_t reads) { horizon = reads; }
 
         bool hosting() const { return is_host; }
         int port() const { return own_port; }
@@ -94,6 +98,7 @@ namespace conker::netplay {
         bool started = false;       // joiner: Start has arrived
         int own_port = -1;
         int match_players = 0;
+        uint64_t horizon = 64;
         Hello hello;
         uint32_t listen_socket = 0;
         uint32_t poll_group = 0;

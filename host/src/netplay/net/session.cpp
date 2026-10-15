@@ -293,7 +293,16 @@ namespace conker::netplay {
                 events.push_back(std::move(event));
                 return;
             }
-            if (const Inputs* inputs = std::get_if<Inputs>(&packet); inputs != nullptr && inputs->port == peer.port) {
+            // Inputs and hashes only once the match has started (before, a player can still leave and
+            // another take the port), and Inputs no further ahead than the game can have got (set_horizon):
+            // anything else is a broken or hostile peer, refused before it's passed on.
+            const Inputs* inputs = std::get_if<Inputs>(&packet);
+            if ((inputs != nullptr || std::holds_alternative<Hash>(packet)) &&
+                (entry_open || (inputs != nullptr && (uint64_t)inputs->first_read + inputs->count > horizon))) {
+                drop(peer, Reason::protocol, &events);
+                return;
+            }
+            if (inputs != nullptr && inputs->port == peer.port) {
                 // Passed on to the others, as they only connect to the host.
                 for (const Peer& other : peers) {
                     if (other.port >= 0 && other.connection != peer.connection) {
@@ -352,7 +361,8 @@ namespace conker::netplay {
             events.push_back(Event{ Event::Type::started });
         }
         else if (const Inputs* inputs = std::get_if<Inputs>(&packet); inputs != nullptr) {
-            if (inputs->port == own_port || inputs->port >= match_players) {
+            if (!started || inputs->port == own_port || inputs->port >= match_players ||
+                (uint64_t)inputs->first_read + inputs->count > horizon) {
                 drop(peer, Reason::protocol, &events);
                 return;
             }
@@ -362,6 +372,10 @@ namespace conker::netplay {
             events.push_back(std::move(event));
         }
         else if (std::holds_alternative<Hash>(packet)) {
+            if (!started) {
+                drop(peer, Reason::protocol, &events);
+                return;
+            }
             Event event{ Event::Type::packet };
             event.port = 0;
             event.packet = packet;
