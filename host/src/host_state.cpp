@@ -3,7 +3,8 @@
 // as a replay (and netplay) needs.
 //
 // The bytes: a version (u32, 1), then each part as its count of 32-bit words (u32) and the words, all
-// little-endian: the song marks, the widescreen ring, the cutscene bars' ring, the shadows.
+// little-endian: the song marks, the widescreen ring, the cutscene bars' ring, the shadows, the sound
+// buffers on the timeline (the rate, then each one's end as two words, low first).
 
 #include <cstdint>
 #include <cstring>
@@ -61,6 +62,7 @@ std::vector<uint8_t> conker::host_state::save() {
     put_part(out, { conker::widescreen::dl_ring() });
     put_part(out, { conker::cutscene_aspect::dl_ring() });
     put_part(out, conker::shadows::drawn());
+    put_part(out, conker::audio_clock::state());
     return out;
 }
 
@@ -76,4 +78,5 @@ void conker::host_state::load(const std::vector<uint8_t>& bytes) {
     const std::vector<uint32_t> bars = in.get_part();
     conker::cutscene_aspect::set_dl_ring(bars.empty() ? 0 : bars[0]);
     conker::shadows::set_drawn(in.get_part());
+    conker::audio_clock::set_state(in.get_part());
 }

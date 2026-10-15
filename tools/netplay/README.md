@@ -41,6 +41,22 @@ each time it's read. A headless replay with `--fast` takes about 1.8 s for 2,700
 `--real-time` turns it off: then two replays differ at the deadlines of two timers the game sets from
 the clock (`--ignore 8003A598:8 --ignore 800BE6F0:8`), and at the order events arrive in.
 
+The sound plays on the timeline too (H4, `host/src/audio_clock.cpp`). The game's audio thread sizes
+each buffer by how much is left of the one playing (`osAiGetLength`), and the MP3 player that cutscenes
+and lip-sync wait on is paced by it. Normally that comes from the sound device's queue, whose pace
+differs from run to run, and headless has none. While the harness is used, each buffer the game hands
+over (`osAiSetNextBuffer`) instead ends at a fixed time on the timeline after the one before, as the
+N64's audio interface plays them, and the length is what's left of the buffer playing at the
+timeline's time, headless and in a window alike. The sound device only plays what it's given: it
+waits for about 70 ms of sound before it starts (and again if it runs dry), and drops buffers while it's
+over about 270 ms behind. A save state holds the buffers still playing.
+
+A window replay now matches a headless one. Of the session recorded on 2026-10-14, the first 12,000
+reads (6.7 minutes: the opening cutscenes and the first chapter) give the same hashes in a window
+and headless; in the window the device ran dry once, before the first buffer started, and dropped
+nothing. Before H4, two windows split from each other at about read 360, and before H5 (the renderer
+writing into game memory) a window split from headless at read 2.
+
 Run one at a time from the same build: runs share the data folder (the stored ROM, which `--rom`
 writes, and `saves/harness/`), so two at once break each other.
 

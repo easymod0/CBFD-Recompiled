@@ -531,7 +531,9 @@ The output is 22020 Hz stereo. `host/src/audio_output.cpp` queues it on an SDL
 device. The audio thread (`func_100095A0`) sizes each buffer from AI_LEN: 736
 frames, or 552 when 249 or more samples are still playing. So the host reports
 only what is queued beyond one buffer, as AI_LEN counts only the buffer playing
-now. Reporting the whole queue made the game fall behind and pop.
+now. Reporting the whole queue made the game fall behind and pop. In netplay's
+deterministic mode the buffers play on the timeline instead
+(`host/src/audio_clock.cpp`), and AI_LEN is what's left of the one playing there.
 
 ## Host (`host/`)
 

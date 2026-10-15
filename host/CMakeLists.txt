@@ -87,6 +87,7 @@ add_executable(ConkerRecomp
     src/overlays.cpp
     src/ultra_extras.cpp
     src/host_state.cpp
+    src/audio_clock.cpp
     src/mod_api.cpp
     src/rom_versions.cpp
     src/widescreen.cpp

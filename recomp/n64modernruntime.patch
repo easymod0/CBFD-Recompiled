@@ -1068,10 +1068,10 @@ index 0000000..d2095f5
 +#endif
 diff --git a/ultramodern/include/ultramodern/timeline.hpp b/ultramodern/include/ultramodern/timeline.hpp
 new file mode 100644
-index 0000000..85c1131
+index 0000000..c888735
 --- /dev/null
 +++ b/ultramodern/include/ultramodern/timeline.hpp
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,57 @@
 +#ifndef __ULTRAMODERN_TIMELINE_HPP__
 +#define __ULTRAMODERN_TIMELINE_HPP__
 +
@@ -1093,6 +1093,10 @@ index 0000000..85c1131
 +        // real time to reach each event (headless replays).
 +        void enable(bool fast);
 +        bool enabled();
++        // The time of the last delivery (ticks): the time on the game's side between delivery points, as
++        // events have reached the game. Unlike the game's clock, reading it doesn't move it. On a game
++        // thread.
++        uint64_t delivery_time();
 +        // Random sleeps of up to `max_us` microseconds at OS calls and in the graphics thread, to show
 +        // anything that still depends on how fast the host is (a test; 0 is off).
 +        void set_jitter(uint32_t max_us);
@@ -1994,10 +1998,10 @@ index 6e3ed18..221ad3d 100644
  
 diff --git a/ultramodern/src/timeline.cpp b/ultramodern/src/timeline.cpp
 new file mode 100644
-index 0000000..293dc61
+index 0000000..99b3cf9
 --- /dev/null
 +++ b/ultramodern/src/timeline.cpp
-@@ -0,0 +1,201 @@
+@@ -0,0 +1,205 @@
 +#include <algorithm>
 +#include <atomic>
 +#include <chrono>
@@ -2096,6 +2100,10 @@ index 0000000..293dc61
 +
 +bool ultramodern::timeline::enabled() {
 +    return deterministic.load();
++}
++
++uint64_t ultramodern::timeline::delivery_time() {
++    return now;
 +}
 +
 +ultramodern::save_states::TimelineState ultramodern::save_states::get_timeline_state() {

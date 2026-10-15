@@ -291,13 +291,21 @@ namespace conker {
     // host_state.cpp: what the host keeps outside game memory that decides what it writes into it, so a
     // save state holds it too (save_states.cpp, the harness) and a load goes on as the state did: the
     // song marks (ultra_extras.cpp), where our display lists' rings are (widescreen.cpp,
-    // cutscene_aspect.cpp), and when each shadow was last drawn (interpolation.cpp).
+    // cutscene_aspect.cpp), when each shadow was last drawn (interpolation.cpp), and the sound buffers
+    // still playing on the timeline (audio_clock.cpp).
     namespace host_state {
         std::vector<uint8_t> save();
         // Empty, or cut short (a state from before it was held): what's missing starts afresh.
         void load(const std::vector<uint8_t>& bytes);
     }
     // Parts of it (the others are with their modules' functions above), as 32-bit words.
+    // audio_clock.cpp: in deterministic mode the game's sound buffers play on the timeline, not on the
+    // sound device's pace (H4). wrap gives the callbacks to register in place of the device's.
+    namespace audio_clock {
+        ultramodern::audio_callbacks_t wrap(const ultramodern::audio_callbacks_t& device);
+        std::vector<uint32_t> state();
+        void set_state(const std::vector<uint32_t>& words);
+    }
     namespace songs {
         std::vector<uint32_t> marks();
         void set_marks(const std::vector<uint32_t>& words);

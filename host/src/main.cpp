@@ -561,6 +561,8 @@ int main(int argc, char** argv) {
                                 conker::audio::set_frequency };
     }
 #endif
+    // In deterministic mode the buffers play on the timeline instead, headless or not (audio_clock.cpp).
+    cfg.audio_callbacks = conker::audio_clock::wrap(cfg.audio_callbacks);
     cfg.events_callbacks = { vi_callback, nullptr };
     cfg.error_handling_callbacks = { message_box };
 #if defined(CONKER_RT64)
