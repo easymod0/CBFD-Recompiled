@@ -1,5 +1,5 @@
 #!/bin/sh
-# The lockstep check (netplay, fork issue #8): two copies of the game on this machine play a match over
+# The lockstep check (netplay): two copies of the game on this machine play a match over
 # loopback, each giving its own port's pads from the same made-up 2-port recording, and must give the
 # game exactly what a replay of that recording alone does, read by read. Run it after building with
 # CONKER_NETPLAY=ON:
@@ -16,8 +16,7 @@
 #              are out of step and wait for each other all the time
 #   desync     the host changes a byte of its memory at read 300: both must stop for a desync
 # It exits 0 if all is as it should be, 1 if not. The logs are kept in --out (a temporary folder
-# otherwise). As in check.sh, a run is judged by what it prints and then killed (quitting can hang:
-# upstream issue 127). It uses UDP ports 27310 to 27312 on 127.0.0.1.
+# otherwise). As in check.sh, a run is judged by what it prints and then stopped. It uses UDP ports 27310 to 27312 on 127.0.0.1.
 set -u
 
 cd "$(dirname "$0")/../.."

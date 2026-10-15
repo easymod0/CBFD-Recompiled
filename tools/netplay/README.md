@@ -45,14 +45,14 @@ the sticks are converted), which is what netplay will send. The runtime's own ho
 memory (each thread's context in its `OSThread`) are always left out of the hash.
 
 While the harness is used, the game runs on the runtime's virtual timeline (deterministic mode,
-`H3-design.md`): game code takes no virtual time, and its VIs (exactly 60 a second), timers and task
+`ultramodern/timeline.hpp`, in `recomp/n64modernruntime.patch`): game code takes no virtual time, and its VIs (exactly 60 a second), timers and task
 completions are delivered only when the game is idle, so the same inputs give the same game however
 fast the host is. Its clock (`osGetCount`, `osGetTime`) is the timeline's, plus about a microsecond
 each time it's read. A headless replay with `--fast` takes about 1.8 s for 2,700 reads (90 s of game).
 `--real-time` turns it off: then two replays differ at the deadlines of two timers the game sets from
 the clock (`--ignore 8003A598:8 --ignore 800BE6F0:8`), and at the order events arrive in.
 
-The sound plays on the timeline too (H4, `host/src/audio_clock.cpp`). The game's audio thread sizes
+The sound plays on the timeline too (`host/src/audio_clock.cpp`). The game's audio thread sizes
 each buffer by how much is left of the one playing (`osAiGetLength`), and the MP3 player that cutscenes
 and lip-sync wait on is paced by it. Normally that comes from the sound device's queue, whose pace
 differs from run to run, and headless has none. While the harness is used, each buffer the game hands
@@ -65,8 +65,8 @@ over about 270 ms behind. A save state holds the buffers still playing.
 A window replay now matches a headless one. Of the session recorded on 2026-10-14, the first 12,000
 reads (6.7 minutes: the opening cutscenes and the first chapter) give the same hashes in a window
 and headless; in the window the device ran dry once, before the first buffer started, and dropped
-nothing. Before H4, two windows split from each other at about read 360, and before H5 (the renderer
-writing into game memory) a window split from headless at read 2.
+nothing. Before the sound went on the timeline, two windows split from each other at about read 360,
+and while the renderer still wrote into game memory a window split from headless at read 2.
 
 Runs from the same build share the data folder (the stored ROM, which `--rom` writes, and
 `saves/harness/`), so two at once break each other: give each its own with `--data <folder>` (made if
@@ -91,7 +91,7 @@ same headless or on another machine:
   load order, and refuses a player whose differ ("different mods"). Recordings and replays can't have
   mods (a recording doesn't say which were on). Texture packs only change the picture: they're left
   out of both, and can differ.
-- **The renderer** writes nothing into game memory (H5). RT64's Render to RAM copies each frame's
+- **The renderer** writes nothing into game memory. RT64's Render to RAM copies each frame's
   colour and depth images back into the game's memory, as the N64's RDP did, from the graphics thread
   whenever it gets to the display list. Headless, with no renderer, nothing is written. So a window
   run differed from a headless one from read 2 (the depth image at `0x800E9D80`), and the copies raced
@@ -114,9 +114,9 @@ checked; version 1 recordings (before the profile) are replayed unchecked.
 After a change, run `tools/netplay/check.sh` (with the game built with `CONKER_NETPLAY=ON`). It makes a
 recording of 2,700 made-up reads (`make_inputs.py --seed 1`), replays it headless four ways (twice, with
 random sleeps in the host, and through a save state taken and loaded on the way) and compares each
-hash log with the first. A run is judged by what it prints, not its exit code, as quitting can hang
-or crash on Linux (upstream issue 127). The CI runs it on every push (`.github/workflows/netplay.yml`)
-where the ROM secrets are set, as for the other builds.
+hash log with the first. Each run is stopped once its last read is logged. The CI runs it on pushes
+that touch what decides determinism (`.github/workflows/netplay.yml`), where the ROM secrets are set,
+as for the other builds.
 
 A typical comparison, of two replays of the same recording:
 
@@ -129,7 +129,7 @@ and, at the read where they first differ, the memory itself:
     ... --hash-log a.log --dump-at 900    (and the same for b)
     tools/netplay/compare_hashes.py a.log b.log --dumps a.log.900.bin b.log.900.bin
 
-## The transport (fork issue #7)
+## The transport
 
 `host/src/netplay/net/` holds what goes over the network, and builds without the game or the ROM
 (its `CMakeLists.txt`). The game links it with `CONKER_NETPLAY`, for the lockstep (below).
@@ -150,7 +150,7 @@ and, at the read where they first differ, the memory itself:
   never says Hello is dropped; `code <address:port>` prints a code. `test.sh` runs the tests and a few matches;
   `.github/workflows/netplay-transport.yml` runs them on Windows, Linux and macOS (no ROM needed).
 
-## Lockstep (in progress, fork issue #8)
+## Lockstep
 
 `host/src/netplay/lockstep.cpp`, part of the harness: every peer runs the whole game, and at each
 controller read the game waits until it has every player's pad for that read. A peer sends its own pad
@@ -190,4 +190,3 @@ that a desync (`--netplay-desync-at <read>`) is caught. About 25 s.
 | `scan_clock.py` | every read of the game's clock in its code, and whether it's in a loop (needs your ROM, unpacked with `recomp/unpack_rom.py`) |
 | `dis_around.py` | the instructions around a function's clock reads |
 
-`H3-design.md` is the design for the timeline (a prototype, still to agree with the owner).

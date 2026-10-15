@@ -71,7 +71,7 @@ namespace conker {
     std::unique_ptr<ultramodern::renderer::RendererContext> create_null_renderer(
         uint8_t* rdram, ultramodern::renderer::WindowHandle window_handle, bool developer_mode);
 
-    // netplay/profile.cpp: the netplay settings profile (fork issue #5). While it's active (the harness is
+    // netplay/profile.cpp: the netplay settings profile. While it's active (the harness is
     // used), the settings that change the game or its memory are fixed: each reader checks it.
     namespace netplay_profile {
 #if defined(CONKER_NETPLAY)
@@ -285,7 +285,7 @@ namespace conker {
     }
 
 #if defined(CONKER_RT64) && defined(CONKER_NETPLAY)
-    // netplay/menu.cpp: the launcher's Netplay menu (fork issue #9): host or join a match.
+    // netplay/menu.cpp: the launcher's Netplay menu: host or join a match.
     namespace netplay_menu {
         // The game to start, and where its ROM is stored (to hash it before the game loads it).
         void init(const std::u8string& game_id, const std::filesystem::path& stored_rom);
@@ -328,7 +328,7 @@ namespace conker {
     }
     // Parts of it (the others are with their modules' functions above), as 32-bit words.
     // audio_clock.cpp: in deterministic mode the game's sound buffers play on the timeline, not on the
-    // sound device's pace (H4). wrap gives the callbacks to register in place of the device's.
+    // sound device's pace. wrap gives the callbacks to register in place of the device's.
     namespace audio_clock {
         ultramodern::audio_callbacks_t wrap(const ultramodern::audio_callbacks_t& device);
         std::vector<uint32_t> state();

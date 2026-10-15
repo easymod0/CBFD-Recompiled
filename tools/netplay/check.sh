@@ -13,9 +13,8 @@
 # b, jitter and state must each match a. The logs are kept in --out (a temporary folder otherwise,
 # printed at the end). It exits 0 if everything matches, 1 if not.
 #
-# A run is judged by what it prints, not by its exit code: quitting can hang or crash on Linux (upstream
-# issue 127), so once a run says its last read was made (its hash log is written out by then) it's
-# killed. The runs share the game's data folder, so they're made one at a time, and nothing else may
+# A run is judged by what it prints, not by its exit code: once it says its last read was made (its hash
+# log is written out by then) it's stopped, rather than waiting for it to quit. The runs share the game's data folder, so they're made one at a time, and nothing else may
 # use the same build at the time.
 set -u
 

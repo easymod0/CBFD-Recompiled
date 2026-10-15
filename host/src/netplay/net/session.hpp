@@ -1,4 +1,4 @@
-// A netplay session over GameNetworkingSockets (fork issue #7): the host listens on a UDP port and the
+// A netplay session over GameNetworkingSockets: the host listens on a UDP port and the
 // others connect to it directly by address. Connections are encrypted by the library (they aren't
 // authenticated: there is no certificate authority, so someone in the path could still pose as the
 // host). All that's sent are the packets in packets.hpp, reliably (resent until they arrive, in order).

@@ -82,7 +82,7 @@ jobs:
           CONKER_CMAKE_ARGS: -DCONKER_NETPLAY=ON
         run: ./build.sh rom-src/baserom.us.z64 < /dev/null
 
-      # Judged by what the runs print, not their exit codes: quitting can hang or crash on
-      # Linux (upstream issue 127). check.sh prints where the runs first differ if they do.
+      # Judged by what the runs print (check.sh stops each once its last read is logged).
+      # check.sh prints where the runs first differ if they do.
       - name: Check the same inputs give the same game
         run: tools/netplay/check.sh --out netplay-check

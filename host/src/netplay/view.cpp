@@ -1,4 +1,4 @@
-// Netplay's "my view only" (fork issue #9): in a match, each machine still runs the whole game, split
+// Netplay's "my view only": in a match, each machine still runs the whole game, split
 // screen and all (every player's view is drawn on every machine, so their games stay the same), but the
 // window can show only this player's view, across the whole window. RT64 draws that view anew across the whole
 // frame with its projection made taller to match, so it isn't stretched and shows more of the scene, and leaves

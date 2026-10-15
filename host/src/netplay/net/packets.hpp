@@ -1,4 +1,4 @@
-// Netplay's packets (fork issue #7): everything peers send each other, and the only code that reads
+// Netplay's packets: everything peers send each other, and the only code that reads
 // what arrives from the network. Each kind of packet has a fixed size and a version, and decode()
 // checks every field: anything else is refused whole.
 //

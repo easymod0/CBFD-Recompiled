@@ -516,7 +516,7 @@ Video's (mupen64plus-video-rice, GPL 2 or later). Its header says so; see
 
 Render to RAM can be turned off by the host (`RT64::setRenderToRAMOff`,
 `rt64_workload.cpp`), whatever the emulator's setting or the game's extended
-command, for netplay's deterministic mode (issue #126, H5;
+command, for netplay's deterministic mode (issue #126;
 `host/src/netplay/profile.cpp`). It copies each frame's colour and depth images
 back into the game's memory from the graphics thread, whenever that thread gets
 to the display list, so a window run differed from a headless one (which has no

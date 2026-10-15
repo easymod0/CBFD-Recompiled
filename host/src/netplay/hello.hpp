@@ -1,4 +1,4 @@
-// What this game says in netplay's handshake (fork issue #7): a joiner whose Hello differs from the
+// What this game says in netplay's handshake: a joiner whose Hello differs from the
 // host's is refused (session.hpp).
 
 #pragma once

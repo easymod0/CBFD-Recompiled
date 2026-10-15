@@ -1,4 +1,4 @@
-// The launcher's Netplay menu (fork issue #9): host a match or join one by its code or address, wait for
+// The launcher's Netplay menu: host a match or join one by its code or address, wait for
 // every player there, then the game starts on every machine at once. It's a modal of its own over the
 // launcher; the connecting is lockstep's (lockstep.hpp), a step at each of the menu's updates, so a
 // refusal (another build, ROM or settings, a full match) is said here and the player can try again.

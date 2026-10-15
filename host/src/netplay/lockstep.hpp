@@ -1,4 +1,4 @@
-// Netplay's lockstep (fork issue #8): every peer runs the whole game, and at each controller read gives
+// Netplay's lockstep: every peer runs the whole game, and at each controller read gives
 // it every player's pad for that read, so the same inputs give each the same game. A peer's own pad is
 // sent a few reads ahead (the input delay) to hide the time it takes to arrive; the game waits at a read
 // until every pad for it is there. Every so often the peers compare hashes of the game's memory, and a

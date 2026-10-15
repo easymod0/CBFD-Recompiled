@@ -1,4 +1,4 @@
-// The netplay settings profile (fork issue #5): while the harness records, replays or hashes (and,
+// The netplay settings profile: while the harness records, replays or hashes (and,
 // later, in netplay), the settings that change what the game does or what's in its memory are fixed,
 // so that two runs on two machines, or in a window and headless, are given the same game. Each setting's
 // reader checks conker::netplay_profile::active() and uses the profile's value:
@@ -15,8 +15,8 @@
 //   Mods: in a netplay match, whatever everyone has the same of (mods_hash, in the handshake: each mod on,
 //     its file and its settings); in recordings and replays none (check_mods: a recording doesn't say which
 //     were on). Texture packs only change the picture, so they're left out of both.
-//   The renderer: RT64 renders nothing back into game memory (its Render to RAM, H5), as headless has no
-//     renderer to: see the H5 notes in tools/netplay/README.md for what the game then reads instead.
+//   The renderer: RT64 renders nothing back into game memory (its Render to RAM), as headless has no
+//     renderer to: see tools/netplay/README.md for what the game then reads instead.
 //
 // Left to the player: what only changes the picture or the sound outside the game's memory (the
 // renderer's settings, Overscan Borders, Show FPS, the reticle, texture packs), and what only changes

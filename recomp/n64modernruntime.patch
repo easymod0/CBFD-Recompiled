@@ -2004,7 +2004,7 @@ index 6e3ed18..221ad3d 100644
  
 diff --git a/ultramodern/src/timeline.cpp b/ultramodern/src/timeline.cpp
 new file mode 100644
-index 0000000..c6e054f
+index 0000000..3d6d278
 --- /dev/null
 +++ b/ultramodern/src/timeline.cpp
 @@ -0,0 +1,208 @@
@@ -2041,7 +2041,7 @@ index 0000000..c6e054f
 +    std::atomic<uint32_t> jitter_max_us = 0;
 +
 +    // The game's bursts of work between two delivery points: the OS calls in each, and the real time it
-+    // took. The longest are logged, to choose the limit for a game that doesn't go idle (H3-design.md).
++    // took. The longest are logged: a game that never went idle (which no limit stops) would show here.
 +    // Counted at OS calls, which in deterministic mode only game threads make (no host thread posts to the
 +    // game), but atomic all the same.
 +    std::atomic<uint64_t> burst_calls = 0;

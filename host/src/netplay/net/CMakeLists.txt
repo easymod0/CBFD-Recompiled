@@ -1,4 +1,4 @@
-# Netplay's transport (fork issue #7): the packets, sessions over GameNetworkingSockets, a test program
+# Netplay's transport: the packets, sessions over GameNetworkingSockets, a test program
 # and the packets' tests and fuzz target. The game includes it with CONKER_NETPLAY (host/CMakeLists.txt);
 # it also builds alone, without the game or the ROM (as the CI does):
 #

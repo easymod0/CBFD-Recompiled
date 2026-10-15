@@ -1,4 +1,4 @@
-// Join codes (fork issue #7): the host's address and port written as a short code to pass on, instead
+// Join codes: the host's address and port written as a short code to pass on, instead
 // of "203.0.113.7:27015". There is no server: the code is the address itself, with a check against
 // typos, so anyone with a code can connect just as with the address (it isn't a password).
 //

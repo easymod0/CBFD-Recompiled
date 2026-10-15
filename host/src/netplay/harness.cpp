@@ -431,14 +431,14 @@ namespace {
                 pad[4] = pads[i].err_no;
             }
             std::fwrite(out, 1, sizeof(out), record_file);
-            // Written out every 2 s of game or so: quitting can crash (issue #127) before finish() closes it.
+            // Written out every 2 s of game or so, should the program end before finish() closes it.
             if (read % 60 == 59) {
                 std::fflush(record_file);
             }
         }
 
         if (read == last_read) {
-            // Written out now: quitting can crash on Linux (issue #127), before finish() closes them.
+            // Written out now, should the program end before finish() closes them.
             if (record_file != nullptr) {
                 std::fflush(record_file);
             }
@@ -675,7 +675,7 @@ bool conker::harness::active() {
 }
 
 // A recording or replay that can't go on: before any of the game's code has run, so it's left at once
-// (quitting the runtime can hang, issue #127).
+// (before the runtime has anything to quit).
 [[noreturn]] static void refuse() {
     if (record_file != nullptr) {
         std::fclose(record_file);

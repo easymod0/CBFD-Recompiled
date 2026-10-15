@@ -1,4 +1,4 @@
-// The sound's timing in deterministic mode (ultramodern/timeline.hpp: replays and netplay, H4).
+// The sound's timing in deterministic mode (ultramodern/timeline.hpp: replays and netplay).
 //
 // The game's audio thread (func_100095A0) sizes each buffer by how much is left of the one playing
 // (osAiGetLength): normally that's the sound device's queue (audio_output.cpp), whose pace differs from
