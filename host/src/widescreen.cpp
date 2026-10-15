@@ -69,7 +69,12 @@ namespace {
 
     // How much wider than the game's 4:3 the window shows: RT64 widens the 3D
     // view to the window's aspect ratio unless the aspect ratio is set to Original.
+    // With the netplay settings profile, 16:9's whatever the window, as what's
+    // widened is in the game's memory.
     float widescreen_ratio() {
+        if (conker::netplay_profile::active()) {
+            return conker::netplay_profile::widescreen_ratio;
+        }
         if (ultramodern::renderer::get_graphics_config().ar_option == ultramodern::renderer::AspectRatio::Original || window == nullptr) {
             return 1.0f;
         }
@@ -88,13 +93,13 @@ namespace {
             const char* value = SDL_getenv("CONKER_CULL_EXTRA");
             return value != nullptr ? std::max(1.0f, (float)std::atof(value)) : 1.0f;
         }();
-        return extra;
+        return conker::netplay_profile::active() ? 1.0f : extra;
     }
 
     // TEMP-DEBUG: CONKER_NO_CULL_WIDEN leaves the frustum and cull scale at 4:3.
     bool no_cull_widen() {
         static const bool off = SDL_getenv("CONKER_NO_CULL_WIDEN") != nullptr;
-        return off;
+        return off && !conker::netplay_profile::active();
     }
 
     // How far past each 4:3 edge sprites are kept, in N64 screen pixels: as far as

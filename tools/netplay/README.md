@@ -44,8 +44,31 @@ the clock (`--ignore 8003A598:8 --ignore 800BE6F0:8`), and at the order events a
 Run one at a time from the same build: runs share the data folder (the stored ROM, which `--rom`
 writes, and `saves/harness/`), so two at once break each other.
 
-Record with mouse and gyro aiming and the free camera off: they write the camera straight into the
-game rather than through the controller, so a replay doesn't have them.
+### The netplay settings profile
+
+While the harness is used, the settings that change the game or what's in its memory are fixed
+(`host/src/netplay/profile.cpp`), whatever the menus say, so a recording made in a window replays the
+same headless or on another machine:
+
+- **Off:** the mouse and gyro (R-Look, the aiming modes, the free camera, the bank's leaps), Mouse:
+  Turn the Camera, Right Stick: Free Camera and Aiming: Swap Sticks. They move the camera in game
+  memory from input the recording doesn't hold, or by the time.
+- **At their defaults:** the Camera tab (Field of View, Invert Turning, Turning Speed, the stick's
+  aiming, Lock-On), Conker's Detail, Cutscene Aspect Ratio (Expand) and the sound volumes (100%).
+- **Widescreen:** the culls and sprites are widened for 16:9 whatever the window (a wider window can
+  lose a little at its sides).
+- **Save states** (F5, F7) are off, and **mods** are refused but for texture packs: turn them off in
+  the Mods menu.
+
+What only changes the picture or the sound outside game memory (the renderer's settings, Overscan
+Borders, Show FPS, the reticle, texture packs) and what only changes the pads (the controls) is left to
+the player: the pads are what's recorded, and what netplay will send.
+
+### Recordings
+
+A recording (version 2) holds the ROM's XXH3-64 and the profile's hash: a replay with another ROM or
+another profile is refused before the game starts. `make_inputs.py` writes 0 for both, which isn't
+checked; version 1 recordings (before the profile) are replayed unchecked.
 
 A typical comparison, of two replays of the same recording:
 

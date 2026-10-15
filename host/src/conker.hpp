@@ -70,6 +70,23 @@ namespace conker {
     std::unique_ptr<ultramodern::renderer::RendererContext> create_null_renderer(
         uint8_t* rdram, ultramodern::renderer::WindowHandle window_handle, bool developer_mode);
 
+    // netplay/profile.cpp: the netplay settings profile (fork issue #5). While it's active (the harness is
+    // used), the settings that change the game or its memory are fixed: each reader checks it.
+    namespace netplay_profile {
+#if defined(CONKER_NETPLAY)
+        bool active();
+        void set_active(bool active);
+        // XXH3-64 of the profile's description, for recordings.
+        uint64_t hash();
+        // Whether no mods but texture packs are on (false: each was printed).
+        bool check_mods();
+#else
+        inline bool active() { return false; }
+#endif
+        // How much wider than 4:3 the culls and sprites are widened in it, whatever the window: 16:9's.
+        inline constexpr float widescreen_ratio = (16.0f / 9.0f) / (4.0f / 3.0f);
+    }
+
 #if defined(CONKER_NETPLAY)
     // The determinism harness (netplay/harness.cpp): records and replays the game's inputs, and logs a
     // hash of its memory at each controller read.
@@ -138,6 +155,8 @@ namespace conker {
         // Turns on the pack chosen in the settings and the others off (unless it's left to the
         // Mods menu). Needs the runtime to have opened the mods.
         void apply();
+        // Whether a mod (by its id) is a texture pack in the mods folder.
+        bool is_pack(const std::string& mod_id);
     }
 
     // rumble.cpp: the Rumble Pak, sent to each port's controller.

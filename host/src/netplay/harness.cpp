@@ -32,11 +32,16 @@
 //
 // While the harness is used, the game runs on the runtime's virtual timeline (deterministic mode,
 // ultramodern/timeline.hpp): its clock, VIs, timers and task completions come at fixed points in its
-// progress, not when the host gets to them, so the same inputs give the same game.
+// progress, not when the host gets to them, so the same inputs give the same game. And the netplay
+// settings profile (profile.cpp) fixes the settings that change the game: no mods but texture packs
+// can be on.
 //
-// The recording: "CBFDPADS", then a little-endian u32 version (1) and u32 port count, then for each
-// read the number of controllers the game reads (u8) and four pads of 5 bytes each (u16 buttons, s8
-// stick x, s8 stick y, u8 err_no).
+// The recording: "CBFDPADS", then a little-endian u32 version (2) and u32 port count, u64 XXH3-64 of the
+// ROM and u64 hash of the settings profile, then for each read the number of controllers the game reads
+// (u8) and four pads of 5 bytes each (u16 buttons, s8 stick x, s8 stick y, u8 err_no). A replay is
+// refused if its ROM or profile isn't this run's; a hash of 0 isn't checked (a made-up recording,
+// tools/netplay/make_inputs.py). Version 1 had no hashes (its header ends at the port count): it's
+// replayed unchecked.
 
 #include <algorithm>
 #include <atomic>
@@ -46,11 +51,13 @@
 #include <cstring>
 #include <filesystem>
 #include <mutex>
+#include <span>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "../conker.hpp"
+#include "librecomp/game.hpp"
 #include "librecomp/save_states.hpp"
 #include "recomp.h"
 #include "ultramodern/save_states.hpp"
@@ -63,8 +70,9 @@
 
 namespace {
     constexpr char magic[8] = { 'C', 'B', 'F', 'D', 'P', 'A', 'D', 'S' };
-    constexpr uint32_t version = 1;
-    constexpr size_t header_size = 16;
+    constexpr uint32_t version = 2;
+    constexpr size_t header_size = 32;
+    constexpr size_t header_size_v1 = 16;
     constexpr int max_pads = 4;
     constexpr size_t pad_size = 5;
     constexpr size_t read_size = 1 + max_pads * pad_size;
@@ -95,6 +103,10 @@ namespace {
     FILE* hash_log = nullptr;
     std::vector<uint8_t> replay;
     uint64_t replay_reads = 0;
+    // Where the replay's reads start, and its hashes (0: not checked).
+    size_t replay_header = header_size;
+    uint64_t replay_rom_hash = 0;
+    uint64_t replay_profile_hash = 0;
     // Reads past this aren't logged, and the game is quit at the first.
     uint64_t last_read = no_limit;
     uint64_t reads = 0;
@@ -130,6 +142,15 @@ namespace {
         return (uint32_t)in[0] | ((uint32_t)in[1] << 8) | ((uint32_t)in[2] << 16) | ((uint32_t)in[3] << 24);
     }
 
+    void put_u64(uint8_t* out, uint64_t value) {
+        put_u32(out, (uint32_t)value);
+        put_u32(out + 4, (uint32_t)(value >> 32));
+    }
+
+    uint64_t get_u64(const uint8_t* in) {
+        return (uint64_t)get_u32(in) | ((uint64_t)get_u32(in + 4) << 32);
+    }
+
     // The whole recording, checked before the game starts: its header, its size and every read's
     // controller count, so a read during the game can't go wrong.
     bool load_replay() {
@@ -144,29 +165,38 @@ namespace {
             replay.insert(replay.end(), buffer, buffer + got);
         }
         std::fclose(file);
-        if (replay.size() < header_size || std::memcmp(replay.data(), magic, sizeof(magic)) != 0) {
+        if (replay.size() < header_size_v1 || std::memcmp(replay.data(), magic, sizeof(magic)) != 0) {
             std::fprintf(stderr, "[harness] %s isn't a recording of inputs\n", replay_path.c_str());
             return false;
         }
-        if (get_u32(replay.data() + 8) != version) {
-            std::fprintf(stderr, "[harness] %s is a version %u recording; this build reads version %u\n",
-                replay_path.c_str(), get_u32(replay.data() + 8), version);
+        const uint32_t recorded_version = get_u32(replay.data() + 8);
+        if (recorded_version == 1) {
+            replay_header = header_size_v1;
+            std::printf("[harness] %s is a version 1 recording: its ROM and settings aren't checked\n", replay_path.c_str());
+        }
+        else if (recorded_version != version || replay.size() < header_size) {
+            std::fprintf(stderr, "[harness] %s is a version %u recording; this build reads versions 1 and %u\n",
+                replay_path.c_str(), recorded_version, version);
             return false;
+        }
+        else {
+            replay_rom_hash = get_u64(replay.data() + 16);
+            replay_profile_hash = get_u64(replay.data() + 24);
         }
         const uint32_t recorded_ports = get_u32(replay.data() + 12);
         if (recorded_ports < 1 || recorded_ports > max_pads) {
             std::fprintf(stderr, "[harness] %s has %u ports\n", replay_path.c_str(), recorded_ports);
             return false;
         }
-        if ((replay.size() - header_size) % read_size != 0) {
+        if ((replay.size() - replay_header) % read_size != 0) {
             std::fprintf(stderr, "[harness] %s ends partway through a read\n", replay_path.c_str());
             return false;
         }
-        replay_reads = (replay.size() - header_size) / read_size;
+        replay_reads = (replay.size() - replay_header) / read_size;
         for (uint64_t i = 0; i < replay_reads; i++) {
-            if (replay[header_size + i * read_size] > max_pads) {
+            if (replay[replay_header + i * read_size] > max_pads) {
                 std::fprintf(stderr, "[harness] %s: read %llu has %u controllers\n", replay_path.c_str(),
-                    (unsigned long long)i, replay[header_size + i * read_size]);
+                    (unsigned long long)i, replay[replay_header + i * read_size]);
                 return false;
             }
         }
@@ -314,7 +344,7 @@ namespace {
         }
 
         if (!replay.empty()) {
-            const uint8_t* in = replay.data() + header_size + read * read_size;
+            const uint8_t* in = replay.data() + replay_header + read * read_size;
             for (int i = 0; i < max_pads; i++) {
                 const uint8_t* pad = in + 1 + i * pad_size;
                 pads[i].button = (uint16_t)(pad[0] | (pad[1] << 8));
@@ -486,11 +516,7 @@ bool conker::harness::prepare() {
             std::fprintf(stderr, "[harness] %s: couldn't create it\n", record_path.c_str());
             return false;
         }
-        uint8_t header[header_size];
-        std::memcpy(header, magic, sizeof(magic));
-        put_u32(header + 8, version);
-        put_u32(header + 12, (uint32_t)ports);
-        std::fwrite(header, 1, sizeof(header), record_file);
+        // Its header is written as the game starts, with the ROM's hash.
         std::printf("[harness] recording to %s (%d ports)\n", record_path.c_str(), ports);
     }
     if (!hash_log_path.empty()) {
@@ -508,6 +534,8 @@ bool conker::harness::prepare() {
         std::fprintf(stderr, "[harness] %s has no reads\n", replay_path.c_str());
         return false;
     }
+
+    conker::netplay_profile::set_active(true);
 
     quitter = std::thread([] {
         std::unique_lock lock(quit_mutex);
@@ -555,11 +583,52 @@ bool conker::harness::active() {
     return ::active();
 }
 
+// A recording or replay that can't go on: before any of the game's code has run, so it's left at once
+// (quitting the runtime can hang, issue #127).
+[[noreturn]] static void refuse() {
+    if (record_file != nullptr) {
+        std::fclose(record_file);
+    }
+    std::fflush(stdout);
+    std::fflush(stderr);
+    std::_Exit(EXIT_FAILURE);
+}
+
 void conker::harness::start(uint8_t* game_rdram) {
     if (!active()) {
         return;
     }
     rdram = game_rdram;
+
+    // The ROM in play and the settings profile, checked against a replay's and written into a recording.
+    // Mods are loaded after this, so they're checked here too.
+    const std::span<const uint8_t> rom = recomp::get_rom();
+    const uint64_t rom_hash = XXH3_64bits(rom.data(), rom.size());
+    const uint64_t profile_hash = conker::netplay_profile::hash();
+    bool can_go_on = conker::netplay_profile::check_mods();
+    if (replay_rom_hash != 0 && replay_rom_hash != rom_hash) {
+        std::fprintf(stderr, "[harness] %s was recorded with another ROM (%016llx; this one is %016llx)\n",
+            replay_path.c_str(), (unsigned long long)replay_rom_hash, (unsigned long long)rom_hash);
+        can_go_on = false;
+    }
+    if (replay_profile_hash != 0 && replay_profile_hash != profile_hash) {
+        std::fprintf(stderr, "[harness] %s was recorded with another settings profile (%016llx; this build's is %016llx)\n",
+            replay_path.c_str(), (unsigned long long)replay_profile_hash, (unsigned long long)profile_hash);
+        can_go_on = false;
+    }
+    if (!can_go_on) {
+        refuse();
+    }
+    if (record_file != nullptr) {
+        uint8_t header[header_size];
+        std::memcpy(header, magic, sizeof(magic));
+        put_u32(header + 8, version);
+        put_u32(header + 12, (uint32_t)ports);
+        put_u64(header + 16, rom_hash);
+        put_u64(header + 24, profile_hash);
+        std::fwrite(header, 1, sizeof(header), record_file);
+    }
+
     if (!real_time) {
         ultramodern::timeline::enable(fast);
     }

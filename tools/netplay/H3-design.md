@@ -227,12 +227,16 @@ The song mark (`ultra_extras.cpp`) now runs on the game's clock (`osGetCount`, t
 deterministic mode) instead of the time; `conker_spin_wait_pass` already went through the timeline
 (`yield_self_1ms` is a delivery point there).
 
-**Window vs headless.** A replay in a window differs from a headless one from read 1. Dumps show why,
-and none of it is the timeline: the field of view and widescreen settings write the cull scales
-(`cullScaleX_800D35E0`), and what looks like the audio state and buffers (`D_800314B0`, around
-`0x8010B108`) follows the sound device's buffer, which headless reports empty. They're the netplay
-settings profile (#5) and H4. A window replay also differs from the window session it was recorded
-in, so the window has a source of its own too (the sound device, most likely).
+**Window vs headless.** Before the netplay settings profile (#5), a replay in a window differed from a
+headless one from read 1: the field of view and widescreen settings write the cull scales
+(`cullScaleX_800D35E0`), and the audio state (`D_800314B0`, around `0x8010B108`) differed too. With the
+profile, read 1 matches; the first difference is at read 2, about 126 KB at `0x800E9D80`-`0x80108A3B`
+and scattered bytes from `0x803B7B83`: in the window a regular pattern of descending 16-bit values,
+headless the data left there before. The same with SDL's dummy sound driver, so not the sound device:
+most likely the renderer writing an image back into game memory (H5). Two window replays match each
+other for 340 to 360 reads of a 900-read recording, then differ at a read that changes from run to run
+(at read 358, one byte of what looks like a thread's stack, `0x8004061B`): a source of timing in the
+window, the sound device (H4) or the renderer (H5).
 
 Not done yet: display-list events (Conker doesn't use them), windowed runs (they need #5, H4 and H5).
 

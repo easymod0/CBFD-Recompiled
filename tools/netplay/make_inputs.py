@@ -7,14 +7,15 @@ seed, so the same seed always gives the same recording.
     make_inputs.py <out.pads> [--reads 3000] [--seed 1] [--ports 1] [--start-every 90]
 
 --start-every presses Start every so many reads (0: never) on the first port, to get through the title
-and menus. The recording's format is the harness's (see its header comment).
+and menus. The recording's format is the harness's (see its header comment), with its ROM and settings
+profile hashes 0, which the harness doesn't check (they aren't known here).
 """
 import argparse
 import random
 import struct
 
 MAGIC = b"CBFDPADS"
-VERSION = 1
+VERSION = 2
 START = 0x1000
 BUTTONS = [0x8000, 0x4000, 0x2000, 0x0020, 0x0010, 0x0008, 0x0004, 0x0002, 0x0001]  # A B Z L R C-pad
 NO_RESPONSE = 8  # err_no for a controller that isn't there (CONT_NO_RESPONSE_ERROR)
@@ -32,7 +33,7 @@ def main():
     rng = random.Random(args.seed)
     held = [[0, 0, 0, 0] for _ in range(4)]  # buttons, stick x, stick y, reads left
     with open(args.out, "wb") as f:
-        f.write(MAGIC + struct.pack("<II", VERSION, args.ports))
+        f.write(MAGIC + struct.pack("<IIQQ", VERSION, args.ports, 0, 0))
         for read in range(args.reads):
             f.write(bytes([4]))
             for port in range(4):

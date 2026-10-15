@@ -343,7 +343,13 @@ namespace {
         if (event->type != SDL_KEYDOWN || event->key.repeat != 0 || !ultramodern::is_game_started()) {
             return 0;
         }
-        switch (event->key.keysym.sym) {
+        // The netplay settings profile (netplay/profile.cpp): a recording or a replay goes on from boot.
+        const SDL_Keycode key = event->key.keysym.sym;
+        if ((key == SDLK_F5 || key == SDLK_F7) && conker::netplay_profile::active()) {
+            conker::notices::show("Save states are off while recording or replaying");
+            return 0;
+        }
+        switch (key) {
             case SDLK_F5:
                 ask_to_save();
                 break;

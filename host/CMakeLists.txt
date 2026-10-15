@@ -111,7 +111,7 @@ target_include_directories(ConkerRecomp PRIVATE
 target_link_libraries(ConkerRecomp PRIVATE RecompiledFuncs librecomp ultramodern)
 
 if (CONKER_NETPLAY)
-    target_sources(ConkerRecomp PRIVATE src/netplay/harness.cpp)
+    target_sources(ConkerRecomp PRIVATE src/netplay/harness.cpp src/netplay/profile.cpp)
     target_compile_definitions(ConkerRecomp PRIVATE CONKER_NETPLAY)
 endif()
 
