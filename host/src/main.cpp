@@ -12,6 +12,7 @@
 //   --headless   null renderer, no window, input or sound
 //   --window WxH open the window at this size, e.g. 2520x1080 to try a 21:9 screen
 //                (the window mode, windowed or fullscreen, is still the setting's)
+//   --my-view-only  in a netplay match, show only this player's part of the split screen
 //   --data DIR   keep the game's data (the stored ROM, saves, settings) in DIR instead,
 //                created if need be: e.g. to run two copies at once, as netplay's tests do
 
@@ -457,6 +458,11 @@ int main(int argc, char** argv) {
         else if (conker::harness::parse_option(argc, argv, i)) {
         }
 #endif
+#if defined(CONKER_RT64) && defined(CONKER_NETPLAY)
+        else if (std::strcmp(argv[i], "--my-view-only") == 0) {
+            conker::netplay_view::set_mine_only(true);
+        }
+#endif
 #if defined(CONKER_RT64)
         else if (std::strcmp(argv[i], "--window") == 0 && i + 1 < argc) {
             int width = 0, height = 0;
@@ -522,7 +528,7 @@ int main(int argc, char** argv) {
     game.entrypoint_address = (gpr)(int32_t)0x80001000u;
     game.entrypoint = recomp_entrypoint;
 #if defined(CONKER_NETPLAY)
-    // The harness's, which goes straight to the game's own when the harness isn't used.
+    // Always: a netplay match can be started from the menu.
     game.entrypoint = conker::harness::entrypoint;
 #endif
     game.on_init_callback = on_init;

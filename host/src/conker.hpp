@@ -103,6 +103,10 @@ namespace conker {
         bool active();
         // The game's entrypoint: while active, it starts from an empty save.
         void entrypoint(uint8_t* rdram, recomp_context* ctx);
+        // A netplay match connected from the menu (lockstep.hpp) is about to start: the harness is used
+        // for it, and says the match is over with `on_match_over` (why, for the player; on the game
+        // thread) instead of quitting.
+        void begin_menu_match(std::function<void(const std::string&)> on_match_over);
         void start(uint8_t* rdram);
         void finish();
         bool replaying();
@@ -280,6 +284,25 @@ namespace conker {
         void state_loaded();
     }
 
+#if defined(CONKER_RT64) && defined(CONKER_NETPLAY)
+    // netplay/menu.cpp: the launcher's Netplay menu: host or join a match.
+    namespace netplay_menu {
+        // The game to start, and where its ROM is stored (to hash it before the game loads it).
+        void init(const std::u8string& game_id, const std::filesystem::path& stored_rom);
+        // Opens the menu (the launcher's Netplay option).
+        void open();
+        // On the main thread (update_gfx): says when a match is over.
+        void update();
+    }
+
+    // netplay/view.cpp: "my view only", the window showing only this player's part of the split screen.
+    namespace netplay_view {
+        void set_mine_only(bool on);
+        bool is_mine_only();
+        // At the start of each game frame's display list (widescreen.cpp's conker_frame_dl_begin).
+        void game_frame(uint8_t* rdram);
+    }
+#endif
 
     // notices.cpp: a line in the top-left corner for a few seconds, one at a time (an unlock, a save state's
     // "State saved"...).

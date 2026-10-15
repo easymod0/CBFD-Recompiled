@@ -86,8 +86,11 @@ same headless or on another machine:
   aiming, Lock-On), Conker's Detail, Cutscene Aspect Ratio (Expand) and the sound volumes (100%).
 - **Widescreen:** the culls and sprites are widened for 16:9 whatever the window (a wider window can
   lose a little at its sides).
-- **Save states** (F5, F7) are off. **Mods:** recordings and replays can't have mods (a recording
-  doesn't say which were on). Texture packs only change the picture, so they can be on.
+- **Save states** (F5, F7) are off. **Mods:** in a netplay match, any, as long as everyone has the
+  same ones on, set the same: the handshake carries a hash of each mod's file and saved settings, in
+  load order, and refuses a player whose differ ("different mods"). Recordings and replays can't have
+  mods (a recording doesn't say which were on). Texture packs only change the picture: they're left
+  out of both, and can differ.
 - **The renderer** writes nothing into game memory. RT64's Render to RAM copies each frame's
   colour and depth images back into the game's memory, as the N64's RDP did, from the graphics thread
   whenever it gets to the display list. Headless, with no renderer, nothing is written. So a window
@@ -129,8 +132,7 @@ and, at the read where they first differ, the memory itself:
 ## The transport
 
 `host/src/netplay/net/` holds what goes over the network, and builds without the game or the ROM
-(its `CMakeLists.txt`). The game links it with `CONKER_NETPLAY`, and says its Hello (`hello.cpp`: the
-build id, ROM, settings profile and mods hashes); the lockstep that uses it comes next.
+(its `CMakeLists.txt`). The game links it with `CONKER_NETPLAY`, for the lockstep (below).
 
 - **GameNetworkingSockets** (v1.6.1, downloaded while configuring): encrypted UDP connections, direct by
   address. The host listens on a port; the others connect to it, and it passes their inputs on. Its
@@ -148,12 +150,49 @@ build id, ROM, settings profile and mods hashes); the lockstep that uses it come
   never says Hello is dropped; `code <address:port>` prints a code. `test.sh` runs the tests and a few matches;
   `.github/workflows/netplay-transport.yml` runs them on Windows, Linux and macOS (no ROM needed).
 
+## Lockstep
+
+`host/src/netplay/lockstep.cpp`, part of the harness: every peer runs the whole game, and at each
+controller read the game waits until it has every player's pad for that read. A peer sends its own pad
+`--input-delay` reads ahead (2 by default, every peer the same) to hide the time it takes to arrive. Every
+30 reads the peers compare hashes of the game's memory, and a difference ends the match as a desync.
+Each peer starts from boot with an empty save, on the timeline and with the settings profile.
+
+    ConkerRecomp --netplay-host 27015 --players 2           (port 1 is the host's)
+    ConkerRecomp --netplay-join SC07-21V9-GX40              (or --netplay-join 203.0.113.7:27015)
+
+The game waits at its start for every player. Each plays with their first controller, and the host
+has to forward its UDP port if it's behind a router.
+
+In a window, the launcher's **Netplay** menu (`host/src/netplay/menu.cpp`, #9) does the same: host
+(players, port, and the host's own address, from which it shows the join code to send) or join by code
+or address. It says how the connecting goes and why a peer was refused, and the game starts on every
+machine once all are in. When a match started there ends (a desync, a player gone), a prompt says why
+instead of the game quitting.
+
+**Screens.** Every machine draws the whole split screen (that keeps the games the same), but a window can
+show only its player's view, drawn across the whole window ("my view only", `host/src/netplay/view.cpp`).
+The host sets the match's rule: by default everyone sees only their own view, so no one can look at the
+others' (the Netplay menu's Screens, or `--split-screen` to let each player choose with their menu's Your
+screen or `--my-view-only`). The rule reaches every peer with Start. It can't be enforced against a
+modified build, which could still show every view: it keeps honest players on the same footing.
+
+With `--replay`, a peer's own pads come from its port in the recording instead: `lockstep.sh` plays two
+copies against each other on this machine (`--data` gives each its own folder) and checks that each
+gets exactly the game a replay alone does (each copy's recording has the other's port scrambled, so it
+only does if the pads came over the network), with input delay 0 and `--jitter` on one side too, and
+that a desync (`--netplay-desync-at <read>`) is caught. About 25 s.
+
 ## The scripts
 
 | Script | |
 |---|---|
 | `check.sh` | the determinism check: replays a made-up recording headless twice, with `--jitter` and with `--state-test`, and fails unless all four give the same hashes (about 30 s; the CI runs it, `.github/workflows/netplay.yml`) |
+| `lockstep.sh` | the lockstep check: two copies in a match over loopback give the same game as a replay alone, and a desync is caught (about 25 s) |
 | `compare_hashes.py` | the first read two hash logs differ at (it exits 1 if they differ); with dumps, the ranges that differ, by data symbol |
+| `make_match.py` | a recording that plays from boot into a multiplayer match (`--mode`, `--players`, `--variant`, `--pause`), the same every time: for looking at multiplayer (split screen, "my view only") without the menus |
+| `shot.sh` | replays a recording in a window as fast as it goes and saves a screenshot of its end (X11; `SDL_VIDEODRIVER=x11` under Wayland), e.g. `make_match.py heist.pads --mode heist && shot.sh heist.pads heist.png --my-view-only` |
+| `xwin.py` | drives a game window from a script: screenshots, clicks, keys (X11, python-xlib) |
 | `make_inputs.py` | a recording of made-up inputs from a seed, to replay without anyone playing |
 | `scan_clock.py` | every read of the game's clock in its code, and whether it's in a loop (needs your ROM, unpacked with `recomp/unpack_rom.py`) |
 | `dis_around.py` | the instructions around a function's clock reads |

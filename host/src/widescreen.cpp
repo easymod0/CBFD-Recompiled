@@ -248,6 +248,9 @@ extern "C" void conker_frame_dl_begin(uint8_t* rdram, recomp_context* ctx) {
     motion_blur_this_frame = false;
     conker::fps_counter::game_frame();
 #endif
+#if defined(CONKER_RT64) && defined(CONKER_NETPLAY)
+    conker::netplay_view::game_frame(rdram);
+#endif
 }
 
 // func_15019464, just after func_1501A490 wrote a pipe sync and the camera's scissor ($v0 after them).

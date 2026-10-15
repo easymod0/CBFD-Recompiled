@@ -125,7 +125,8 @@ target_include_directories(ConkerRecomp PRIVATE
 target_link_libraries(ConkerRecomp PRIVATE RecompiledFuncs librecomp ultramodern)
 
 if (CONKER_NETPLAY)
-    target_sources(ConkerRecomp PRIVATE src/netplay/harness.cpp src/netplay/profile.cpp src/netplay/hello.cpp)
+    target_sources(ConkerRecomp PRIVATE src/netplay/harness.cpp src/netplay/profile.cpp src/netplay/hello.cpp
+        src/netplay/lockstep.cpp)
     target_compile_definitions(ConkerRecomp PRIVATE CONKER_NETPLAY)
     # The build id for the handshake (src/netplay/hello.cpp), from git at every build.
     set(CONKER_BUILD_ID_CPP "${CMAKE_CURRENT_BINARY_DIR}/netplay_build_id.cpp")
@@ -204,6 +205,10 @@ if (CONKER_RT64)
 
     # CONKER_RT64 selects the window build; the rest are what rt64 compiles its own headers with.
     target_compile_definitions(ConkerRecomp PRIVATE CONKER_RT64 HLSL_CPU)
+    if (CONKER_NETPLAY)
+        # The launcher's Netplay menu.
+        target_sources(ConkerRecomp PRIVATE src/netplay/menu.cpp src/netplay/view.cpp)
+    endif()
     if (WIN32)
         target_compile_definitions(ConkerRecomp PRIVATE NOMINMAX)
     endif()

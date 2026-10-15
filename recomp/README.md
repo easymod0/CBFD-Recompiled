@@ -401,6 +401,25 @@ renderer zooms the picture about its middle by as much both ways, so it isn't
 stretched and as much comes off its top and bottom. Widening the 3D scissor to
 the full frame instead pillarboxed the picture.
 
+Netplay's "my view only" (`host/src/netplay/view.cpp`) draws one player's view
+of the split screen across the whole frame (`src/common/rt64_conker_view_focus.h`,
+set with `RT64::setViewFocusRedraw` from that player's camera rectangle while the
+split is on and the game isn't paused). It applies only to what's drawn into the
+frame itself (an image as wide as it), not the game's small images of its own,
+such as a shadow's 64-pixel silhouette. `RSP::setViewport` stretches the view's
+viewport with it to the whole frame (one inside the view goes to the same place
+in the stretched view) and records how much more it stretched across than down;
+the projection processor scales the projection's height by as much, so nothing
+is stretched and more of the scene shows, and the widescreen widening then widens
+it as any full-frame view. The other views' viewports collapse to nothing.
+`RDP::setScissor` stretches the view's scissors the same way and empties the
+others'. `RDP::drawRect` moves the 2D: the view's own with its nearest edges
+(never scaled: the game draws a split's 2D at full size), its clears to the whole
+frame, what's at the line between the top and bottom views (the match timer,
+War's and Beach's team scores, Heist's $$$ row) to the bottom, and leaves the
+other views' out. Game memory is untouched (Render to RAM is off in netplay), so
+it can't desync.
+
 The patch also changes frame interpolation (a frame rate above the game's 30).
 RT64 draws frames between the game's by pairing each transform with last
 frame's; without help it guesses, from draw calls that look alike. Conker's
@@ -536,7 +555,9 @@ The output is 22020 Hz stereo. `host/src/audio_output.cpp` queues it on an SDL
 device. The audio thread (`func_100095A0`) sizes each buffer from AI_LEN: 736
 frames, or 552 when 249 or more samples are still playing. So the host reports
 only what is queued beyond one buffer, as AI_LEN counts only the buffer playing
-now. Reporting the whole queue made the game fall behind and pop.
+now. Reporting the whole queue made the game fall behind and pop. In netplay's
+deterministic mode the buffers play on the timeline instead
+(`host/src/audio_clock.cpp`), and AI_LEN is what's left of the one playing there.
 
 ## Host (`host/`)
 

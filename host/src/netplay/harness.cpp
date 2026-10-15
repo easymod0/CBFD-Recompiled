@@ -25,6 +25,7 @@
 //                       without it). The keys' save states (F5, F7) don't work in that run
 //   --jitter <us>       sleeps at random, up to <us> microseconds, at the game's OS calls and in the
 //                       graphics thread: a test that the host's speed doesn't change the game
+//   --netplay-host, --netplay-join, ...  a netplay match in lockstep (lockstep.hpp)
 //
 // Controller reads are counted from the first, so read <n> of one run is read <n> of another. The pads
 // are the N64's own values (after the sticks are converted), as osContGetReadData gives them to the
@@ -59,6 +60,7 @@
 
 #include "../conker.hpp"
 #include "hello.hpp"
+#include "lockstep.hpp"
 #include "librecomp/game.hpp"
 #include "librecomp/save_states.hpp"
 #include "recomp.h"
@@ -112,6 +114,11 @@ namespace {
     // Reads past this aren't logged, and the game is quit at the first.
     uint64_t last_read = no_limit;
     uint64_t reads = 0;
+    // A netplay match that has ended: the game gets no more input.
+    bool match_over = false;
+    // A match started from the menu says it's over through this (frontend's netplay.cpp) instead of
+    // quitting.
+    std::function<void(const std::string&)> match_over_callback;
     bool activated = false;
 
     // The game is quit from a thread of its own, not the game thread that reads the controllers.
@@ -122,7 +129,7 @@ namespace {
     bool quit_finished = false;
 
     bool active() {
-        return !record_path.empty() || !replay_path.empty() || !hash_log_path.empty();
+        return !record_path.empty() || !replay_path.empty() || !hash_log_path.empty() || conker::lockstep::active();
     }
 
     bool parse_count(const char* text, uint64_t& out) {
@@ -321,6 +328,22 @@ namespace {
         quit_wanted.notify_one();
     }
 
+    // Lockstep's source of this peer's own pads (lockstep.hpp): a replay's for this port, or the first
+    // controller's; nobody's pressing anything before the first read, or past a replay's end.
+    conker::netplay::Pad local_pad(uint64_t for_read, const ultramodern::input::Pad* live) {
+        if (!replay.empty()) {
+            if (for_read >= replay_reads) {
+                return {};
+            }
+            const uint8_t* pad = replay.data() + replay_header + for_read * read_size + 1 + conker::lockstep::port() * pad_size;
+            return { (uint16_t)(pad[0] | (pad[1] << 8)), (int8_t)pad[2], (int8_t)pad[3], 0 };
+        }
+        if (live == nullptr) {
+            return {};
+        }
+        return { live[0].button, live[0].stick_x, live[0].stick_y, 0 };
+    }
+
     // On the game thread, at each controller read, with the pads the game is about to get.
     void on_read_data(ultramodern::input::Pad* pads, int count) {
         const uint64_t read = reads++;
@@ -337,7 +360,7 @@ namespace {
             (read == state_save_at ? state_save_at : state_load_at) = no_limit;
             ultramodern::save_states::set_safe_points_wanted(true);
         }
-        if (read > last_read) {
+        if (read > last_read || match_over) {
             // Waiting for the quit: the game gets no input.
             for (int i = 0; i < max_pads; i++) {
                 pads[i] = { 0, 0, 0, pads[i].err_no };
@@ -345,9 +368,18 @@ namespace {
             return;
         }
 
+        // The memory as the read is made, hashed once for the log and the lockstep.
+        uint64_t hash = 0;
+        bool hashed = false;
+        auto memory_hash = [&] {
+            if (!hashed) {
+                hash = hash_memory();
+                hashed = true;
+            }
+            return hash;
+        };
         if (hash_log != nullptr) {
-            const uint64_t hash = hash_memory();
-            std::fprintf(hash_log, "%llu %016llx\n", (unsigned long long)read, (unsigned long long)hash);
+            std::fprintf(hash_log, "%llu %016llx\n", (unsigned long long)read, (unsigned long long)memory_hash());
             if (std::find(dump_at.begin(), dump_at.end(), read) != dump_at.end()) {
                 dump_memory(read);
             }
@@ -366,6 +398,25 @@ namespace {
                 std::fprintf(stderr, "[harness] read %llu: the game reads %d controllers, the recording %u\n",
                     (unsigned long long)read, count, in[0]);
             }
+        }
+
+        if (conker::lockstep::active() && !conker::lockstep::on_read(read, pads, local_pad, memory_hash, rdram)) {
+            match_over = true;
+            for (int i = 0; i < max_pads; i++) {
+                pads[i] = { 0, 0, 0, pads[i].err_no };
+            }
+            if (hash_log != nullptr) {
+                std::fflush(hash_log);
+            }
+            if (match_over_callback) {
+                std::printf("[harness] read %llu: the netplay match is over\n", (unsigned long long)read);
+                match_over_callback(conker::lockstep::why_ended());
+            }
+            else {
+                std::printf("[harness] read %llu: the netplay match is over: quitting\n", (unsigned long long)read);
+                request_quit();
+            }
+            return;
         }
 
         if (record_file != nullptr) {
@@ -394,6 +445,7 @@ namespace {
             if (hash_log != nullptr) {
                 std::fflush(hash_log);
             }
+            conker::lockstep::leave();
             std::printf("[harness] read %llu was the last: quitting\n", (unsigned long long)read);
             request_quit();
         }
@@ -403,6 +455,9 @@ namespace {
 static void activate();
 
 bool conker::harness::parse_option(int argc, char** argv, int& i) {
+    if (conker::lockstep::parse_option(argc, argv, i)) {
+        return true;
+    }
     const char* option = argv[i];
     const bool has_value = i + 1 < argc;
     auto count_option = [&](uint64_t& out) {
@@ -515,6 +570,13 @@ bool conker::harness::prepare() {
         std::fprintf(stderr, "[harness] --record and --replay can't be used together\n");
         return false;
     }
+    if (!conker::lockstep::prepare()) {
+        return false;
+    }
+    if (conker::lockstep::active() && state_save_at != no_limit) {
+        std::fprintf(stderr, "[harness] --state-test can't be used in a netplay match\n");
+        return false;
+    }
     if (!dump_at.empty() && hash_log_path.empty()) {
         std::fprintf(stderr, "[harness] --dump-at needs --hash-log (the dump is named after it)\n");
         return false;
@@ -566,6 +628,11 @@ static void activate() {
             ultramodern::quit();
         }
     });
+}
+
+void conker::harness::begin_menu_match(std::function<void(const std::string&)> on_match_over) {
+    match_over_callback = std::move(on_match_over);
+    activate();
 }
 
 bool conker::harness::replaying() {
@@ -632,7 +699,8 @@ void conker::harness::start(uint8_t* game_rdram) {
     const uint64_t profile_hash = hello.profile;
     std::printf("[harness] build %s: build %016llx, ROM %016llx, profile %016llx\n", conker::netplay::build_id(),
         (unsigned long long)hello.build, (unsigned long long)rom_hash, (unsigned long long)profile_hash);
-    bool can_go_on = conker::netplay_profile::check_mods();
+    // A match can have mods (everyone's the same: the handshake's mods hash); a recording or replay can't.
+    bool can_go_on = conker::lockstep::active() || conker::netplay_profile::check_mods();
     if (replay_rom_hash != 0 && replay_rom_hash != rom_hash) {
         std::fprintf(stderr, "[harness] %s was recorded with another ROM (%016llx; this one is %016llx)\n",
             replay_path.c_str(), (unsigned long long)replay_rom_hash, (unsigned long long)rom_hash);
@@ -645,6 +713,32 @@ void conker::harness::start(uint8_t* game_rdram) {
     }
     if (!can_go_on) {
         refuse();
+    }
+    // A netplay match: every player in before the game starts, with as many ports as players.
+    if (conker::lockstep::active()) {
+        if (conker::lockstep::connected()) {
+            // Connected from the menu, with the stored ROM's hash: it's the one loaded, unless something
+            // changed it since.
+            if (!(conker::lockstep::sent_hello() == hello)) {
+                std::fprintf(stderr, "[harness] the game loaded isn't the one the match was joined with\n");
+                conker::lockstep::end(conker::netplay::Reason::rom, "the ROM loaded isn't the one the match was joined with");
+                match_over = true;
+                if (match_over_callback) {
+                    match_over_callback(conker::lockstep::why_ended());
+                }
+            }
+        }
+        else if (!conker::lockstep::connect(hello)) {
+            conker::lockstep::finish();
+            refuse();
+        }
+        if (!replay.empty() && ports != conker::lockstep::players()) {
+            std::fprintf(stderr, "[harness] %s has %d ports, the match %d players\n", replay_path.c_str(), ports,
+                conker::lockstep::players());
+            conker::lockstep::finish();
+            refuse();
+        }
+        ports = conker::lockstep::players();
     }
     if (record_file != nullptr) {
         uint8_t header[header_size];
@@ -667,6 +761,7 @@ void conker::harness::start(uint8_t* game_rdram) {
 }
 
 void conker::harness::finish() {
+    conker::lockstep::finish();
     if (quitter.joinable()) {
         {
             std::lock_guard lock(quit_mutex);
