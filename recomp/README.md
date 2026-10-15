@@ -376,6 +376,11 @@ framebuffer pair's scissor:
   view. A view widened in any pair of the frame is widened in all of them
   (`Workload::widensView`), in `FramebufferRenderer` and `ProjectionProcessor`
   alike.
+- Beach draws its views two to a pair (the top two in one, the bottom two in
+  another), so no pair held a view alone and the top two weren't widened (their
+  sides black). A view whose row of side-by-side views spans the pair together
+  is widened as if it had the pair to itself (`Workload::pairWidensView`, which
+  the renderer's list of widened views uses too).
 - The HUD is drawn with a scissor across the frame, each player's inside their
   view's 4:3 area. A rect wholly inside a widened split-screen view is scaled
   about that view's middle (an origin there) instead of the frame's, so each HUD
