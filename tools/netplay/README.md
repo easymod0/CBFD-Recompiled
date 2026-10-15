@@ -61,3 +61,5 @@ and, at the read where they first differ, the memory itself:
 | `make_inputs.py` | a recording of made-up inputs from a seed, to replay without anyone playing |
 | `scan_clock.py` | every read of the game's clock in its code, and whether it's in a loop (needs your ROM, unpacked with `recomp/unpack_rom.py`) |
 | `dis_around.py` | the instructions around a function's clock reads |
+
+Next: `H3-design.md`, the design for delivering the game's events at fixed points (to agree before it's built).
