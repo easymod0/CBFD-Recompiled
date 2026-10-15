@@ -1,6 +1,6 @@
 # Builds and tests netplay's transport (host/src/netplay/net, fork issue #7) on Windows, Linux and
-# macOS: GameNetworkingSockets and its dependencies, the packets' tests, and a match between two copies
-# of netplay_probe over loopback (one with packet loss). On Linux it also fuzzes the packets for a minute
+# macOS: GameNetworkingSockets and its dependencies, the packets' and join codes' tests, and matches
+# between copies of netplay_probe over loopback (test.sh). On Linux it also fuzzes the packets for a minute
 # (libFuzzer). It needs no ROM: the transport builds without the game.
 #
 # Like the other workflows, it uses no third-party actions: git, and on Windows the vcpkg on GitHub's

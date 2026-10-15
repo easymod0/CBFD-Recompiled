@@ -38,6 +38,10 @@ namespace conker::netplay {
         Packet packet;
     };
 
+    // The join code (join_code.hpp) for `address` ("1.2.3.4:5000" or "[::1]:5000"), or empty if it isn't
+    // an address and port.
+    std::string join_code_for(const std::string& address);
+
     // Starts and stops the library, once per process, around any sessions.
     bool startup(std::string& error);
     void shutdown();
@@ -51,7 +55,7 @@ namespace conker::netplay {
 
         // Hosts a match of `players` (2 to 4) on UDP `port`, on every local address.
         bool host(uint16_t port, int players, const Hello& me, std::string& error);
-        // Joins the host at `address` ("1.2.3.4:5000" or "[::1]:5000").
+        // Joins the host at `address` ("1.2.3.4:5000" or "[::1]:5000"), or by its join code.
         bool join(const std::string& address, const Hello& me, std::string& error);
         // Host: once every port is taken (false until then), starts the match: tells the joiners, and
         // refuses any more.

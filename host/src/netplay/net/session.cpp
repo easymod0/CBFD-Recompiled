@@ -1,6 +1,7 @@
 // A netplay session over GameNetworkingSockets: see session.hpp.
 
 #include "session.hpp"
+#include "join_code.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -47,6 +48,24 @@ namespace conker::netplay {
         void status_changed(SteamNetConnectionStatusChangedCallback_t* info) {
             status_changed_callback(info);
         }
+    }
+
+    std::string join_code_for(const std::string& address) {
+        SteamNetworkingIPAddr parsed;
+        if (!parsed.ParseString(address.c_str())) {
+            return {};
+        }
+        Endpoint endpoint;
+        endpoint.port = parsed.m_port;
+        if (parsed.IsIPv4()) {
+            const uint32_t ip = parsed.GetIPv4();
+            endpoint.ip = { (uint8_t)(ip >> 24), (uint8_t)(ip >> 16), (uint8_t)(ip >> 8), (uint8_t)ip };
+        }
+        else {
+            endpoint.ipv6 = true;
+            std::copy(std::begin(parsed.m_ipv6), std::end(parsed.m_ipv6), endpoint.ip.begin());
+        }
+        return encode_join_code(endpoint);
     }
 
     bool startup(std::string& error) {
@@ -103,8 +122,18 @@ namespace conker::netplay {
     bool Session::join(const std::string& address, const Hello& me, std::string& error) {
         SteamNetworkingIPAddr host_address;
         if (!host_address.ParseString(address.c_str()) || host_address.m_port == 0) {
-            error = "\"" + address + "\" isn't an address and port (1.2.3.4:5000 or [::1]:5000)";
-            return false;
+            const std::optional<Endpoint> endpoint = decode_join_code(address);
+            if (!endpoint) {
+                error = "\"" + address + "\" isn't a join code, or an address and port (1.2.3.4:5000 or [::1]:5000)";
+                return false;
+            }
+            if (endpoint->ipv6) {
+                host_address.SetIPv6(endpoint->ip.data(), endpoint->port);
+            }
+            else {
+                const auto& ip = endpoint->ip;
+                host_address.SetIPv4((uint32_t)ip[0] << 24 | ip[1] << 16 | ip[2] << 8 | ip[3], endpoint->port);
+            }
         }
         SteamNetworkingConfigValue_t option;
         option.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, (void*)status_changed);

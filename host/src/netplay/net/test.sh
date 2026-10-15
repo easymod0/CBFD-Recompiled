@@ -1,7 +1,8 @@
 #!/bin/sh
-# Tests the netplay transport from a build of this folder (CMakeLists.txt): the packets' tests, then
-# matches between copies of netplay_probe over loopback (2 players; 3 with 20% of packets lost, which
-# also tests the host passing inputs on), and a joiner with another ROM, which must be refused.
+# Tests the netplay transport from a build of this folder (CMakeLists.txt): the packets' and join codes'
+# tests, then matches between copies of netplay_probe over loopback (2 players, joining by code; 3 with
+# 20% of packets lost, which also tests the host passing inputs on), a joiner with another ROM, which
+# must be refused, and one that never says Hello, which must be dropped.
 #   sh host/src/netplay/net/test.sh <build folder>
 set -u
 bin=$1
@@ -9,16 +10,20 @@ probe=$bin/netplay_probe
 failed=0
 
 "$bin/packets_test" || failed=1
+"$bin/join_code_test" || failed=1
 
 # match <name> <port> <players> [probe options...]: a host and players - 1 joiners; all must succeed.
+# The joiners join by the host's code if $by_code is set, else by address.
 match() {
     name=$1; port=$2; players=$3; shift 3
+    to=127.0.0.1:$port
+    [ -n "${by_code:-}" ] && to=$("$probe" code "$to")
     "$probe" host "$port" --players "$players" "$@" > "$name.host.txt" 2>&1 &
     pids=$!
     sleep 1
     i=1
     while [ $i -lt "$players" ]; do
-        "$probe" join "127.0.0.1:$port" "$@" > "$name.join$i.txt" 2>&1 &
+        "$probe" join "$to" "$@" > "$name.join$i.txt" 2>&1 &
         pids="$pids $!"
         sleep 0.5
         i=$((i + 1))
@@ -34,7 +39,7 @@ match() {
     if [ $ok -eq 1 ]; then echo "$name: passed"; else echo "$name: FAILED"; failed=1; fi
 }
 
-match two 27200 2 --reads 150
+by_code=1 match two 27200 2 --reads 150
 match three-lossy 27201 3 --reads 150 --loss 20
 
 # Another ROM: refused, with the reason.
@@ -49,6 +54,19 @@ else
     cat refused.join.txt
     failed=1
 fi
+kill $host 2>/dev/null
+
+# A joiner that never says Hello: dropped after the handshake time (10 s).
+"$probe" host 27203 --reads 30 > silent.host.txt 2>&1 &
+host=$!
+sleep 1
+if "$probe" join 127.0.0.1:27203 --silent > silent.join.txt 2>&1; then
+    echo "silent: passed"
+else
+    echo "silent: FAILED"
+    failed=1
+fi
+grep -v '^\[netplay\]' silent.join.txt
 kill $host 2>/dev/null
 
 [ $failed -eq 0 ] && echo "all passed" || echo "FAILED"

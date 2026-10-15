@@ -21,13 +21,15 @@ endif()
 
 option(CONKER_NETPLAY_FUZZ "Build the packets' libFuzzer target (clang)" OFF)
 
-# The packets alone: no dependencies, for the tests and the fuzzer.
-add_library(conker_netplay_packets STATIC packets.cpp)
+# The packets and join codes alone: no dependencies, for the tests and the fuzzer.
+add_library(conker_netplay_packets STATIC packets.cpp join_code.cpp)
 target_include_directories(conker_netplay_packets PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_compile_features(conker_netplay_packets PUBLIC cxx_std_20)
 
 add_executable(packets_test packets_test.cpp)
 target_link_libraries(packets_test PRIVATE conker_netplay_packets)
+add_executable(join_code_test join_code_test.cpp)
+target_link_libraries(join_code_test PRIVATE conker_netplay_packets)
 
 if (CONKER_NETPLAY_FUZZ)
     add_executable(fuzz_packets fuzz_packets.cpp packets.cpp)

@@ -3,12 +3,16 @@
 // checks that every other port's pads arrive, and are the ones sent.
 //
 //   netplay_probe host <port> [--players 2] [options]
-//   netplay_probe join <address:port> [options]
+//   netplay_probe join <address:port or join code> [options]
+//   netplay_probe join <address:port> --silent
+//   netplay_probe code <address:port>
 //     --reads <n>        how many reads each peer sends (300: 10 s)
 //     --loss <percent>   the library drops this share of the packets sent (they're resent)
 //     --build/--rom/--profile <hex>   the handshake's hashes (all 1 by default), to test refusals
+//     --silent           connect but never say Hello: the host must drop it after its handshake time
 //
-// It exits 0 once it has every other port's pads for every read and they're all right, 1 otherwise.
+// It exits 0 once it has every other port's pads for every read and they're all right, 1 otherwise;
+// --silent, once the host has closed the connection for a timeout. `code` prints the address's join code.
 
 #include <chrono>
 #include <cstdio>
@@ -19,6 +23,7 @@
 #include <thread>
 #include <vector>
 
+#include <steam/isteamnetworkingsockets.h>
 #include <steam/isteamnetworkingutils.h>
 
 #include "session.hpp"
@@ -49,13 +54,64 @@ namespace {
     };
 
     int usage() {
-        std::fprintf(stderr, "usage: netplay_probe host <port> [--players 2] | join <address:port>\n"
-                             "       [--reads 300] [--loss <percent>] [--build <hex>] [--rom <hex>] [--profile <hex>]\n");
+        std::fprintf(stderr, "usage: netplay_probe host <port> [--players 2] | join <address:port or code> [--silent]\n"
+                             "       [--reads 300] [--loss <percent>] [--build <hex>] [--rom <hex>] [--profile <hex>]\n"
+                             "       netplay_probe code <address:port>\n");
         return 2;
+    }
+
+    // --silent: connects to `where` without a Session, so no Hello is sent, and waits for the host to
+    // close the connection. Passes if it does so for a timeout, after 5 to 20 seconds.
+    int join_silently(const std::string& where) {
+        SteamNetworkingIPAddr address;
+        if (!address.ParseString(where.c_str())) {
+            std::fprintf(stderr, "--silent takes an address and port\n");
+            return 2;
+        }
+        ISteamNetworkingSockets* sockets = SteamNetworkingSockets();
+        const HSteamNetConnection connection = sockets->ConnectByIPAddress(address, 0, nullptr);
+        const auto start = std::chrono::steady_clock::now();
+        bool connected = false;
+        while (true) {
+            sockets->RunCallbacks();
+            SteamNetConnectionInfo_t info;
+            if (!sockets->GetConnectionInfo(connection, &info)) {
+                std::printf("FAILED: the connection is gone\n");
+                return 1;
+            }
+            const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+            if (info.m_eState == k_ESteamNetworkingConnectionState_Connected && !connected) {
+                connected = true;
+                std::printf("connected, saying nothing\n");
+            }
+            if (info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
+                info.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally) {
+                const bool timeout = info.m_eEndReason == k_ESteamNetConnectionEnd_App_Min + (int)Reason::timeout;
+                std::printf("closed after %.1f s: %s (%d)\n", seconds, info.m_szEndDebug, info.m_eEndReason);
+                sockets->CloseConnection(connection, 0, nullptr, false);
+                const bool right = connected && timeout && seconds > 5 && seconds < 20;
+                std::printf("%s\n", right ? "dropped for saying nothing" : "FAILED");
+                return right ? 0 : 1;
+            }
+            if (seconds > 30) {
+                std::printf("FAILED: still connected after 30 s\n");
+                sockets->CloseConnection(connection, 0, nullptr, false);
+                return 1;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
     }
 }
 
 int main(int argc, char** argv) {
+    if (argc == 3 && std::strcmp(argv[1], "code") == 0) {
+        const std::string code = join_code_for(argv[2]);
+        if (code.empty()) {
+            return usage();
+        }
+        std::printf("%s\n", code.c_str());
+        return 0;
+    }
     if (argc < 3 || (std::strcmp(argv[1], "host") != 0 && std::strcmp(argv[1], "join") != 0)) {
         return usage();
     }
@@ -76,6 +132,7 @@ int main(int argc, char** argv) {
         else if (option == "--profile") me.profile = std::strtoull(value, nullptr, 16);
         else return usage();
     }
+    const bool silent = !hosting && argc == 4 && std::strcmp(argv[3], "--silent") == 0;
     if (reads == 0) {
         return usage();
     }
@@ -84,6 +141,11 @@ int main(int argc, char** argv) {
     if (!startup(error)) {
         std::fprintf(stderr, "couldn't start the networking: %s\n", error.c_str());
         return 1;
+    }
+    if (silent) {
+        const int silent_result = join_silently(where);
+        shutdown();
+        return silent_result;
     }
     if (loss > 0) {
         SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, loss);
