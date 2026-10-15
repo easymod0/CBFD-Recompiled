@@ -1,6 +1,7 @@
-# The determinism check for netplay (issue #126), on every push: lockstep netplay only works if
-# the same inputs always give the same game, so a change that breaks that is found when it's
-# pushed. It builds the game with CONKER_NETPLAY=ON and runs tools/netplay/check.sh, which
+# The determinism check for netplay (issue #126), on a push that touches what decides the game's
+# determinism (netplay's code, the runtime and RT64 patches, the host's hooks into game memory), or
+# run by hand: lockstep netplay only works if the same inputs always give the same game, so a change
+# that breaks that is found when it's pushed. A full game build, so not on every push. It builds the game with CONKER_NETPLAY=ON and runs tools/netplay/check.sh, which
 # replays a made-up recording headless four ways (twice, with random sleeps in the host, and
 # through a save state) and fails if the game's memory differs between them at any read.
 #
@@ -15,7 +16,14 @@ name: netplay
 on:
   push:
     branches: ['**']
-    paths-ignore: ['**.md']
+    paths:
+      - 'host/src/**'
+      - 'host/CMakeLists.txt'
+      - 'recomp/*.patch'
+      - 'conker.toml'
+      - 'tools/netplay/**'
+      - '.github/workflows/netplay.yml'
+      - '!**.md'
   workflow_dispatch:
 
 permissions:

@@ -176,6 +176,12 @@ namespace conker::netplay {
             case k_ESteamNetworkingConnectionState_Connecting:
                 // Someone connecting to the host: taken in, to say Hello (or be refused) within the time.
                 if (is_host && info->m_info.m_hListenSocket == listen_socket) {
+                    // Once the match has started nobody more can join: turned away at once, not held until
+                    // their Hello.
+                    if (!entry_open) {
+                        sockets->CloseConnection(info->m_hConn, k_ESteamNetConnectionEnd_App_Min + (int)Reason::started, "started", false);
+                        return;
+                    }
                     if (peers.size() >= max_connections || sockets->AcceptConnection(info->m_hConn) != k_EResultOK) {
                         sockets->CloseConnection(info->m_hConn, k_ESteamNetConnectionEnd_App_Min + (int)Reason::full, "full", false);
                         return;
@@ -199,7 +205,10 @@ namespace conker::netplay {
                 Event event{ is_host ? Event::Type::left : Event::Type::ended };
                 event.port = peer->port;
                 event.reason = reason_of(info->m_info);
-                event.detail = info->m_info.m_szEndDebug;
+                // The peer's own words, for the log: printable characters only.
+                for (const char* c = info->m_info.m_szEndDebug; *c != '\0'; c++) {
+                    event.detail += (*c >= 0x20 && *c < 0x7F) ? *c : '?';
+                }
                 if (!is_host || peer->port >= 0) {
                     pending_events.push_back(std::move(event));
                 }
@@ -340,9 +349,10 @@ namespace conker::netplay {
                 event.players = match_players;
                 events.push_back(std::move(event));
             }
-            else if (const Refuse* refuse = std::get_if<Refuse>(&packet)) {
+            else if (std::holds_alternative<Refuse>(packet) || std::holds_alternative<Bye>(packet)) {
+                // Refused, or dropped before being welcomed (the host's handshake time ran out): with why.
                 Event event{ Event::Type::ended };
-                event.reason = refuse->reason;
+                event.reason = std::holds_alternative<Refuse>(packet) ? std::get<Refuse>(packet).reason : std::get<Bye>(packet).reason;
                 SteamNetworkingSockets()->CloseConnection(peer.connection, 0, nullptr, false);
                 peers.clear();
                 events.push_back(std::move(event));
