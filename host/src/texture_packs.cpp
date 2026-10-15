@@ -5,7 +5,7 @@
 // The Texture Pack setting (at the end of the Graphics tab; it had a tab of its own before, its choice
 // carried over by conker_config.cpp) picks one of them. Its list is the packs in the mods folder when the
 // game starts (the settings are made before the runtime opens the mods), so a pack installed while it
-// runs is listed from the next start. A GLideN64 pack (.htc, gliden64_packs.cpp) is listed as the pack
+// runs is listed from the next start. A GLideN64 pack (.htc or .hts, gliden64_packs.cpp) is listed as the pack
 // it unpacks into, which is there once the launcher has unpacked it. Choosing one turns it on and every other pack off, through the
 // runtime, which saves it as if done in the Mods menu. "Set in the Mods Menu" (the default) leaves them
 // as the Mods menu has them, where several can be on at once, the later ones taking precedence. The
@@ -38,7 +38,7 @@ namespace {
     std::vector<Pack> packs;
 
     // A .rtz without a mod.json takes its file name as its id. A folder needs a mod.json, and is a
-    // texture pack if it has an rt64.json. A .htc is listed as the folder it unpacks into, if that isn't
+    // texture pack if it has an rt64.json. A .htc or .hts is listed as the folder it unpacks into, if that isn't
     // there yet.
     std::vector<Pack> find_packs(const std::filesystem::path& folder) {
         std::vector<Pack> found;
@@ -59,7 +59,7 @@ namespace {
         }
         for (const auto& entry : std::filesystem::directory_iterator{ folder, std::filesystem::directory_options::skip_permission_denied, ec }) {
             const std::filesystem::path& path = entry.path();
-            if (entry.is_regular_file(ec) && path.extension() == ".htc") {
+            if (entry.is_regular_file(ec) && (path.extension() == ".htc" || path.extension() == ".hts")) {
                 const std::string id = conker::texture_packs::gliden64_pack_id(path);
                 if (std::none_of(found.begin(), found.end(), [&](const Pack& pack) { return pack.id == id; })) {
                     found.push_back({ id, path.stem().string() });
@@ -93,9 +93,10 @@ void conker::texture_packs::register_type() {
     const recomp::mods::ModContentTypeId texture_pack_id = recomp::mods::register_mod_content_type(texture_pack);
     recomp::mods::register_mod_container_type("rtz", { texture_pack_id }, false);
 
-    // GLideN64 packs (gliden64_packs.cpp): the Mods menu's installer copies a .htc into the mods folder,
+    // GLideN64 packs (gliden64_packs.cpp): the Mods menu's installer copies a .htc or .hts into the mods folder,
     // and its refresh (which follows an install) unpacks it.
     recompui::register_mod_file_extension(".htc");
+    recompui::register_mod_file_extension(".hts");
     recompui::register_mod_scan_callback(unpack_gliden64_packs);
 }
 
@@ -111,7 +112,7 @@ void conker::texture_packs::add_options(recomp::config::Config& config) {
 
     config.add_enum_option(option_id, "Texture Pack",
         "Replaces the game's textures with a texture pack's, such as HD textures. Install a pack (a <b>.rtz</b> file, "
-        "or a GLideN64 pack's <b>.htc</b> file) by putting it in the <b>mods</b> folder or dropping it onto the Mods menu; "
+        "or a GLideN64 pack's <b>.htc</b> or <b>.hts</b> file) by putting it in the <b>mods</b> folder or dropping it onto the Mods menu; "
         "it's listed here from the next start. "
         "<recomp-color primary>Set in the Mods Menu</recomp-color> leaves the packs as the Mods menu has them, where "
         "several can be on at once. <recomp-color primary>None</recomp-color> turns them all off. Choosing a pack turns "

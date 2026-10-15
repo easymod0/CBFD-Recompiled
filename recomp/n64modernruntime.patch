@@ -2208,7 +2208,7 @@ index 0000000..99b3cf9
 +    }
 +}
 diff --git a/ultramodern/src/timer.cpp b/ultramodern/src/timer.cpp
-index ee26c45..2290faf 100644
+index ee26c45..d26d2ea 100644
 --- a/ultramodern/src/timer.cpp
 +++ b/ultramodern/src/timer.cpp
 @@ -1,10 +1,16 @@
@@ -2229,7 +2229,7 @@ index ee26c45..2290faf 100644
  
  #ifdef _WIN32
  #define WIN32_LEAN_AND_MEAN
-@@ -29,21 +35,20 @@ struct OSTimer {
+@@ -29,20 +35,25 @@ struct OSTimer {
      OSMesg msg;
  };
  
@@ -2239,29 +2239,35 @@ index ee26c45..2290faf 100644
 -
 -struct RemoveTimerAction {
 -    PTR(OSTimer) timer;
--};
--
--using Action = std::variant<AddTimerAction, RemoveTimerAction>;
--
 +// The running timers, for the timer thread. A list, not a set kept in deadline order: the deadlines are
 +// in game memory, which loading a save state overwrites (save_states.hpp), and a timer set again while
 +// it runs gets a new one. There are only ever a few, so the next one is found by looking at each.
- struct {
-     std::thread thread;
--    moodycamel::BlockingConcurrentQueue<Action> action_queue{};
++//
++// Made once and never destroyed: the timer thread is detached and waits on `changed` until the process
++// ends. A static one was destroyed as the program exited, with the thread still waiting on it, and on
++// Linux destroying a condition variable waits for its waiters (glibc's pthread_cond_destroy), so quitting
++// hung (issue #127); the queue it replaced didn't wait.
++struct TimerContext {
++    std::thread thread;
 +    std::mutex mutex;
 +    std::condition_variable changed;
 +    std::vector<PTR(OSTimer)> active;
- } timer_context;
+ };
++TimerContext& timer_context = *new TimerContext{};
  
+-using Action = std::variant<AddTimerAction, RemoveTimerAction>;
+-
+-struct {
+-    std::thread thread;
+-    moodycamel::BlockingConcurrentQueue<Action> action_queue{};
+-} timer_context;
 +// The game's clock is the time since the program started, less this offset, in ticks. Loading a save
 +// state sets it so the clock goes on from the state's time (save_states.hpp).
 +static std::atomic<int64_t> clock_offset = 0;
-+
+ 
  uint64_t duration_to_ticks(std::chrono::high_resolution_clock::duration duration) {
      uint64_t delta_micros = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-     // More accurate than using a floating point timer, will only overflow after running for 12.47 years
-@@ -59,83 +64,121 @@ std::chrono::microseconds ticks_to_duration(uint64_t ticks) {
+@@ -59,83 +70,121 @@ std::chrono::microseconds ticks_to_duration(uint64_t ticks) {
  }
  
  std::chrono::high_resolution_clock::time_point ticks_to_timepoint(uint64_t ticks) {
@@ -2380,15 +2386,15 @@ index ee26c45..2290faf 100644
 +        }
 +    }
 +}
++
++void timer_thread(RDRAM_ARG1) {
++    ultramodern::set_native_thread_name("Timer Thread");
++    ultramodern::set_native_thread_priority(ultramodern::ThreadPriority::VeryHigh);
  
 -        // If there's no timer to act on, wait for one to come in from the action queue
 -        while (active_timers.empty()) {
 -            timer_context.action_queue.wait_dequeue(cur_action);
 -            process_timer_action(cur_action);
-+void timer_thread(RDRAM_ARG1) {
-+    ultramodern::set_native_thread_name("Timer Thread");
-+    ultramodern::set_native_thread_priority(ultramodern::ThreadPriority::VeryHigh);
-+
 +    std::unique_lock lock{ timer_context.mutex };
 +    while (true) {
 +        // If there's no timer to act on, wait for one. In deterministic mode the timeline runs them.
@@ -2440,7 +2446,7 @@ index ee26c45..2290faf 100644
          }
      }
  }
-@@ -180,30 +223,69 @@ extern "C" void osSetTime(OSTime t) {
+@@ -180,30 +229,69 @@ extern "C" void osSetTime(OSTime t) {
  
  extern "C" int osSetTimer(RDRAM_ARG PTR(OSTimer) t_, OSTime countdown, OSTime interval, PTR(OSMesgQueue) mq, OSMesg msg) {
      OSTimer* t = TO_PTR(OSTimer, t_);
