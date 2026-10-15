@@ -1,0 +1,100 @@
+# Builds and tests netplay's transport (host/src/netplay/net) on Windows, Linux and
+# macOS: GameNetworkingSockets and its dependencies, the packets' and join codes' tests, and matches
+# between copies of netplay_probe over loopback (test.sh). On Linux it also fuzzes the packets for a minute
+# (libFuzzer). It needs no ROM: the transport builds without the game.
+#
+# Like the other workflows, it uses no third-party actions: git, and on Windows the vcpkg on GitHub's
+# runners (for protobuf, from host/src/netplay/net/vcpkg.json).
+name: netplay-transport
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'host/src/netplay/net/**'
+      - '.github/workflows/netplay-transport.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: netplay-transport-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GIT_TERMINAL_PROMPT: '0'
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        run: |
+          git clone -q --no-checkout "https://github.com/$GITHUB_REPOSITORY" .
+          git checkout -q "$GITHUB_SHA"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build clang libprotobuf-dev protobuf-compiler libssl-dev
+
+      - name: Build
+        run: |
+          cmake -S host/src/netplay/net -B build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          cmake --build build
+
+      - name: Test
+        run: sh host/src/netplay/net/test.sh build
+
+      - name: Fuzz the packets
+        run: |
+          cmake -S host/src/netplay/net -B build-fuzz -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCONKER_NETPLAY_FUZZ=ON
+          cmake --build build-fuzz --target fuzz_packets
+          mkdir -p corpus
+          build-fuzz/fuzz_packets corpus -max_total_time=60 -max_len=128
+
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        run: |
+          git clone -q --no-checkout "https://github.com/$GITHUB_REPOSITORY" .
+          git checkout -q "$GITHUB_SHA"
+
+      - name: Install dependencies
+        run: brew install cmake ninja protobuf openssl@3
+
+      - name: Build
+        run: |
+          cmake -S host/src/netplay/net -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENSSL_ROOT_DIR="$(brew --prefix openssl@3)"
+          cmake --build build
+
+      - name: Test
+        run: sh host/src/netplay/net/test.sh build
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        shell: bash
+        run: |
+          git clone -q --no-checkout "https://github.com/$GITHUB_REPOSITORY" .
+          git checkout -q "$GITHUB_SHA"
+
+      # protobuf from the runner's vcpkg through the manifest, as a developer's build gets it from
+      # Visual Studio's (host/src/netplay/net/vcpkg.cmake): it builds it, with abseil, which is most of
+      # this job's time. The crypto is Windows' own (bcrypt).
+      - name: Build
+        shell: bash
+        run: |
+          export VCPKG_ROOT="$VCPKG_INSTALLATION_ROOT"
+          cmake -S host/src/netplay/net -B build
+          cmake --build build --config Release
+
+      - name: Test
+        shell: bash
+        run: sh host/src/netplay/net/test.sh build/Release

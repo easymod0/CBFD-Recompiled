@@ -58,6 +58,7 @@
 #include <vector>
 
 #include "../conker.hpp"
+#include "hello.hpp"
 #include "librecomp/game.hpp"
 #include "librecomp/save_states.hpp"
 #include "recomp.h"
@@ -625,12 +626,12 @@ void conker::harness::start(uint8_t* game_rdram) {
 
     // The ROM in play and the settings profile, checked against a replay's and written into a recording.
     // Mods are loaded after this, so they're checked here too.
-    // Printed, for comparing two machines' runs.
-    const std::span<const uint8_t> rom = recomp::get_rom();
-    const uint64_t rom_hash = XXH3_64bits(rom.data(), rom.size());
-    const uint64_t profile_hash = conker::netplay_profile::hash();
-    std::printf("[harness] ROM %016llx, settings profile %016llx\n", (unsigned long long)rom_hash,
-        (unsigned long long)profile_hash);
+    // They're netplay's handshake's (hello.cpp), printed for comparing two machines' builds.
+    const conker::netplay::Hello hello = conker::netplay::local_hello();
+    const uint64_t rom_hash = hello.rom;
+    const uint64_t profile_hash = hello.profile;
+    std::printf("[harness] build %s: build %016llx, ROM %016llx, profile %016llx\n", conker::netplay::build_id(),
+        (unsigned long long)hello.build, (unsigned long long)rom_hash, (unsigned long long)profile_hash);
     bool can_go_on = conker::netplay_profile::check_mods();
     if (replay_rom_hash != 0 && replay_rom_hash != rom_hash) {
         std::fprintf(stderr, "[harness] %s was recorded with another ROM (%016llx; this one is %016llx)\n",

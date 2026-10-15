@@ -12,8 +12,9 @@
 //   Widescreen: the culls and sprites are widened for 16:9, whatever the window's size and the aspect
 //     ratio setting (widescreen.cpp). A wider window can lose a little at its sides.
 //   Save states (F5, F7): off.
-//   Mods: none in recordings and replays (check_mods: a recording doesn't say which were on). Texture packs
-//     only change the picture, so they can be on.
+//   Mods: in a netplay match, whatever everyone has the same of (mods_hash, in the handshake: each mod on,
+//     its file and its settings); in recordings and replays none (check_mods: a recording doesn't say which
+//     were on). Texture packs only change the picture, so they're left out of both.
 //   The renderer: RT64 renders nothing back into game memory (its Render to RAM), as headless has no
 //     renderer to: see tools/netplay/README.md for what the game then reads instead.
 //
@@ -25,8 +26,14 @@
 // Its hash, of the text below, goes into recordings (and later the netplay handshake): a change to the
 // profile changes the text, and a recording made with another profile is refused.
 
+#include <algorithm>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "librecomp/mods.hpp"
 
@@ -67,6 +74,84 @@ void conker::netplay_profile::set_active(bool active) {
 
 uint64_t conker::netplay_profile::hash() {
     return XXH3_64bits(profile_text, std::char_traits<char>::length(profile_text));
+}
+
+namespace {
+    // The mods on that change the game: every enabled mod but texture packs, in load order.
+    std::vector<recomp::mods::ModDetails> game_mods() {
+        std::vector<std::pair<size_t, recomp::mods::ModDetails>> on;
+        for (const recomp::mods::ModDetails& mod : recomp::mods::get_all_mod_details("conker")) {
+#if defined(CONKER_RT64)
+            if (conker::texture_packs::is_pack(mod.mod_id)) {
+                continue;
+            }
+#endif
+            if (recomp::mods::is_mod_enabled(mod.mod_id)) {
+                on.emplace_back(recomp::mods::get_mod_order_index(mod.mod_id), mod);
+            }
+        }
+        std::sort(on.begin(), on.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        std::vector<recomp::mods::ModDetails> mods;
+        for (auto& [order, mod] : on) {
+            mods.push_back(std::move(mod));
+        }
+        return mods;
+    }
+
+    void hash_file(XXH3_state_t& state, const std::filesystem::path& path) {
+        std::ifstream file(path, std::ios::binary);
+        const std::vector<char> bytes((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        const uint64_t size = bytes.size();
+        XXH3_64bits_update(&state, &size, sizeof(size));
+        XXH3_64bits_update(&state, bytes.data(), bytes.size());
+    }
+
+    void hash_text(XXH3_state_t& state, const std::string& text) {
+        XXH3_64bits_update(&state, text.data(), text.size() + 1);
+    }
+}
+
+uint64_t conker::netplay_profile::mods_hash() {
+    const std::vector<recomp::mods::ModDetails> mods = game_mods();
+    if (mods.empty()) {
+        return 0;
+    }
+    XXH3_state_t state;
+    XXH3_64bits_reset(&state);
+    for (const recomp::mods::ModDetails& mod : mods) {
+        hash_text(state, mod.mod_id);
+        hash_text(state, mod.version.to_string());
+        // The mod itself (a file, or a folder of files), and its settings as saved.
+        std::error_code error;
+        const std::filesystem::path file = recomp::mods::get_mod_filename(mod.mod_id);
+        if (std::filesystem::is_regular_file(file, error)) {
+            hash_file(state, file);
+        }
+        else if (std::filesystem::is_directory(file, error)) {
+            std::vector<std::filesystem::path> files;
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(file, error)) {
+                if (entry.is_regular_file()) {
+                    files.push_back(entry.path());
+                }
+            }
+            std::sort(files.begin(), files.end());
+            for (const std::filesystem::path& part : files) {
+                hash_text(state, std::filesystem::relative(part, file, error).generic_string());
+                hash_file(state, part);
+            }
+        }
+        const std::filesystem::path settings = recomp::get_config_path() / recomp::mods::mod_config_directory / (mod.mod_id + ".json");
+        if (std::filesystem::is_regular_file(settings, error)) {
+            hash_file(state, settings);
+        }
+    }
+    std::printf("[netplay] %zu mods on (texture packs aside):", mods.size());
+    for (const recomp::mods::ModDetails& mod : mods) {
+        std::printf(" %s %s;", mod.mod_id.c_str(), mod.version.to_string().c_str());
+    }
+    std::printf("\n");
+    const uint64_t hash = XXH3_64bits_digest(&state);
+    return hash == 0 ? 1 : hash;
 }
 
 bool conker::netplay_profile::check_mods() {

@@ -10,8 +10,12 @@ cmake_minimum_required(VERSION 3.20)
 #   cmake --build host/build
 
 # Netplay (issue #126), off until it has been reviewed and tested. So far: the determinism harness
-# (--record, --replay, --hash-log: src/netplay/harness.cpp).
+# (--record, --replay, --hash-log: src/netplay/harness.cpp) and the transport (src/netplay/net).
 option(CONKER_NETPLAY "Build the netplay work in progress" OFF)
+if (CONKER_NETPLAY)
+    # On Windows, protobuf from vcpkg: set up before project().
+    include("${CMAKE_CURRENT_SOURCE_DIR}/src/netplay/net/vcpkg.cmake")
+endif()
 
 project(ConkerRecomp C CXX)
 if (APPLE)
@@ -121,8 +125,20 @@ target_include_directories(ConkerRecomp PRIVATE
 target_link_libraries(ConkerRecomp PRIVATE RecompiledFuncs librecomp ultramodern)
 
 if (CONKER_NETPLAY)
-    target_sources(ConkerRecomp PRIVATE src/netplay/harness.cpp src/netplay/profile.cpp)
+    target_sources(ConkerRecomp PRIVATE src/netplay/harness.cpp src/netplay/profile.cpp src/netplay/hello.cpp)
     target_compile_definitions(ConkerRecomp PRIVATE CONKER_NETPLAY)
+    # The build id for the handshake (src/netplay/hello.cpp), from git at every build.
+    set(CONKER_BUILD_ID_CPP "${CMAKE_CURRENT_BINARY_DIR}/netplay_build_id.cpp")
+    add_custom_target(conker_build_id
+        COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=${REPO_ROOT} -DOUT=${CONKER_BUILD_ID_CPP}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/src/netplay/build_id.cmake"
+        BYPRODUCTS "${CONKER_BUILD_ID_CPP}")
+    target_sources(ConkerRecomp PRIVATE "${CONKER_BUILD_ID_CPP}")
+    add_dependencies(ConkerRecomp conker_build_id)
+    # The transport (src/netplay/net): GameNetworkingSockets, which needs protobuf (on Windows from
+    # vcpkg) and, but on Windows, OpenSSL.
+    add_subdirectory(src/netplay/net)
+    target_link_libraries(ConkerRecomp PRIVATE conker_netplay_net)
 endif()
 
 if (CONKER_RT64)
