@@ -523,6 +523,19 @@ to the display list, so a window run differed from a headless one (which has no
 renderer) from the second read, and the copies raced the game. RT64 still draws
 everything; only the copy back is skipped.
 
+RT64 also reuses its tile copies again at any resolution. A tile copy (a texture
+and a framebuffer the game's reads of a framebuffer as a texture are copied into)
+was found again by its texture's size (`FramebufferManager::findTileCopyId`), but
+that size is the one scaled by the resolution (set in `createTileCopySetup`) and
+the size looked for isn't, so above 1x no copy was ever reused: every request
+made a new one, never freed. The pause menu reads the frame back in strips every
+frame, so each pause added hundreds. On D3D12 they ran its render target
+descriptor heap (16384) out after a few pauses, and then the pause background was
+black, the log filled with `Allocator was unable to find free space for the set.`
+and game memory was corrupted, up to a crash; on Vulkan the game only got slower.
+A tile copy now keeps the size it was asked for (`TileCopy::requestWidth` and
+`requestHeight`), unscaled, and is found by that.
+
 RecompFrontend (`recompfrontend.patch`): mouse buttons can be bound, with the
 keyboard's controls (and in single player with the controller's too, as both are
 read then). recompinput already had a mouse input type, but reading it
