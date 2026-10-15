@@ -23,7 +23,7 @@ import argparse
 import random
 import struct
 
-from make_inputs import DEFAULT_CONTROLS, NO_MOTION, Movement, random_controls
+from make_inputs import NO_MOTION, Movement
 
 MAGIC = b"CBFDPADS"
 VERSION = 3
@@ -45,8 +45,7 @@ def main():
     parser.add_argument("--seed", type=int, default=1)
     args = parser.parse_args()
     rng = random.Random(args.seed)
-    controls = [random_controls(rng) if args.mouse and p < args.players else DEFAULT_CONTROLS for p in range(4)]
-    motions = {}  # read: each port's 9 bytes
+    motions = {}  # read: each port's 11 bytes
 
     reads = []
 
@@ -111,7 +110,7 @@ def main():
         press(0, START); wait(200)
 
     with open(args.out, "wb") as f:
-        f.write(MAGIC + struct.pack("<IIQQ", VERSION, args.players, 0, 0) + struct.pack("<4H", *controls))
+        f.write(MAGIC + struct.pack("<IIQQ", VERSION, args.players, 0, 0))
         for i, read in enumerate(reads):
             f.write(read + motions.get(i, NO_MOTION * 4))
     print(f"{args.out}: {len(reads)} reads, {args.mode} ({args.variant}), {args.players} players")

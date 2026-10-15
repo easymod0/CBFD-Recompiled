@@ -5,8 +5,8 @@
 //
 //   Each player's own: the mouse and gyro in R-Look, the aiming modes and the orbit camera, and the
 //     settings that change what they and the stick do there (responses, inverts, Mouse: Turn the Camera):
-//     their movement is part of each read's input, and their settings are their Controls, sent in the
-//     handshake and recorded (motion.cpp). Not part of the profile.
+//     their movement is part of each read's input, with their settings (their Controls) as they are at
+//     that read (motion.cpp). Not part of the profile.
 //   Off: Right Stick: Free Camera, Aiming: Swap Sticks and the mouse in the bank's leaps (look_aim.cpp,
 //     mouse_camera.cpp): single player's, and the first two go by the time between frames.
 //   At their defaults (as headless, which has no settings): the Camera tab's others (Field of View, Invert

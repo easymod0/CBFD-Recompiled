@@ -33,7 +33,6 @@ extern std::atomic_bool exited;
 
 using conker::netplay::Event;
 using conker::netplay::Hash;
-using conker::netplay::Controls;
 using conker::netplay::Inputs;
 using conker::netplay::Motion;
 using conker::netplay::Pad;
@@ -61,7 +60,6 @@ namespace {
     int delay_option = auto_delay;
     // The match's, from the host (Start).
     int delay = 2;
-    std::array<Controls, conker::netplay::max_players> match_controls{};
     uint64_t desync_at = never;
     bool options_valid = true;
 
@@ -416,7 +414,6 @@ bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
     left = false;
     current_read = 0;
     match_own_view = false;
-    match_controls = {};
     why_over.clear();
     initial_sent = false;
     for (auto& pads : received) pads.clear();
@@ -461,7 +458,6 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
                         match_started = true;
                         match_own_view = host_own_view;
                         delay = chosen;
-                        match_controls = session->controls();
                     }
                 }
                 break;
@@ -481,7 +477,6 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
                 match_started = true;
                 match_own_view = event.own_view;
                 delay = event.delay;
-                match_controls = event.controls;
                 break;
             case Event::Type::ended:
                 std::printf("[netplay] couldn't join: %s (%s)\n", netplay::describe(event.reason), event.detail.c_str());
@@ -568,10 +563,6 @@ int conker::lockstep::players() {
 
 int conker::lockstep::input_delay() {
     return delay;
-}
-
-const std::array<conker::netplay::Controls, conker::netplay::max_players>& conker::lockstep::controls() {
-    return match_controls;
 }
 
 bool conker::lockstep::own_view_for_everyone() {

@@ -8,8 +8,8 @@ seed, so the same seed always gives the same recording.
 
 --start-every presses Start every so many reads (0: never) on the first port, to get through the title
 and menus. --mouse moves each player's mouse, gyro and scroll wheel about too, and gives each player
-settings of their own (Controls) from the seed; otherwise there's no movement and every player has the
-defaults. The recording's format is the harness's (version 3, see its header comment), with its ROM and
+settings of their own (Controls) from the seed, changed now and then; otherwise there's no movement and
+every player has the defaults. The recording's format is the harness's (version 3, see its header comment), with its ROM and
 settings profile hashes 0, which the harness doesn't check (they aren't known here).
 """
 import argparse
@@ -35,11 +35,10 @@ def main():
     args = parser.parse_args()
 
     rng = random.Random(args.seed)
-    controls = [random_controls(rng) if args.mouse and p < args.ports else DEFAULT_CONTROLS for p in range(4)]
     held = [[0, 0, 0, 0] for _ in range(4)]  # buttons, stick x, stick y, reads left
     moving = [Movement(rng) for _ in range(4)]
     with open(args.out, "wb") as f:
-        f.write(MAGIC + struct.pack("<IIQQ", VERSION, args.ports, 0, 0) + struct.pack("<4H", *controls))
+        f.write(MAGIC + struct.pack("<IIQQ", VERSION, args.ports, 0, 0))
         for read in range(args.reads):
             f.write(bytes([4]))
             for port in range(4):
@@ -62,7 +61,7 @@ def main():
     print(f"{args.out}: {args.reads} reads, {args.ports} ports, seed {args.seed}" + (", with mouse and gyro" if args.mouse else ""))
 
 
-NO_MOTION = struct.pack("<hhhhb", 0, 0, 0, 0, 0)
+NO_MOTION = struct.pack("<hhhhbH", 0, 0, 0, 0, 0, DEFAULT_CONTROLS)
 
 
 def random_controls(rng):
@@ -72,13 +71,15 @@ def random_controls(rng):
 
 class Movement:
     """A player's mouse, gyro and wheel, read by read: still for a while, then swept at a steady rate (with
-    some shake) for a while; now and then a notch of the wheel. Each read's 9 bytes (netplay::Motion: the
-    mouse in 1/8 pixel, gyro in halves of recompinput's unit)."""
+    some shake) for a while; now and then a notch of the wheel; and their Controls, changed about every
+    500 reads. Each read's 11 bytes (netplay::Motion: the mouse in 1/8 pixel, gyro in halves of
+    recompinput's unit)."""
 
     def __init__(self, rng):
         self.rng = rng
         self.left = 0
         self.rate = (0, 0, 0, 0)
+        self.controls = random_controls(rng)
 
     def next(self):
         rng = self.rng
@@ -91,7 +92,9 @@ class Movement:
         self.left -= 1
         values = [max(-32767, min(32767, r + rng.randint(-20, 20))) if r else 0 for r in self.rate]
         wheel = rng.choice((-1, 1)) if rng.random() < 0.01 else 0
-        return struct.pack("<hhhhb", *values, wheel)
+        if rng.random() < 1 / 500:
+            self.controls = random_controls(rng)
+        return struct.pack("<hhhhbH", *values, wheel, self.controls)
 
 
 if __name__ == "__main__":

@@ -85,8 +85,8 @@ same headless or on another machine:
   their input for each controller read, like their pad: every poll's movement (with their sensitivity)
   is added up and taken at the read on the game thread, in fixed point, so every machine gives the game
   the same, and each player's camera takes their own (in a match, every player's camera turns by its
-  player's mouse). Their settings are their *Controls*: sent in the handshake, given to everyone with
-  Start, and recorded. The camera code then uses `same_math.hpp`'s trigonometry, as the C libraries'
+  player's mouse). Their settings (their *Controls*) go with it, every read: one changed in a match
+  takes effect at the same read on every machine. The camera code then uses `same_math.hpp`'s trigonometry, as the C libraries'
   differ in the last bit.
 - **Off:** Right Stick: Free Camera, Aiming: Swap Sticks and the mouse in the bank's leaps: single
   player's, and the first two go by the time between frames.
@@ -115,8 +115,8 @@ controls, the sensitivities) is left to the player: those are what's recorded, a
 
 A recording (version 3) holds the ROM's XXH3-64 and the profile's hash: a replay with another ROM or
 another profile is refused before the game starts. `make_inputs.py` writes 0 for both, which isn't
-checked. It holds each player's Controls too, and their mouse and gyro movement beside their pad at
-each read. Version 2 recordings (before the mouse) replay with no movement and the default settings;
+checked. It holds each player's mouse and gyro movement and Controls beside their pad at each read.
+Version 2 recordings (before the mouse) replay with no movement and the default settings;
 version 1 recordings (before the profile) are replayed unchecked.
 
 ### The determinism check

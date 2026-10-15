@@ -59,7 +59,7 @@ real_path, other_path, ports, prefix = sys.argv[1], sys.argv[2], int(sys.argv[3]
 real = open(real_path, "rb").read()
 other = open(other_path, "rb").read()
 assert len(real) == len(other)
-header, read_size, pad_size, motion_size = 40, 57, 5, 9   # version 3 (harness.cpp)
+header, read_size, pad_size, motion_size = 32, 65, 5, 11   # version 3 (harness.cpp)
 for own in range(ports):
     scrambled = bytearray(real)
     for port in range(ports):
@@ -81,7 +81,7 @@ scramble "$OUT/inputs.pads" "$OUT/other.pads" 2 "$OUT/" || exit 2
 python3 tools/netplay/make_match.py "$OUT/mouse.pads" --mode deathmatch --players 3 --mouse --seed "$SEED" || exit 2
 python3 tools/netplay/make_match.py "$OUT/mouse-other.pads" --mode deathmatch --players 3 --mouse --seed "$((SEED + 1))" > /dev/null || exit 2
 scramble "$OUT/mouse.pads" "$OUT/mouse-other.pads" 3 "$OUT/mouse-" || exit 2
-MOUSE_READS=$(( ($(wc -c < "$OUT/mouse.pads") - 40) / 57 ))
+MOUSE_READS=$(( ($(wc -c < "$OUT/mouse.pads") - 32) / 65 ))
 
 # start <name> [options...]: one copy in the background, with its own data folder, its hash log in
 # $OUT/<name>.log and its output in $OUT/<name>.out; its PID is added to $pids.

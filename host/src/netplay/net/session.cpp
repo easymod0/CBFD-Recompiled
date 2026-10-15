@@ -215,14 +215,7 @@ namespace conker::netplay {
             return false;
         }
         entry_open = false;
-        Start start{ (uint8_t)match_players, (uint8_t)(own_view ? 1 : 0), (uint8_t)delay };
-        start.controls[0] = hello.controls;
-        for (const Peer& peer : peers) {
-            if (peer.port >= 0) {
-                start.controls[peer.port] = peer.controls;
-            }
-        }
-        match_controls = start.controls;
+        const Start start{ (uint8_t)match_players, (uint8_t)(own_view ? 1 : 0), (uint8_t)delay };
         for (const Peer& peer : peers) {
             if (peer.port >= 0) {
                 send_to(peer.connection, start);
@@ -389,7 +382,6 @@ namespace conker::netplay {
                     return;
                 }
                 peer.port = port;
-                peer.controls = theirs->controls;
                 send_to(peer.connection, Welcome{ (uint8_t)port, (uint8_t)match_players });
                 Event event{ Event::Type::joined };
                 event.port = port;
@@ -472,11 +464,9 @@ namespace conker::netplay {
                 return;
             }
             started = true;
-            match_controls = start->controls;
             Event event{ Event::Type::started };
             event.own_view = start->own_view != 0;
             event.delay = start->delay;
-            event.controls = start->controls;
             events.push_back(std::move(event));
         }
         else if (const Inputs* inputs = std::get_if<Inputs>(&packet); inputs != nullptr) {

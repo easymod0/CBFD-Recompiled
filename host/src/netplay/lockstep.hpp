@@ -73,11 +73,10 @@ namespace conker::lockstep {
     // This peer's port and the match's players, once connected.
     int port();
     int players();
-    // The match's input delay and each port's player's Controls (motion.cpp), once connected.
+    // The match's input delay, once connected.
     int input_delay();
-    const std::array<netplay::Controls, netplay::max_players>& controls();
 
-    // A player's input for one read: their pad and their mouse and gyro movement.
+    // A player's input for one read: their pad, and their mouse and gyro movement with their Controls.
     struct Input {
         netplay::Pad pad;
         netplay::Motion motion;

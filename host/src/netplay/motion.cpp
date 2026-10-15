@@ -6,15 +6,15 @@
 //
 // - This machine's: every input poll's movement (already scaled by the player's sensitivity) is added up,
 //   and taken at the next controller read on the game thread, in fixed point (netplay::Motion: 1/8 pixel,
-//   half recompinput's gyro unit), the part too small for it kept for the next. Lockstep sends it with the
-//   pad, the harness records it.
+//   half recompinput's gyro unit), the part too small for it kept for the next, with the player's settings
+//   as they are then. Lockstep sends it with the pad, the harness records it.
 // - Every player's, at each read (the harness: the match's, the recording's, or this machine's): kept for
 //   that read, and taken once by the camera hooks of that player's camera, for the aiming modes and once
 //   for the orbit. The game runs one aiming update and one camera update per read for each player's
 //   camera (measured in 2- and 4-player matches), so nothing is lost or doubled, and what isn't taken (not
 //   aiming) is dropped at the next read.
-// - Each player's Controls (packets.hpp): their settings that change what their input does, as the match
-//   (or the recording) gives them.
+// - Each player's Controls (packets.hpp): their settings that change what their input does, part of their
+//   movement for each read, so a setting changed in a match takes effect at the same read everywhere.
 //
 // What's kept for the read is in save states (host_state.cpp), as the hooks write what they take into game
 // memory.
@@ -43,11 +43,13 @@ namespace {
     int wheel = 0;
 
     // Every player's for the current read, and whether the hooks have taken it.
-    std::array<Motion, ports> pending{};
+    std::array<Motion, ports> pending = [] {
+        std::array<Motion, ports> none{};
+        for (Motion& m : none) m.controls = conker::motion::default_controls;
+        return none;
+    }();
     std::array<bool, ports> aim_taken{};
     std::array<bool, ports> orbit_taken{};
-    std::array<uint16_t, ports> port_controls = { conker::motion::default_controls, conker::motion::default_controls,
-        conker::motion::default_controls, conker::motion::default_controls };
 
     // `total` in fixed point, as far as an int16 goes; what's left stays in `total`.
     int16_t take_fixed(float& total, float unit) {
@@ -84,6 +86,7 @@ void conker::motion::capture(netplay::Motion& out) {
     out.gyro_y = take_fixed(gyro_y, gyro_unit);
     out.wheel = (int8_t)std::clamp(wheel, -127, 127);
     wheel -= out.wheel;
+    out.controls = local_controls();
 }
 
 void conker::motion::clear_local() {
@@ -118,25 +121,19 @@ bool conker::motion::take_orbit(int port, Turn& out) {
     return true;
 }
 
-void conker::motion::set_controls(const std::array<uint16_t, 4>& controls) {
-    for (int i = 0; i < ports; i++) {
-        port_controls[i] = controls[i] & conker::netplay::controls_mask;
-    }
-}
-
 uint16_t conker::motion::controls(int port) {
-    return (port >= 0 && port < ports) ? port_controls[port] : default_controls;
+    return (port >= 0 && port < ports) ? pending[port].controls : default_controls;
 }
 
-// Per port: mouse x and y (low and high 16 bits), gyro x and y, then the wheel (low 8 bits) and whether the
-// aiming and the orbit took it (bits 8 and 9).
+// Per port: mouse x and y (low and high 16 bits), gyro x and y, then the wheel (low 8 bits), whether the
+// aiming and the orbit took it (bits 8 and 9) and the Controls (the high 16 bits).
 std::vector<uint32_t> conker::motion::state() {
     std::vector<uint32_t> words;
     for (int i = 0; i < ports; i++) {
         const Motion& m = pending[i];
         words.push_back((uint16_t)m.mouse_x | ((uint32_t)(uint16_t)m.mouse_y << 16));
         words.push_back((uint16_t)m.gyro_x | ((uint32_t)(uint16_t)m.gyro_y << 16));
-        words.push_back((uint8_t)m.wheel | (aim_taken[i] ? 0x100u : 0) | (orbit_taken[i] ? 0x200u : 0));
+        words.push_back((uint8_t)m.wheel | (aim_taken[i] ? 0x100u : 0) | (orbit_taken[i] ? 0x200u : 0) | ((uint32_t)m.controls << 16));
     }
     return words;
 }
@@ -145,12 +142,13 @@ void conker::motion::set_state(const std::vector<uint32_t>& words) {
     for (int i = 0; i < ports; i++) {
         if (words.size() < (size_t)(i + 1) * 3) {
             pending[i] = {};
+            pending[i].controls = default_controls;
             aim_taken[i] = orbit_taken[i] = false;
             continue;
         }
         const uint32_t* w = words.data() + i * 3;
         pending[i] = { (int16_t)(w[0] & 0xFFFF), (int16_t)(w[0] >> 16), (int16_t)(w[1] & 0xFFFF), (int16_t)(w[1] >> 16),
-                       (int8_t)(w[2] & 0xFF) };
+                       (int8_t)(w[2] & 0xFF), (uint16_t)(w[2] >> 16) };
         aim_taken[i] = (w[2] & 0x100) != 0;
         orbit_taken[i] = (w[2] & 0x200) != 0;
     }

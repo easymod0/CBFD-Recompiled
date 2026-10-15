@@ -38,13 +38,12 @@
 // netplay match can't have mods on but texture packs.
 //
 // The recording: "CBFDPADS", then a little-endian u32 version (3) and u32 port count, u64 XXH3-64 of the
-// ROM and u64 hash of the settings profile, each port's player's Controls (4 u16: motion.cpp), then for
-// each read the number of controllers the game reads (u8), four pads of 5 bytes each (u16 buttons, s8 stick
-// x, s8 stick y, u8 err_no) and four players' movement of 9 bytes each (s16 mouse x, y, s16 gyro x, y, s8
-// wheel: netplay::Motion). A replay is refused if its ROM or profile isn't this run's; a hash of 0 isn't
-// checked (a made-up recording, tools/netplay/make_inputs.py). Version 2 had no Controls or movement (the
-// defaults, and none), version 1 no hashes either (its header ends at the port count): it's replayed
-// unchecked.
+// ROM and u64 hash of the settings profile, then for each read the number of controllers the game reads
+// (u8), four pads of 5 bytes each (u16 buttons, s8 stick x, s8 stick y, u8 err_no) and four players'
+// movement of 11 bytes each (s16 mouse x, y, s16 gyro x, y, s8 wheel, u16 Controls: netplay::Motion,
+// motion.cpp). A replay is refused if its ROM or profile isn't this run's; a hash of 0 isn't checked (a
+// made-up recording, tools/netplay/make_inputs.py). Version 2 had no movement (none, with the default
+// Controls), version 1 no hashes either (its header ends at the port count): it's replayed unchecked.
 
 #include <algorithm>
 #include <array>
@@ -78,12 +77,11 @@
 namespace {
     constexpr char magic[8] = { 'C', 'B', 'F', 'D', 'P', 'A', 'D', 'S' };
     constexpr uint32_t version = 3;
-    constexpr size_t header_size = 40;
-    constexpr size_t header_size_v2 = 32;
+    constexpr size_t header_size = 32;
     constexpr size_t header_size_v1 = 16;
     constexpr int max_pads = 4;
     constexpr size_t pad_size = 5;
-    constexpr size_t motion_size = 9;
+    constexpr size_t motion_size = 11;
     constexpr size_t read_size = 1 + max_pads * (pad_size + motion_size);
     constexpr size_t read_size_v2 = 1 + max_pads * pad_size;
     constexpr uint64_t no_limit = UINT64_MAX;
@@ -113,13 +111,17 @@ namespace {
     FILE* hash_log = nullptr;
     std::vector<uint8_t> replay;
     uint64_t replay_reads = 0;
-    // Where the replay's reads start, their size, and its hashes (0: not checked); whether they hold movement,
-    // and each port's Controls.
+    // Where the replay's reads start, their size, and its hashes (0: not checked); whether they hold movement.
     size_t replay_header = header_size;
     size_t replay_read_size = read_size;
     bool replay_motion = true;
-    std::array<uint16_t, max_pads> replay_controls = { conker::motion::default_controls, conker::motion::default_controls,
-        conker::motion::default_controls, conker::motion::default_controls };
+
+    // No movement, with these Controls.
+    conker::netplay::Motion still(uint16_t controls = conker::motion::default_controls) {
+        conker::netplay::Motion m;
+        m.controls = controls;
+        return m;
+    }
     uint64_t replay_rom_hash = 0;
     uint64_t replay_profile_hash = 0;
     // Reads past this aren't logged, and the game is quit at the first.
@@ -197,8 +199,7 @@ namespace {
             replay_motion = false;
             std::printf("[harness] %s is a version 1 recording: its ROM and settings aren't checked\n", replay_path.c_str());
         }
-        else if ((recorded_version != 2 && recorded_version != version) ||
-            replay.size() < (recorded_version == 2 ? header_size_v2 : header_size)) {
+        else if ((recorded_version != 2 && recorded_version != version) || replay.size() < header_size) {
             std::fprintf(stderr, "[harness] %s is a version %u recording; this build reads versions 1 to %u\n",
                 replay_path.c_str(), recorded_version, version);
             return false;
@@ -207,18 +208,8 @@ namespace {
             replay_rom_hash = get_u64(replay.data() + 16);
             replay_profile_hash = get_u64(replay.data() + 24);
             if (recorded_version == 2) {
-                replay_header = header_size_v2;
                 replay_read_size = read_size_v2;
                 replay_motion = false;
-            }
-            else {
-                for (int i = 0; i < max_pads; i++) {
-                    replay_controls[i] = (uint16_t)(replay[32 + 2 * i] | (replay[33 + 2 * i] << 8));
-                    if ((replay_controls[i] & ~conker::netplay::controls_mask) != 0) {
-                        std::fprintf(stderr, "[harness] %s: port %d's controls are %04x\n", replay_path.c_str(), i + 1, replay_controls[i]);
-                        return false;
-                    }
-                }
             }
         }
         const uint32_t recorded_ports = get_u32(replay.data() + 12);
@@ -236,6 +227,14 @@ namespace {
                 std::fprintf(stderr, "[harness] %s: read %llu has %u controllers\n", replay_path.c_str(),
                     (unsigned long long)i, replay[replay_header + i * replay_read_size]);
                 return false;
+            }
+            for (int port = 0; replay_motion && port < max_pads; port++) {
+                const uint8_t* m = replay.data() + replay_header + i * replay_read_size + 1 + max_pads * pad_size + port * motion_size;
+                if ((((uint16_t)(m[9] | (m[10] << 8))) & ~conker::netplay::controls_mask) != 0) {
+                    std::fprintf(stderr, "[harness] %s: read %llu: port %d's controls aren't any\n", replay_path.c_str(),
+                        (unsigned long long)i, port + 1);
+                    return false;
+                }
             }
         }
         ports = (int)recorded_ports;
@@ -363,11 +362,11 @@ namespace {
     }
     conker::netplay::Motion replay_motion_of(uint64_t read, int port) {
         if (!replay_motion) {
-            return {};
+            return still();
         }
         const uint8_t* m = replay.data() + replay_header + read * replay_read_size + 1 + max_pads * pad_size + port * motion_size;
         return { (int16_t)(m[0] | (m[1] << 8)), (int16_t)(m[2] | (m[3] << 8)), (int16_t)(m[4] | (m[5] << 8)),
-                 (int16_t)(m[6] | (m[7] << 8)), (int8_t)m[8] };
+                 (int16_t)(m[6] | (m[7] << 8)), (int8_t)m[8], (uint16_t)(m[9] | (m[10] << 8)) };
     }
 
     // Lockstep's source of this peer's own input (lockstep.hpp): a replay's for this port, or the first
@@ -376,14 +375,14 @@ namespace {
     conker::lockstep::Input local_input(uint64_t for_read, const ultramodern::input::Pad* live) {
         if (!replay.empty()) {
             if (for_read >= replay_reads) {
-                return {};
+                return { {}, still() };
             }
             conker::netplay::Pad pad = replay_pad(for_read, conker::lockstep::port());
             pad.err_no = 0;
             return { pad, replay_motion_of(for_read, conker::lockstep::port()) };
         }
         if (live == nullptr) {
-            return {};
+            return { {}, still(conker::motion::local_controls()) };
         }
         conker::lockstep::Input input{ { live[0].button, live[0].stick_x, live[0].stick_y, 0 }, {} };
         conker::motion::capture(input.motion);
@@ -406,8 +405,9 @@ namespace {
             (read == state_save_at ? state_save_at : state_load_at) = no_limit;
             ultramodern::save_states::set_safe_points_wanted(true);
         }
-        // Each player's mouse and gyro movement for this read (motion.cpp): none unless one of the below gives it.
-        conker::netplay::Motion motions[max_pads] = {};
+        // Each player's mouse and gyro movement for this read (motion.cpp): none, with the default Controls,
+        // unless one of the below gives it.
+        conker::netplay::Motion motions[max_pads] = { still(), still(), still(), still() };
         if (read > last_read || match_over) {
             // Waiting for the quit: the game gets no input.
             for (int i = 0; i < max_pads; i++) {
@@ -452,7 +452,7 @@ namespace {
             match_over = true;
             for (int i = 0; i < max_pads; i++) {
                 pads[i] = { 0, 0, 0, pads[i].err_no };
-                motions[i] = {};
+                motions[i] = still();
             }
             conker::motion::set_read(motions);
             if (hash_log != nullptr) {
@@ -499,6 +499,8 @@ namespace {
                     m[2 * k + 1] = (uint8_t)((uint16_t)v >> 8);
                 }
                 m[8] = (uint8_t)motion.wheel;
+                m[9] = (uint8_t)motion.controls;
+                m[10] = (uint8_t)(motion.controls >> 8);
             }
             std::fwrite(out, 1, sizeof(out), record_file);
             // Written out every 2 s of game or so, should the program end before finish() closes it.
@@ -791,7 +793,6 @@ void conker::harness::start(uint8_t* game_rdram) {
             // changed it since.
             conker::netplay::Hello sent = conker::lockstep::sent_hello();
             sent.key = 0;   // the match's, not the game's
-            sent.controls = hello.controls;     // the player's, which the match goes by as they were sent
             if (!(sent == hello)) {
                 std::fprintf(stderr, "[harness] the game loaded isn't the one the match was joined with\n");
                 conker::lockstep::end(conker::netplay::Reason::rom, "the ROM loaded isn't the one the match was joined with");
@@ -813,18 +814,6 @@ void conker::harness::start(uint8_t* game_rdram) {
         }
         ports = conker::lockstep::players();
     }
-    // Each port's player's Controls (motion.cpp): the replay's (a match of peers replaying a recording too: it
-    // has every player's), the match's, or this machine's for player 1.
-    std::array<uint16_t, max_pads> controls = replay_controls;
-    if (replay.empty() && conker::lockstep::active()) {
-        for (int i = 0; i < max_pads; i++) {
-            controls[i] = i < ports ? conker::lockstep::controls()[i] : conker::motion::default_controls;
-        }
-    }
-    else if (replay.empty()) {
-        controls[0] = hello.controls;
-    }
-    conker::motion::set_controls(controls);
     if (record_file != nullptr) {
         uint8_t header[header_size];
         std::memcpy(header, magic, sizeof(magic));
@@ -832,10 +821,6 @@ void conker::harness::start(uint8_t* game_rdram) {
         put_u32(header + 12, (uint32_t)ports);
         put_u64(header + 16, rom_hash);
         put_u64(header + 24, profile_hash);
-        for (int i = 0; i < max_pads; i++) {
-            header[32 + 2 * i] = (uint8_t)controls[i];
-            header[33 + 2 * i] = (uint8_t)(controls[i] >> 8);
-        }
         std::fwrite(header, 1, sizeof(header), record_file);
     }
 

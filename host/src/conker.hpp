@@ -120,16 +120,16 @@ namespace conker {
 #if defined(CONKER_NETPLAY)
         // From the input thread, after each poll: adds its movement for the next read.
         void on_input_poll();
-        // On the game thread, at a read: this machine's movement since the last read; and dropping it.
+        // On the game thread, at a read: this machine's movement since the last read, with its player's
+        // Controls as they are now; and dropping it.
         void capture(netplay::Motion& out);
         void clear_local();
-        // At each read, every port's movement (4).
+        // At each read, every port's movement and Controls (4).
         void set_read(const netplay::Motion* motions);
         // The current read's movement for `port`, once each for the aiming modes and the orbit (false: taken).
         bool take_aim(int port, Turn& out);
         bool take_orbit(int port, Turn& out);
-        // Each port's Controls, for the match or replay; and one's (the defaults for a port with no player).
-        void set_controls(const std::array<uint16_t, 4>& controls);
+        // A port's Controls at the current read (the defaults for a port with no player).
         uint16_t controls(int port);
         // For save states (host_state.cpp): the current read's movement and what took it.
         std::vector<uint32_t> state();
