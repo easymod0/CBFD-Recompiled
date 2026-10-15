@@ -1,7 +1,9 @@
 // Netplay's "my view only" (fork issue #9): in a match, each machine still runs the whole game, split
 // screen and all (every player's view is drawn on every machine, so their games stay the same), but the
-// window can show only this player's view, scaled up. It's done as the picture is shown (rt64.patch,
-// RT64::setPresentationFocus), so nothing in game memory changes and it can't desync.
+// window can show only this player's view, across the whole window. RT64 draws that view anew across the whole
+// frame with its projection made taller to match, so it isn't stretched and shows more of the scene, and leaves
+// the other views out (rt64.patch, RT64::setViewFocusRedraw; widescreen then widens it as any full-frame view).
+// Only the renderer changes, not game memory, so it can't desync.
 //
 // Each frame, the game's cameras (D_800BE628, 0x180 bytes each, the same as reticle.cpp's and
 // widescreen.cpp's) say where each player's view is on the N64's screen: + 0x24 top, + 0x28 bottom,
@@ -12,6 +14,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cstdlib>
 
 #include "recomp.h"
 
@@ -19,8 +22,9 @@
 #include "lockstep.hpp"
 
 namespace RT64 {
-    // rt64.patch: the part of the picture to show alone, as shares of it.
-    void setPresentationFocus(float left, float top, float right, float bottom);
+    // rt64.patch: one view of the split screen drawn anew across the whole frame, the others not drawn
+    // (rectangles in pixels of the frame).
+    void setViewFocusRedraw(bool on, float left, float top, float right, float bottom, float frameWidth, float frameHeight);
 }
 
 namespace {
@@ -40,14 +44,16 @@ namespace {
         return value;
     }
 
-    void show(float left, float top, float right, float bottom) {
+    // Draws the part of the frame given (shares of it) across the whole frame; (0, 0, 1, 1) draws it all as it is.
+    void show(float left, float top, float right, float bottom, int32_t frame_width) {
         const float next[4] = { left, top, right, bottom };
-        if (std::memcmp(next, shown, sizeof(shown)) == 0) {
-            return;
+        const bool whole = left <= 0.0f && top <= 0.0f && right >= 1.0f && bottom >= 1.0f;
+        const float w = (float)frame_width;
+        RT64::setViewFocusRedraw(!whole, left * w, top * frame_height, right * w, bottom * frame_height, w, frame_height);
+        if (std::memcmp(next, shown, sizeof(shown)) != 0) {
+            std::memcpy(shown, next, sizeof(shown));
+            std::printf("[netplay] drawing %.3f %.3f %.3f %.3f of the picture across it\n", left, top, right, bottom);
         }
-        std::memcpy(shown, next, sizeof(shown));
-        RT64::setPresentationFocus(left, top, right, bottom);
-        std::printf("[netplay] showing %.3f %.3f %.3f %.3f of the picture\n", left, top, right, bottom);
     }
 }
 
@@ -62,12 +68,12 @@ bool conker::netplay_view::is_mine_only() {
 void conker::netplay_view::game_frame(uint8_t* rdram) {
     // In a match, this machine's port; replaying a recording (to try it), player 1's.
     const bool in_match = conker::lockstep::connected();
-    const int port = in_match ? conker::lockstep::port() : 0;
+    const int port = in_match ? conker::lockstep::port() : (std::getenv("TMP_VIEW_PORT") ? std::atoi(std::getenv("TMP_VIEW_PORT")) : 0);
     const uint32_t cameras = (uint32_t)MEM_W(0, cameras_pointer);
     const int32_t frame_width = MEM_W(0, frame_width_address);
     if (!mine_only || !(in_match || conker::harness::replaying()) || port < 0 || cameras < 0x80000000u || cameras >= 0x80800000u ||
         frame_width < 16 || frame_width > 640) {
-        show(0, 0, 1, 1);
+        show(0, 0, 1, 1, frame_width);
         return;
     }
     auto rect = [&](int index, float out[4]) {
@@ -85,14 +91,14 @@ void conker::netplay_view::game_frame(uint8_t* rdram) {
     // Player 1's view reaches every side (to within the 2-pixel border): not split.
     const bool split = !(first[0] < 0.03f && first[1] < 0.03f && first[2] > 0.97f && first[3] > 0.97f);
     if (!split) {
-        show(0, 0, 1, 1);
+        show(0, 0, 1, 1, frame_width);
         return;
     }
     float own[4];
     rect(port, own);
     if (own[2] - own[0] < 0.05f || own[3] - own[1] < 0.05f) {
-        show(0, 0, 1, 1);
+        show(0, 0, 1, 1, frame_width);
         return;
     }
-    show(own[0], own[1], own[2], own[3]);
+    show(own[0], own[1], own[2], own[3], frame_width);
 }
