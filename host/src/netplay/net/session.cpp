@@ -129,7 +129,7 @@ namespace conker::netplay {
         entry_open = false;
         for (const Peer& peer : peers) {
             if (peer.port >= 0) {
-                send_to(peer.connection, Start{ (uint8_t)match_players }, true);
+                send_to(peer.connection, Start{ (uint8_t)match_players });
             }
         }
         return true;
@@ -157,7 +157,7 @@ namespace conker::netplay {
                 break;
             case k_ESteamNetworkingConnectionState_Connected:
                 if (!is_host && find(info->m_hConn) != nullptr) {
-                    send_to(info->m_hConn, hello, true);
+                    send_to(info->m_hConn, hello);
                 }
                 break;
             case k_ESteamNetworkingConnectionState_ClosedByPeer:
@@ -249,14 +249,14 @@ namespace conker::netplay {
                     if (port < 0) refusal = Reason::full;
                 }
                 if (refusal) {
-                    send_to(peer.connection, Refuse{ *refusal }, true);
+                    send_to(peer.connection, Refuse{ *refusal });
                     SteamNetworkingSockets()->CloseConnection(peer.connection, k_ESteamNetConnectionEnd_App_Min + (int)*refusal,
                         describe(*refusal), true);
                     peers.erase(peers.begin() + (&peer - peers.data()));
                     return;
                 }
                 peer.port = port;
-                send_to(peer.connection, Welcome{ (uint8_t)port, (uint8_t)match_players }, true);
+                send_to(peer.connection, Welcome{ (uint8_t)port, (uint8_t)match_players });
                 Event event{ Event::Type::joined };
                 event.port = port;
                 event.players = match_players;
@@ -267,7 +267,7 @@ namespace conker::netplay {
                 // Passed on to the others, as they only connect to the host.
                 for (const Peer& other : peers) {
                     if (other.port >= 0 && other.connection != peer.connection) {
-                        send_to(other.connection, *inputs, false);
+                        send_to(other.connection, *inputs);
                     }
                 }
             }
@@ -350,7 +350,7 @@ namespace conker::netplay {
     }
 
     void Session::drop(Peer& peer, Reason reason, std::vector<Event>* events) {
-        send_to(peer.connection, Bye{ reason }, true);
+        send_to(peer.connection, Bye{ reason });
         SteamNetworkingSockets()->CloseConnection(peer.connection, k_ESteamNetConnectionEnd_App_Min + (int)reason,
             describe(reason), true);
         if (events != nullptr && (!is_host || peer.port >= 0)) {
@@ -362,7 +362,9 @@ namespace conker::netplay {
         peers.erase(peers.begin() + (&peer - peers.data()));
     }
 
-    void Session::send_to(uint32_t connection, const Packet& packet, bool reliable) {
+    // Everything is sent reliably (resent until it arrives, in order), and at once: lockstep needs every
+    // input, and waits for it anyway.
+    void Session::send_to(uint32_t connection, const Packet& packet) {
         uint8_t buffer[max_packet_size];
         const size_t size = encode(packet, buffer);
         if (size == 0) {
@@ -370,13 +372,13 @@ namespace conker::netplay {
             return;
         }
         SteamNetworkingSockets()->SendMessageToConnection(connection, buffer, (uint32)size,
-            reliable ? k_nSteamNetworkingSend_Reliable : k_nSteamNetworkingSend_UnreliableNoNagle, nullptr);
+            k_nSteamNetworkingSend_ReliableNoNagle, nullptr);
     }
 
     void Session::send(const Inputs& inputs) {
         for (const Peer& peer : peers) {
             if (peer.port >= 0) {
-                send_to(peer.connection, inputs, false);
+                send_to(peer.connection, inputs);
             }
         }
     }
@@ -384,7 +386,7 @@ namespace conker::netplay {
     void Session::send(const Hash& hash) {
         for (const Peer& peer : peers) {
             if (peer.port >= 0) {
-                send_to(peer.connection, hash, true);
+                send_to(peer.connection, hash);
             }
         }
     }

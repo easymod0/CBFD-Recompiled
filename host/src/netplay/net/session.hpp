@@ -1,7 +1,7 @@
 // A netplay session over GameNetworkingSockets (fork issue #7): the host listens on a UDP port and the
 // others connect to it directly by address. Connections are encrypted by the library (they aren't
 // authenticated: there is no certificate authority, so someone in the path could still pose as the
-// host). All that's sent are the packets in packets.hpp.
+// host). All that's sent are the packets in packets.hpp, reliably (resent until they arrive, in order).
 //
 // The handshake: a joiner sends Hello (build, ROM and settings profile hashes); the host refuses any
 // difference, or a full or started match, and otherwise gives it the lowest free port (the host is
@@ -81,7 +81,7 @@ namespace conker::netplay {
         void on_status_changed(const void* info);
         void handle(Peer& peer, const Packet& packet, std::vector<Event>& events);
         void drop(Peer& peer, Reason reason, std::vector<Event>* events);
-        void send_to(uint32_t connection, const Packet& packet, bool reliable);
+        void send_to(uint32_t connection, const Packet& packet);
         Peer* find(uint32_t connection);
         friend void status_changed_callback(void* info);
 

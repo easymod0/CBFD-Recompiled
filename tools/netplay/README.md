@@ -125,8 +125,8 @@ and, at the read where they first differ, the memory itself:
   versioned, each field checked; the only code that reads from the network. `packets_test.cpp` tests
   it and `fuzz_packets.cpp` fuzzes it.
 - **`session.cpp`**: the handshake refuses another build, ROM or settings profile, a full or started
-  match; then each peer sends only its own port's pads (8 reads per packet, so lost packets don't
-  matter) and memory hashes.
+  match; then each peer sends only its own port's pads and memory hashes, reliably (lost packets are
+  resent: lockstep needs every input).
 - **`netplay_probe`**: two or more copies play a made-up match (`host <port>`, `join <address:port>`,
   `--loss <percent>`) and check every pad arrived right. `test.sh` runs the tests and a few matches;
   `.github/workflows/netplay-transport.yml` runs them on Windows, Linux and macOS (no ROM needed).

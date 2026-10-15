@@ -21,8 +21,8 @@ namespace conker::netplay {
     constexpr uint16_t protocol_version = 1;
     // The game's controller ports.
     constexpr int max_players = 4;
-    // How many reads an Inputs packet carries: the newest and the ones before it, so a lost packet
-    // costs nothing as long as one of the next few arrives.
+    // The most reads an Inputs packet carries: a peer catching up can send several at once. (Inputs are
+    // sent reliably, so none is lost: lockstep can't go on without every one.)
     constexpr int input_window = 8;
     // The largest packet, to size buffers.
     constexpr size_t max_packet_size = 64;

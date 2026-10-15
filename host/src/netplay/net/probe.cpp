@@ -5,7 +5,7 @@
 //   netplay_probe host <port> [--players 2] [options]
 //   netplay_probe join <address:port> [options]
 //     --reads <n>        how many reads each peer sends (300: 10 s)
-//     --loss <percent>   the library drops this share of the packets sent, to test the inputs' window
+//     --loss <percent>   the library drops this share of the packets sent (they're resent)
 //     --build/--rom/--profile <hex>   the handshake's hashes (all 1 by default), to test refusals
 //
 // It exits 0 once it has every other port's pads for every read and they're all right, 1 otherwise.
@@ -32,20 +32,18 @@ namespace {
         return Pad{ (uint16_t)(x & ~reserved_buttons), (int8_t)(x >> 16), (int8_t)(x >> 24), 0 };
     }
 
-    // The pads of `port` for reads `last` - 7 to `last` (or from 0).
-    Inputs window_ending_at(int port, uint32_t last) {
+    // The pad of `port` for `read`, to send.
+    Inputs inputs_for(int port, uint32_t read) {
         Inputs inputs;
         inputs.port = (uint8_t)port;
-        inputs.first_read = last + 1 >= (uint32_t)input_window ? last + 1 - input_window : 0;
-        inputs.count = (uint8_t)(last - inputs.first_read + 1);
-        for (int i = 0; i < inputs.count; i++) {
-            inputs.pads[i] = made_up_pad(port, inputs.first_read + i);
-        }
+        inputs.first_read = read;
+        inputs.count = 1;
+        inputs.pads[0] = made_up_pad(port, read);
         return inputs;
     }
 
     struct Received {
-        uint32_t next = 0;      // the first read not had yet (reads arrive in windows, so only in order)
+        uint32_t next = 0;      // the first read not had yet (they arrive in order)
         uint32_t wrong = 0;     // pads that weren't the ones sent
         uint32_t packets = 0;
     };
@@ -140,30 +138,26 @@ int main(int argc, char** argv) {
                                 r.packets++;
                                 for (int i = 0; i < inputs->count; i++) {
                                     const uint32_t read = inputs->first_read + i;
-                                    if (read == r.next) {
-                                        if (!(inputs->pads[i] == made_up_pad(inputs->port, read))) {
-                                            r.wrong++;
-                                        }
-                                        r.next++;
+                                    // Out of order, missing or not the pad sent: all wrong.
+                                    if (read != r.next || !(inputs->pads[i] == made_up_pad(inputs->port, read))) {
+                                        r.wrong++;
                                     }
+                                    r.next = read + 1;
                                 }
                             }
                             break;
                     }
                 }
 
-                // Every 1/30 s once the match has started: the next read's pads (and, once all are sent, the
-                // last window again, in case it was lost).
+                // Every 1/30 s once the match has started: the next read's pad.
                 const auto now = std::chrono::steady_clock::now();
                 if (!playing) {
                     next_tick = now;
                 }
-                else if (now >= next_tick) {
+                else if (now >= next_tick && sent < reads) {
                     next_tick += std::chrono::microseconds(33333);
-                    if (sent < reads) {
-                        sent++;
-                    }
-                    session.send(window_ending_at(session.port(), sent - 1));
+                    session.send(inputs_for(session.port(), sent));
+                    sent++;
                 }
 
                 bool complete = playing && sent == reads && (int)received.size() == players - 1;
