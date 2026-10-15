@@ -4,7 +4,7 @@
 # (libFuzzer). It needs no ROM: the transport builds without the game.
 #
 # Like the other workflows, it uses no third-party actions: git, and on Windows the vcpkg on GitHub's
-# runners (for protobuf).
+# runners (for protobuf, from host/src/netplay/net/vcpkg.json).
 name: netplay-transport
 
 on:
@@ -85,17 +85,14 @@ jobs:
           git clone -q --no-checkout "https://github.com/$GITHUB_REPOSITORY" .
           git checkout -q "$GITHUB_SHA"
 
-      # protobuf from the runner's vcpkg (it builds it, with abseil: most of this job's time). The
-      # crypto is Windows' own (bcrypt).
-      - name: Install dependencies
-        shell: bash
-        run: |
-          "$VCPKG_INSTALLATION_ROOT/vcpkg" install protobuf:x64-windows
-
+      # protobuf from the runner's vcpkg through the manifest, as a developer's build gets it from
+      # Visual Studio's (host/src/netplay/net/vcpkg.cmake): it builds it, with abseil, which is most of
+      # this job's time. The crypto is Windows' own (bcrypt).
       - name: Build
         shell: bash
         run: |
-          cmake -S host/src/netplay/net -B build -DCMAKE_TOOLCHAIN_FILE="$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+          export VCPKG_ROOT="$VCPKG_INSTALLATION_ROOT"
+          cmake -S host/src/netplay/net -B build
           cmake --build build --config Release
 
       - name: Test

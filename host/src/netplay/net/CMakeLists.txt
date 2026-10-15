@@ -7,11 +7,12 @@
 #
 # GameNetworkingSockets is downloaded while configuring (FetchContent, a pinned commit), only when this
 # is built: not a submodule, as its own submodules (WebRTC, gigabytes) would come with build.sh's
-# recursive update. It needs protobuf, and OpenSSL for its crypto but on Windows (bcrypt, built in). Its
-# ICE (NAT traversal, relays) is off: direct connections only.
+# recursive update. It needs protobuf (on Windows from vcpkg: vcpkg.cmake), and OpenSSL for its crypto but
+# on Windows (bcrypt, built in). Its ICE (NAT traversal, relays) is off: direct connections only.
 cmake_minimum_required(VERSION 3.20)
 
 if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    include("${CMAKE_CURRENT_SOURCE_DIR}/vcpkg.cmake")
     project(ConkerNetplay C CXX)
     set(CMAKE_CXX_STANDARD 20)
     set(CMAKE_CXX_STANDARD_REQUIRED True)

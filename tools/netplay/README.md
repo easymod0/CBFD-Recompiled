@@ -6,10 +6,21 @@ harness: record a game's inputs, replay them, and compare a hash of the game's m
 
 ## The harness
 
-Built only with the CMake option `CONKER_NETPLAY` (off by default):
+Built only with the CMake option `CONKER_NETPLAY` (off by default). With the build scripts, on a
+clean build folder (they keep what it was configured with):
 
-    cmake -S host -B host/build -DCONKER_NETPLAY=ON
-    cmake --build host/build
+    CONKER_CMAKE_ARGS=-DCONKER_NETPLAY=ON ./build.sh             (Linux, macOS)
+    set CONKER_CMAKE_ARGS=-DCONKER_NETPLAY=ON && build.cmd       (Windows)
+
+or by hand, `cmake -S host -B host/build -DCONKER_NETPLAY=ON`. Netplay also needs protobuf and, but on
+Windows, OpenSSL (for GameNetworkingSockets):
+
+- **Linux:** `libprotobuf-dev protobuf-compiler libssl-dev` (on Ubuntu); `build.sh` checks for them.
+- **macOS:** `brew install protobuf openssl@3`; `build.sh` checks for them and points CMake at OpenSSL.
+- **Windows:** nothing to install: protobuf comes from the vcpkg that Visual Studio 2022 (17.6 and later)
+  installs with its C++ workload (or `VCPKG_ROOT`'s), as `host/src/netplay/net/vcpkg.json` asks, built
+  static so the game needs no more DLLs. The first build takes about 20 minutes longer; vcpkg keeps it,
+  so later ones don't.
 
 Its options (see `host/src/netplay/harness.cpp`):
 

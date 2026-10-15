@@ -9,6 +9,14 @@ cmake_minimum_required(VERSION 3.20)
 #   cmake -S host -B host/build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=RelWithDebInfo
 #   cmake --build host/build
 
+# Netplay (issue #126), off until it has been reviewed and tested. So far: the determinism harness
+# (--record, --replay, --hash-log: src/netplay/harness.cpp) and the transport (src/netplay/net).
+option(CONKER_NETPLAY "Build the netplay work in progress" OFF)
+if (CONKER_NETPLAY)
+    # On Windows, protobuf from vcpkg: set up before project().
+    include("${CMAKE_CURRENT_SOURCE_DIR}/src/netplay/net/vcpkg.cmake")
+endif()
+
 project(ConkerRecomp C CXX)
 if (APPLE)
     # RT64 and RecompFrontend have Objective-C++ sources (Metal, Cocoa); rt64 enables
@@ -24,9 +32,6 @@ set(CMAKE_C_STANDARD 11)
 
 # OFF builds a headless host (null renderer, no input or sound), for tests.
 option(CONKER_RT64 "Render with RT64 in an SDL window" ON)
-# Netplay (issue #126), off until it has been reviewed and tested. So far: the determinism harness
-# (--record, --replay, --hash-log: src/netplay/harness.cpp).
-option(CONKER_NETPLAY "Build the netplay work in progress" OFF)
 
 set(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 set(RT64_DIR "${REPO_ROOT}/tools/rt64")
@@ -114,8 +119,8 @@ target_link_libraries(ConkerRecomp PRIVATE RecompiledFuncs librecomp ultramodern
 if (CONKER_NETPLAY)
     target_sources(ConkerRecomp PRIVATE src/netplay/harness.cpp src/netplay/profile.cpp)
     target_compile_definitions(ConkerRecomp PRIVATE CONKER_NETPLAY)
-    # The transport (src/netplay/net): GameNetworkingSockets, which needs protobuf and (but on Windows)
-    # OpenSSL.
+    # The transport (src/netplay/net): GameNetworkingSockets, which needs protobuf (on Windows from
+    # vcpkg) and, but on Windows, OpenSSL.
     add_subdirectory(src/netplay/net)
     target_link_libraries(ConkerRecomp PRIVATE conker_netplay_net)
 endif()
