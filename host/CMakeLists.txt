@@ -114,6 +114,10 @@ target_link_libraries(ConkerRecomp PRIVATE RecompiledFuncs librecomp ultramodern
 if (CONKER_NETPLAY)
     target_sources(ConkerRecomp PRIVATE src/netplay/harness.cpp src/netplay/profile.cpp)
     target_compile_definitions(ConkerRecomp PRIVATE CONKER_NETPLAY)
+    # The transport (src/netplay/net): GameNetworkingSockets, which needs protobuf and (but on Windows)
+    # OpenSSL.
+    add_subdirectory(src/netplay/net)
+    target_link_libraries(ConkerRecomp PRIVATE conker_netplay_net)
 endif()
 
 if (CONKER_RT64)

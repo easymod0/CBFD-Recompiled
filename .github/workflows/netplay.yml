@@ -66,7 +66,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y git python3 cmake ninja-build clang lld pkg-config libsdl2-dev libdbus-1-dev libfreetype-dev
+          sudo apt-get install -y git python3 cmake ninja-build clang lld pkg-config libsdl2-dev libdbus-1-dev libfreetype-dev libprotobuf-dev protobuf-compiler libssl-dev
 
       # The game as players build it, with the harness: the check runs it with --headless.
       - name: Build

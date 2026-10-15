@@ -113,6 +113,24 @@ and, at the read where they first differ, the memory itself:
     ... --hash-log a.log --dump-at 900    (and the same for b)
     tools/netplay/compare_hashes.py a.log b.log --dumps a.log.900.bin b.log.900.bin
 
+## The transport (in progress, fork issue #7)
+
+`host/src/netplay/net/` holds what goes over the network, and builds without the game or the ROM
+(its `CMakeLists.txt`). The game links it with `CONKER_NETPLAY`, but doesn't use it yet (lockstep, #8).
+
+- **GameNetworkingSockets** (v1.6.1, downloaded while configuring): encrypted UDP connections, direct by
+  address. The host listens on a port; the others connect to it, and it passes their inputs on. Its
+  NAT traversal and relays (ICE) are off for now, so the host may have to forward the port.
+- **`packets.cpp`**: every packet (Hello, Welcome, Refuse, Start, Inputs, Hash, Bye), fixed-size and
+  versioned, each field checked; the only code that reads from the network. `packets_test.cpp` tests
+  it and `fuzz_packets.cpp` fuzzes it.
+- **`session.cpp`**: the handshake refuses another build, ROM or settings profile, a full or started
+  match; then each peer sends only its own port's pads (8 reads per packet, so lost packets don't
+  matter) and memory hashes.
+- **`netplay_probe`**: two or more copies play a made-up match (`host <port>`, `join <address:port>`,
+  `--loss <percent>`) and check every pad arrived right. `test.sh` runs the tests and a few matches;
+  `.github/workflows/netplay-transport.yml` runs them on Windows, Linux and macOS (no ROM needed).
+
 ## The scripts
 
 | Script | |
