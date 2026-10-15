@@ -142,8 +142,11 @@ namespace conker::netplay {
     }
 
     Session::~Session() {
-        if (!peers.empty() || listen_socket != k_HSteamListenSocket_Invalid) {
+        if (!peers.empty()) {
             leave(Reason::quit);
+        }
+        if (listen_socket != k_HSteamListenSocket_Invalid) {
+            SteamNetworkingSockets()->CloseListenSocket(listen_socket);
         }
         if (poll_group != k_HSteamNetPollGroup_Invalid) {
             SteamNetworkingSockets()->DestroyPollGroup(poll_group);
@@ -532,9 +535,8 @@ namespace conker::netplay {
         while (!peers.empty()) {
             drop(peers.back(), reason, nullptr);
         }
-        if (listen_socket != k_HSteamListenSocket_Invalid) {
-            SteamNetworkingSockets()->CloseListenSocket(listen_socket);
-            listen_socket = k_HSteamListenSocket_Invalid;
-        }
+        // The listen socket stays open (nobody more is let in) until the session goes: closing it closes
+        // every connection accepted on it at once, goodbyes not yet sent and all.
+        entry_open = false;
     }
 }
