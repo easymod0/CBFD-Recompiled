@@ -126,10 +126,10 @@ and, at the read where they first differ, the memory itself:
     ... --hash-log a.log --dump-at 900    (and the same for b)
     tools/netplay/compare_hashes.py a.log b.log --dumps a.log.900.bin b.log.900.bin
 
-## The transport (in progress, fork issue #7)
+## The transport (fork issue #7)
 
 `host/src/netplay/net/` holds what goes over the network, and builds without the game or the ROM
-(its `CMakeLists.txt`). The game links it with `CONKER_NETPLAY`, but doesn't use it yet (lockstep, #8).
+(its `CMakeLists.txt`). The game links it with `CONKER_NETPLAY`, for the lockstep (below).
 
 - **GameNetworkingSockets** (v1.6.1, downloaded while configuring): encrypted UDP connections, direct by
   address. The host listens on a port; the others connect to it, and it passes their inputs on. Its
@@ -140,15 +140,39 @@ and, at the read where they first differ, the memory itself:
 - **`session.cpp`**: the handshake refuses another build, ROM or settings profile, a full or started
   match; then each peer sends only its own port's pads and memory hashes, reliably (lost packets are
   resent: lockstep needs every input).
-- **`netplay_probe`**: two or more copies play a made-up match (`host <port>`, `join <address:port>`,
-  `--loss <percent>`) and check every pad arrived right. `test.sh` runs the tests and a few matches;
+- **`join_code.cpp`**: the host's address and port as a short code with a typo check
+  (`SC07-21V9-GX40`); `join` takes a code or an address.
+- **`netplay_probe`**: two or more copies play a made-up match (`host <port>`, `join <address:port or
+  code>`, `--loss <percent>`) and check every pad arrived right; `join --silent` checks a joiner that
+  never says Hello is dropped; `code <address:port>` prints a code. `test.sh` runs the tests and a few matches;
   `.github/workflows/netplay-transport.yml` runs them on Windows, Linux and macOS (no ROM needed).
+
+## Lockstep (in progress, fork issue #8)
+
+`host/src/netplay/lockstep.cpp`, part of the harness: every peer runs the whole game, and at each
+controller read the game waits until it has every player's pad for that read. A peer sends its own pad
+`--input-delay` reads ahead (2 by default, every peer the same) to hide the time it takes to arrive. Every
+30 reads the peers compare hashes of the game's memory, and a difference ends the match as a desync.
+Each peer starts from boot with an empty save, on the timeline and with the settings profile.
+
+    ConkerRecomp --netplay-host 27015 --players 2           (port 1 is the host's)
+    ConkerRecomp --netplay-join SC07-21V9-GX40              (or --netplay-join 203.0.113.7:27015)
+
+The game waits at its start for every player. Each plays with their first controller. There's no menu
+for it yet (#9), and the host has to forward its UDP port if it's behind a router.
+
+With `--replay`, a peer's own pads come from its port in the recording instead: `lockstep.sh` plays two
+copies against each other on this machine (`--data` gives each its own folder) and checks that each
+gets exactly the game a replay alone does (each copy's recording has the other's port scrambled, so it
+only does if the pads came over the network), with input delay 0 and `--jitter` on one side too, and
+that a desync (`--netplay-desync-at <read>`) is caught. About 25 s.
 
 ## The scripts
 
 | Script | |
 |---|---|
 | `check.sh` | the determinism check: replays a made-up recording headless twice, with `--jitter` and with `--state-test`, and fails unless all four give the same hashes (about 30 s; the CI runs it, `.github/workflows/netplay.yml`) |
+| `lockstep.sh` | the lockstep check: two copies in a match over loopback give the same game as a replay alone, and a desync is caught (about 25 s) |
 | `compare_hashes.py` | the first read two hash logs differ at (it exits 1 if they differ); with dumps, the ranges that differ, by data symbol |
 | `make_inputs.py` | a recording of made-up inputs from a seed, to replay without anyone playing |
 | `scan_clock.py` | every read of the game's clock in its code, and whether it's in a loop (needs your ROM, unpacked with `recomp/unpack_rom.py`) |

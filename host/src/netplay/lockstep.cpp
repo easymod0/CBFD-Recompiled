@@ -1,0 +1,378 @@
+// Netplay's lockstep (lockstep.hpp). It all runs on the game thread: the connecting in harness::start,
+// before any of the game's code, then each controller read. The session (net/session.hpp) is polled only
+// from here; GameNetworkingSockets keeps the connections alive from its own thread in between.
+//
+// Each port's pads are kept from read 0 on (5 bytes a read: 1 MB is over 15 hours for 4 players). They
+// arrive in order, as they're sent reliably: an Inputs packet that doesn't start at the next read of its
+// port ends the match.
+
+#include "lockstep.hpp"
+
+#include <array>
+#include <chrono>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <map>
+#include <string>
+#include <thread>
+#include <vector>
+
+#include "librecomp/save_states.hpp"
+
+#include "net/session.hpp"
+
+using conker::netplay::Event;
+using conker::netplay::Hash;
+using conker::netplay::Inputs;
+using conker::netplay::Pad;
+using conker::netplay::Reason;
+
+namespace {
+    constexpr uint64_t never = UINT64_MAX;
+    // Reads between hash comparisons: one a second.
+    constexpr uint64_t hash_every = 30;
+    // How long a read waits for a peer's pad before the match is given up on. (A peer that's gone is
+    // noticed by the library sooner, in about 10 s.)
+    constexpr double wait_seconds = 20.0;
+    // How long the host waits for every player to join.
+    constexpr double join_seconds = 600.0;
+
+    int host_port = -1;
+    std::string join_where;
+    int wanted_players = 2;
+    int delay = 2;
+    uint64_t desync_at = never;
+    bool options_valid = true;
+
+    bool library_started = false;
+    conker::netplay::Session* session = nullptr;
+    int own_port = -1;
+    int match_players = 0;
+    bool initial_sent = false;
+    bool ended = false;         // the match is over for this peer: nothing more is sent
+    bool left = false;
+
+    std::array<std::vector<Pad>, conker::netplay::max_players> received;
+    std::array<bool, conker::netplay::max_players> gone{};
+    // This peer's hashes, and those of the others (the host's for a joiner, every joiner's for the host),
+    // until they're compared.
+    std::map<uint32_t, uint64_t> own_hashes;
+    std::map<std::pair<int, uint32_t>, uint64_t> their_hashes;
+
+    double now() {
+        using namespace std::chrono;
+        return duration<double>(steady_clock::now().time_since_epoch()).count();
+    }
+
+    void end_match(Reason reason, const char* why) {
+        std::printf("[netplay] the match is over: %s\n", why);
+        if (!left && session != nullptr) {
+            session->leave(reason);
+            left = true;
+        }
+        ended = true;
+    }
+
+    // Compares every hash that both sides have for the same read. Peers are never more than the input
+    // delay apart, so this peer's own are kept only for the last few comparisons.
+    void compare_hashes() {
+        for (auto it = their_hashes.begin(); it != their_hashes.end();) {
+            const auto own = own_hashes.find(it->first.second);
+            if (own == own_hashes.end()) {
+                ++it;
+                continue;
+            }
+            if (own->second != it->second) {
+                std::printf("[netplay] desync at read %u: port %d's game memory isn't this one's (%016llx, here %016llx)\n",
+                    it->first.second, it->first.first + 1, (unsigned long long)it->second, (unsigned long long)own->second);
+                end_match(Reason::desync, "the games went different ways (a desync)");
+                return;
+            }
+            it = their_hashes.erase(it);
+        }
+        while (own_hashes.size() > 8) {
+            own_hashes.erase(own_hashes.begin());
+        }
+    }
+
+    void handle(const Event& event) {
+        switch (event.type) {
+            case Event::Type::joined:
+            case Event::Type::welcomed:
+            case Event::Type::started:
+                break;
+            case Event::Type::left:
+                std::printf("[netplay] port %d left: %s\n", event.port + 1, conker::netplay::describe(event.reason));
+                gone[event.port] = true;
+                if (event.reason == Reason::desync) {
+                    end_match(Reason::desync, "a player's game went a different way (a desync)");
+                }
+                break;
+            case Event::Type::ended:
+                std::printf("[netplay] the host ended the match: %s\n", conker::netplay::describe(event.reason));
+                // Every pad comes through the host.
+                for (bool& g : gone) g = true;
+                left = true;
+                if (event.reason == Reason::desync) {
+                    end_match(Reason::desync, "a player's game went a different way (a desync)");
+                }
+                break;
+            case Event::Type::packet:
+                if (const Inputs* inputs = std::get_if<Inputs>(&event.packet)) {
+                    std::vector<Pad>& pads = received[inputs->port];
+                    if (inputs->port == own_port || inputs->port >= match_players || inputs->first_read != pads.size()) {
+                        end_match(Reason::protocol, "a player's inputs came out of order");
+                        return;
+                    }
+                    pads.insert(pads.end(), inputs->pads.begin(), inputs->pads.begin() + inputs->count);
+                }
+                else if (const Hash* hash = std::get_if<Hash>(&event.packet)) {
+                    their_hashes[{ event.port, hash->read }] = hash->hash;
+                }
+                break;
+        }
+    }
+
+    void send_own(uint64_t read, Pad pad) {
+        pad.buttons &= (uint16_t)~conker::netplay::reserved_buttons;
+        pad.err_no = 0;     // a player's port always has a controller
+        Inputs inputs;
+        inputs.port = (uint8_t)own_port;
+        inputs.first_read = (uint32_t)read;
+        inputs.count = 1;
+        inputs.pads[0] = pad;
+        session->send(inputs);
+        received[own_port].push_back(pad);
+    }
+
+    // Whether every player's pad for `read` is here.
+    bool all_here(uint64_t read) {
+        for (int port = 0; port < match_players; port++) {
+            if (received[port].size() <= read) return false;
+        }
+        return true;
+    }
+}
+
+bool conker::lockstep::parse_option(int argc, char** argv, int& i) {
+    const char* option = argv[i];
+    const char* value = i + 1 < argc ? argv[i + 1] : nullptr;
+    auto number = [&](long low, long high, long& out) {
+        char* end = nullptr;
+        out = value != nullptr ? std::strtol(value, &end, 10) : 0;
+        if (value == nullptr || end == value || *end != '\0' || out < low || out > high) {
+            std::fprintf(stderr, "[netplay] %s needs a number from %ld to %ld\n", option, low, high);
+            options_valid = false;
+        }
+        if (value != nullptr) i++;
+    };
+    long n = 0;
+    if (std::strcmp(option, "--netplay-host") == 0) {
+        number(1, 65535, n);
+        host_port = (int)n;
+        return true;
+    }
+    if (std::strcmp(option, "--players") == 0) {
+        number(2, netplay::max_players, n);
+        wanted_players = (int)n;
+        return true;
+    }
+    if (std::strcmp(option, "--input-delay") == 0) {
+        number(0, netplay::input_window, n);
+        delay = (int)n;
+        return true;
+    }
+    if (std::strcmp(option, "--netplay-desync-at") == 0) {
+        number(0, LONG_MAX, n);
+        desync_at = (uint64_t)n;
+        return true;
+    }
+    if (std::strcmp(option, "--netplay-join") == 0) {
+        if (value == nullptr) {
+            std::fprintf(stderr, "[netplay] --netplay-join needs a join code or an address\n");
+            options_valid = false;
+            return true;
+        }
+        join_where = argv[++i];
+        return true;
+    }
+    return false;
+}
+
+bool conker::lockstep::active() {
+    return host_port > 0 || !join_where.empty();
+}
+
+bool conker::lockstep::prepare() {
+    if (!options_valid) {
+        return false;
+    }
+    if (!active()) {
+        return true;
+    }
+    if (host_port > 0 && !join_where.empty()) {
+        std::fprintf(stderr, "[netplay] --netplay-host and --netplay-join can't be used together\n");
+        return false;
+    }
+    std::string error;
+    if (!netplay::startup(error)) {
+        std::fprintf(stderr, "[netplay] couldn't start the networking: %s\n", error.c_str());
+        return false;
+    }
+    library_started = true;
+    return true;
+}
+
+bool conker::lockstep::connect(const netplay::Hello& me) {
+    session = new netplay::Session();
+    std::string error;
+    const bool hosting = host_port > 0;
+    if (hosting ? !session->host((uint16_t)host_port, wanted_players, me, error) : !session->join(join_where, me, error)) {
+        std::fprintf(stderr, "[netplay] %s\n", error.c_str());
+        return false;
+    }
+    if (hosting) {
+        own_port = 0;
+        match_players = wanted_players;
+        std::printf("[netplay] hosting a match of %d on UDP port %d: waiting for the players\n", wanted_players, host_port);
+    }
+    else {
+        std::printf("[netplay] joining %s\n", join_where.c_str());
+    }
+
+    int joined = 1;
+    bool started = false;
+    const double since = now();
+    while (!started) {
+        for (const Event& event : session->poll()) {
+            switch (event.type) {
+                case Event::Type::joined:
+                    joined++;
+                    std::printf("[netplay] port %d joined (%d of %d)\n", event.port + 1, joined, match_players);
+                    if (joined == match_players && session->start()) {
+                        started = true;
+                    }
+                    break;
+                case Event::Type::left:
+                    // Before the start, a joiner leaving frees its port.
+                    joined--;
+                    std::printf("[netplay] port %d left: %s\n", event.port + 1, netplay::describe(event.reason));
+                    break;
+                case Event::Type::welcomed:
+                    own_port = event.port;
+                    match_players = event.players;
+                    std::printf("[netplay] in, on port %d of %d: waiting for the others\n", own_port + 1, match_players);
+                    break;
+                case Event::Type::started:
+                    started = true;
+                    break;
+                case Event::Type::ended:
+                    std::fprintf(stderr, "[netplay] couldn't join: %s (%s)\n", netplay::describe(event.reason), event.detail.c_str());
+                    return false;
+                case Event::Type::packet:
+                    handle(event);
+                    break;
+            }
+        }
+        if (hosting && now() - since > join_seconds) {
+            std::fprintf(stderr, "[netplay] not every player joined in %.0f minutes\n", join_seconds / 60);
+            session->leave(Reason::quit);
+            return false;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    std::printf("[netplay] the match starts: %d players, this is port %d, input delay %d reads\n", match_players,
+        own_port + 1, delay);
+    return true;
+}
+
+int conker::lockstep::port() {
+    return own_port;
+}
+
+int conker::lockstep::players() {
+    return match_players;
+}
+
+bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, const PadSource& source,
+    const std::function<uint64_t()>& hash, uint8_t* rdram) {
+    if (ended) {
+        return false;
+    }
+    if (!initial_sent) {
+        for (int r = 0; r < delay; r++) {
+            send_own((uint64_t)r, source((uint64_t)r, nullptr));
+        }
+        initial_sent = true;
+    }
+    if (read + delay < UINT32_MAX - netplay::input_window) {
+        send_own(read + delay, source(read + delay, pads));
+    }
+
+    if (read == desync_at) {
+        rdram[recomp::save_states::game_memory_size / 2] ^= 0x5A;
+        std::printf("[netplay] read %llu: game memory changed, as --netplay-desync-at asked\n", (unsigned long long)read);
+    }
+    if (read % hash_every == 0) {
+        const uint64_t h = hash();
+        own_hashes[(uint32_t)read] = h;
+        session->send(Hash{ (uint32_t)read, h });
+    }
+
+    const double since = now();
+    double last_note = since;
+    while (true) {
+        for (const Event& event : session->poll()) {
+            handle(event);
+        }
+        compare_hashes();
+        if (ended) {
+            return false;
+        }
+        if (all_here(read)) {
+            break;
+        }
+        for (int port = 0; port < match_players; port++) {
+            if (received[port].size() <= read && gone[port]) {
+                end_match(Reason::quit, "a player left");
+                return false;
+            }
+        }
+        const double t = now();
+        if (t - since > wait_seconds) {
+            end_match(Reason::timeout, "a player's inputs stopped coming");
+            return false;
+        }
+        if (t - last_note > 2.0) {
+            std::printf("[netplay] read %llu: waiting for the other players\n", (unsigned long long)read);
+            last_note = t;
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+
+    for (int port = 0; port < match_players; port++) {
+        const Pad& pad = received[port][read];
+        pads[port] = { pad.buttons, pad.stick_x, pad.stick_y, pad.err_no };
+    }
+    return true;
+}
+
+void conker::lockstep::leave() {
+    if (session != nullptr && !left) {
+        session->leave(Reason::quit);
+        left = true;
+    }
+    ended = true;
+}
+
+void conker::lockstep::finish() {
+    // The session isn't deleted: quitting can still be going on elsewhere (issue #127), and the library
+    // is stopped next anyway.
+    leave();
+    if (library_started) {
+        netplay::shutdown();
+        library_started = false;
+    }
+}
