@@ -1,7 +1,7 @@
-// Join codes (join_code.hpp). The bytes, big-endian: the address (4 or 16 bytes), the port (2), then a
-// CRC-8 of those (polynomial 0x07, which catches any change within 8 bits in a row: so any one mistyped
-// character, or two swapped neighbours). The 7 or 19 bytes are written 5 bits to a character, with
-// the last character's spare bits zero: 12 or 31 characters.
+// Join codes (join_code.hpp). The bytes, big-endian: the address (4 or 16 bytes), the port (2), the key
+// (8), then a CRC-8 of those (polynomial 0x07, which catches any change within 8 bits in a row: so any one
+// mistyped character, or two swapped neighbours). The 15 or 27 bytes are written 5 bits to a character,
+// with the last character's spare bits zero: 24 or 44 characters.
 
 #include "join_code.hpp"
 
@@ -10,8 +10,8 @@
 namespace conker::netplay {
     namespace {
         constexpr char alphabet[] = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-        constexpr size_t ipv4_bytes = 4 + 2 + 1;
-        constexpr size_t ipv6_bytes = 16 + 2 + 1;
+        constexpr size_t ipv4_bytes = 4 + 2 + 8 + 1;
+        constexpr size_t ipv6_bytes = 16 + 2 + 8 + 1;
         constexpr size_t characters_for(size_t bytes) { return (bytes * 8 + 4) / 5; }
 
         // The value of character `c`, or -1.
@@ -48,6 +48,9 @@ namespace conker::netplay {
         std::vector<uint8_t> bytes(endpoint.ip.begin(), endpoint.ip.begin() + ip_size);
         bytes.push_back((uint8_t)(endpoint.port >> 8));
         bytes.push_back((uint8_t)endpoint.port);
+        for (int shift = 56; shift >= 0; shift -= 8) {
+            bytes.push_back((uint8_t)(endpoint.key >> shift));
+        }
         bytes.push_back(crc8(bytes.data(), bytes.size()));
 
         std::string code;
@@ -95,6 +98,9 @@ namespace conker::netplay {
         const size_t ip_size = endpoint.ipv6 ? 16 : 4;
         for (size_t i = 0; i < ip_size; i++) endpoint.ip[i] = bytes[i];
         endpoint.port = (uint16_t)(bytes[ip_size] << 8 | bytes[ip_size + 1]);
+        for (size_t i = 0; i < 8; i++) {
+            endpoint.key = endpoint.key << 8 | bytes[ip_size + 2 + i];
+        }
         if (endpoint.port == 0) {
             return std::nullopt;
         }

@@ -42,6 +42,7 @@ namespace {
     constexpr double join_seconds = 600.0;
 
     int host_port = -1;
+    std::string host_address;       // hosting from the command line: the address the others reach, for the code
     std::string join_where;
     int wanted_players = 2;
     bool host_own_view = true;      // hosting: the rule this peer will start the match with
@@ -235,9 +236,18 @@ bool conker::lockstep::parse_option(int argc, char** argv, int& i) {
         desync_at = (uint64_t)n;
         return true;
     }
+    if (std::strcmp(option, "--netplay-address") == 0) {
+        if (value == nullptr) {
+            std::fprintf(stderr, "[netplay] --netplay-address needs this computer's address, as the others reach it\n");
+            options_valid = false;
+            return true;
+        }
+        host_address = argv[++i];
+        return true;
+    }
     if (std::strcmp(option, "--netplay-join") == 0) {
         if (value == nullptr) {
-            std::fprintf(stderr, "[netplay] --netplay-join needs a join code or an address\n");
+            std::fprintf(stderr, "[netplay] --netplay-join needs the host's join code\n");
             options_valid = false;
             return true;
         }
@@ -252,6 +262,7 @@ bool conker::lockstep::active() {
 }
 
 void conker::lockstep::set_host(int port, int players, bool own_view) {
+    host_address.clear();
     host_port = port;
     wanted_players = players;
     host_own_view = own_view;
@@ -271,7 +282,29 @@ bool conker::lockstep::prepare() {
         std::fprintf(stderr, "[netplay] --netplay-host and --netplay-join can't be used together\n");
         return false;
     }
+    // The others join by the code, which holds the match's key: without the address there's none to give.
+    if (host_port > 0 && host_address.empty()) {
+        std::fprintf(stderr, "[netplay] --netplay-host needs --netplay-address <this computer's address>, for the join code\n");
+        return false;
+    }
     return true;
+}
+
+std::string conker::lockstep::join_code(std::string address) {
+    std::scoped_lock lock(session_mutex);
+    while (!address.empty() && address.back() == ' ') address.pop_back();
+    while (!address.empty() && address.front() == ' ') address.erase(address.begin());
+    if (session == nullptr || !session->hosting() || address.empty()) {
+        return {};
+    }
+    std::string code = session->join_code(address);
+    if (code.empty()) {
+        // Without its port: this match's. An IPv6 address has colons of its own, so brackets go around it.
+        const std::string port = std::to_string(host_port);
+        code = session->join_code(address.find(':') != std::string::npos && address.front() != '['
+            ? "[" + address + "]:" + port : address + ":" + port);
+    }
+    return code;
 }
 
 namespace {
@@ -323,9 +356,19 @@ bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
     their_hashes.clear();
     if (hosting) {
         std::printf("[netplay] hosting a match of %d on UDP port %d: waiting for the players\n", wanted_players, host_port);
+        if (!host_address.empty()) {
+            const std::string code = join_code(host_address);
+            if (code.empty()) {
+                std::fprintf(stderr, "[netplay] %s isn't an address: no join code\n", host_address.c_str());
+            }
+            else {
+                std::printf("[netplay] join code %s (the others join with it: it holds the match's key)\n", code.c_str());
+                std::fflush(stdout);
+            }
+        }
     }
     else {
-        std::printf("[netplay] joining %s\n", join_where.c_str());
+        std::printf("[netplay] joining by code\n");
     }
     return true;
 }

@@ -140,15 +140,28 @@ and, at the read where they first differ, the memory itself:
 - **`packets.cpp`**: every packet (Hello, Welcome, Refuse, Start, Inputs, Hash, Bye), fixed-size and
   versioned, each field checked; the only code that reads from the network. `packets_test.cpp` tests
   it and `fuzz_packets.cpp` fuzzes it.
-- **`session.cpp`**: the handshake refuses another build, ROM or settings profile, a full or started
-  match; then each peer sends only its own port's pads and memory hashes, reliably (lost packets are
-  resent: lockstep needs every input).
-- **`join_code.cpp`**: the host's address and port as a short code with a typo check
-  (`SC07-21V9-GX40`); `join` takes a code or an address.
-- **`netplay_probe`**: two or more copies play a made-up match (`host <port>`, `join <address:port or
-  code>`, `--loss <percent>`) and check every pad arrived right; `join --silent` checks a joiner that
-  never says Hello is dropped; `code <address:port>` prints a code. `test.sh` runs the tests and a few matches;
-  `.github/workflows/netplay-transport.yml` runs them on Windows, Linux and macOS (no ROM needed).
+- **`session.cpp`**: the host makes a random 64-bit key for each match (from the system's random
+  source), which is in the join code. A joiner's Hello must carry it: a wrong key is closed at once and
+  told nothing else, so a stranger who finds the port can't take a place, or learn whether their build
+  or ROM would have done. With the right key, the handshake refuses another build, ROM, settings
+  profile or mods, a full or started match. A joiner has 3 s to say Hello, and the host takes at most 8
+  connections at once. Then each peer sends only its own port's pads and memory hashes, reliably (lost
+  packets are resent: lockstep needs every input); Inputs and hashes before the start, beyond the reads
+  a peer could have reached, or a hash repeated, drop the peer. The library closes a connection that
+  sends a message bigger than the largest packet, and buffers little from each peer.
+- **`join_code.cpp`**: the host's address, port and the match's key as a code with a typo check
+  (`SC07-21V9-GW0J-6HB7-H6NW-VVTT`); joining needs it.
+- **What players should know:** the join code is the host's IP address and port, so it's for people the
+  host trusts, and joining shows the host the joiner's IP address (the menu says so). The connections
+  are encrypted, but not authenticated: there's no certificate authority, so someone on the network path
+  between two players could pose as the host. Joining by a code from someone you know keeps that to
+  people who can already see your traffic.
+- **`netplay_probe`**: two or more copies play a made-up match (`host <port>`, which prints its join
+  code for 127.0.0.1, `join <code>`, `--loss <percent>`) and check every pad arrived right; `--hostile`
+  joiners must be dropped, `join --silent` checks a joiner that never says Hello is dropped and `join
+  --oversize` one that sends too big a message; `code <address:port> <key>` prints a code. `test.sh` runs
+  the tests and a few matches; `.github/workflows/netplay-transport.yml` runs them on Windows, Linux and
+  macOS (no ROM needed).
 
 ## Lockstep
 
@@ -158,15 +171,15 @@ controller read the game waits until it has every player's pad for that read. A 
 30 reads the peers compare hashes of the game's memory, and a difference ends the match as a desync.
 Each peer starts from boot with an empty save, on the timeline and with the settings profile.
 
-    ConkerRecomp --netplay-host 27015 --players 2           (port 1 is the host's)
-    ConkerRecomp --netplay-join SC07-21V9-GX40              (or --netplay-join 203.0.113.7:27015)
+    ConkerRecomp --netplay-host 27015 --netplay-address 203.0.113.7 --players 2   (prints the join code)
+    ConkerRecomp --netplay-join SC07-21V9-GW0J-6HB7-H6NW-VVTT                    (the host's code)
 
 The game waits at its start for every player. Each plays with their first controller, and the host
 has to forward its UDP port if it's behind a router.
 
 In a window, the launcher's **Netplay** menu (`host/src/netplay/menu.cpp`, #9) does the same: host
-(players, port, and the host's own address, from which it shows the join code to send) or join by code
-or address. It says how the connecting goes and why a peer was refused, and the game starts on every
+(players, port, and the host's own address, from which it shows the join code to send once hosting) or
+join by code. It says how the connecting goes and why a peer was refused, and the game starts on every
 machine once all are in. When a match started there ends (a desync, a player gone), a prompt says why
 instead of the game quitting.
 

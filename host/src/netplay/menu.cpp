@@ -1,4 +1,4 @@
-// The launcher's Netplay menu: host a match or join one by its code or address, wait for
+// The launcher's Netplay menu: host a match or join one by its code, wait for
 // every player there, then the game starts on every machine at once. It's a modal of its own over the
 // launcher; the connecting is lockstep's (lockstep.hpp), a step at each of the menu's updates, so a
 // refusal (another build, ROM or settings, a full match) is said here and the player can try again.
@@ -6,9 +6,10 @@
 // A match started from here doesn't quit when it ends (a desync, a player leaving): the game stops taking
 // input and a prompt says why, with Quit.
 //
-// The host's join code is made from the address the host gives: the game can't know its public address
-// without a server to ask, so the host looks it up (or gives its local one, for a match at home). The
-// input delay is lockstep's default, the same on every machine.
+// The host's join code is made, once hosting, from the address the host gives and the match's random key:
+// the game can't know its public address without a server to ask, so the host looks it up (or gives its
+// local one, for a match at home). The code is the host's address, so the menu says to share it only with
+// people the host trusts. The input delay is lockstep's default, the same on every machine.
 
 #include <cctype>
 #include <cstdio>
@@ -45,23 +46,6 @@ namespace {
     std::string over_text;
     bool over_pending = false;
 
-    // The address and port as the host gave them, with the port added if it wasn't.
-    std::string with_port(std::string address, const std::string& port) {
-        while (!address.empty() && address.back() == ' ') address.pop_back();
-        while (!address.empty() && address.front() == ' ') address.erase(address.begin());
-        if (address.empty()) {
-            return {};
-        }
-        if (!conker::netplay::join_code_for(address).empty()) {
-            return address;    // it had its port already
-        }
-        // An IPv6 address has colons of its own: brackets go around it.
-        if (address.find(':') != std::string::npos && address.front() != '[') {
-            return "[" + address + "]:" + port;
-        }
-        return address + ":" + port;
-    }
-
     class NetplayPage : public recompui::Element {
         enum class State { idle, connecting, starting };
         State state = State::idle;
@@ -74,6 +58,7 @@ namespace {
         recompui::Button* join_button = nullptr;
         recompui::Button* cancel_button = nullptr;
         int players = 2;
+        bool hosting = false;               // a match is hosted (connecting, as the host)
         bool own_view_for_everyone = true;  // hosting: the match's screens rule
         std::string port_text = std::to_string(default_port);
         std::string address_text;
@@ -115,22 +100,30 @@ namespace {
             return field;
         }
 
+        // The join code, once hosting (it holds the match's key, new each time).
         void show_code() {
-            const std::string address = with_port(address_text, port_text);
-            const std::string code = address.empty() ? std::string() : conker::netplay::join_code_for(address);
-            if (address.empty()) {
-                code_label->set_text("Give your address to get a join code to send the others (or send them the address).");
+            const bool blank = address_text.find_first_not_of(' ') == std::string::npos;
+            const std::string code = hosting ? conker::lockstep::join_code(address_text) : std::string();
+            if (blank) {
+                code_label->set_text("Give your address: the join code is made from it when you host.");
+            }
+            else if (!hosting) {
+                code_label->set_text("Host, and the join code to send the others appears here.");
             }
             else if (code.empty()) {
                 code_label->set_text("That isn't an address: four numbers such as 203.0.113.7, or an IPv6 one.");
             }
             else {
-                code_label->set_text("Join code: " + code + "   (" + address + ")");
+                code_label->set_text("Join code: " + code);
             }
         }
 
         void set_state(State next, const std::string& status) {
             state = next;
+            if (state == State::idle) {
+                hosting = false;
+            }
+            show_code();
             status_label->set_text(status);
             host_button->set_enabled(state == State::idle);
             join_button->set_enabled(state == State::idle);
@@ -161,13 +154,19 @@ namespace {
                 set_state(State::idle, "The port is a number from 1 to 65535.");
                 return;
             }
+            if (address_text.find_first_not_of(' ') == std::string::npos) {
+                set_state(State::idle, "Give your address first: the join code is made from it.");
+                return;
+            }
             conker::lockstep::set_host(port, players, own_view_for_everyone);
+            hosting = true;
             begin();
+            show_code();
         }
 
         void on_join() {
             if (join_text.find_first_not_of(' ') == std::string::npos) {
-                set_state(State::idle, "Type the host's join code or address first.");
+                set_state(State::idle, "Type the host's join code first.");
                 return;
             }
             conker::lockstep::set_join(join_text);
@@ -248,10 +247,7 @@ namespace {
             count_radio->add_index_changed_callback([this](uint32_t index) { players = 2 + (int)index; });
             text(host_row, "UDP port", Typography::LabelMD);
             port_input = input(host_row, port_text, 120.0f);
-            port_input->add_text_changed_callback([this](const std::string& value) {
-                port_text = value;
-                show_code();
-            });
+            port_input->add_text_changed_callback([this](const std::string& value) { port_text = value; });
             text(host_row, "Your address", Typography::LabelMD);
             address_input = input(host_row, "", 320.0f);
             address_input->add_text_changed_callback([this](const std::string& value) {
@@ -269,6 +265,8 @@ namespace {
             text(host, "The others connect to that port on your computer: if you're behind a router, forward it "
                 "(UDP) to this computer. Look up your public address on any \"what is my IP\" site; at home, "
                 "your local one works too.", Typography::Body, color::TextDim);
+            text(host, "The join code is your IP address (with a key for this match): only share it with people you "
+                "trust. Joining a match shows the host your IP address too.", Typography::Body, color::TextDim);
             host_button = context.create_element<recompui::Button>(host, "Host", recompui::ButtonStyle::Primary);
             host_button->add_pressed_callback([this]() { on_host(); });
 
@@ -276,7 +274,7 @@ namespace {
             recompui::Element* join = column(this, 12.0f);
             text(join, "Join a match", Typography::LabelLG);
             recompui::Element* join_row = row(join);
-            text(join_row, "Join code or address", Typography::LabelMD);
+            text(join_row, "Join code", Typography::LabelMD);
             join_input = input(join_row, "", 360.0f);
             join_input->add_text_changed_callback([this](const std::string& value) { join_text = value; });
             join_button = context.create_element<recompui::Button>(join, "Join", recompui::ButtonStyle::Primary);

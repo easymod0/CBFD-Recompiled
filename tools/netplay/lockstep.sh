@@ -77,6 +77,18 @@ start() {
     pids="$pids $!"
 }
 
+# code_of <name>: the join code the hosting copy <name> printed (its key is random each time), once it has.
+code_of() {
+    i=0
+    while [ $i -lt 600 ]; do
+        code=$(sed -n 's/^\[netplay\] join code \([^ ]*\).*/\1/p' "$OUT/$1.out" 2>/dev/null)
+        [ -n "$code" ] && { echo "$code"; return; }
+        sleep 0.1
+        i=$((i + 1))
+    done
+    echo "no-code-from-$1"
+}
+
 # finish <pattern> <name...>: waits until each named copy prints <pattern> (true), or one quits or the
 # time runs out first (false); then kills the copies started.
 finish() {
@@ -137,9 +149,8 @@ start solo
 finish "was the last: quitting" solo || exit 1
 
 echo "match"
-pads=1.pads start match-host --netplay-host 27310 --players 2
-sleep 1
-pads=2.pads start match-join --netplay-join 127.0.0.1:27310
+pads=1.pads start match-host --netplay-host 27310 --netplay-address 127.0.0.1 --players 2
+pads=2.pads start match-join --netplay-join "$(code_of match-host)"
 if finish "was the last: quitting" match-host match-join; then
     same match-host || failed=1
     same match-join || failed=1
@@ -148,9 +159,8 @@ else
 fi
 
 echo "jittery"
-start jittery-host --netplay-host 27311 --players 2 --input-delay 0
-sleep 1
-start jittery-join --netplay-join 127.0.0.1:27311 --input-delay 0 --jitter 500
+start jittery-host --netplay-host 27311 --netplay-address 127.0.0.1 --players 2 --input-delay 0
+start jittery-join --netplay-join "$(code_of jittery-host)" --input-delay 0 --jitter 500
 if finish "was the last: quitting" jittery-host jittery-join; then
     same jittery-host || failed=1
     same jittery-join || failed=1
@@ -159,9 +169,8 @@ else
 fi
 
 echo "desync"
-start desync-host --netplay-host 27312 --players 2 --netplay-desync-at 300
-sleep 1
-start desync-join --netplay-join 127.0.0.1:27312
+start desync-host --netplay-host 27312 --netplay-address 127.0.0.1 --players 2 --netplay-desync-at 300
+start desync-join --netplay-join "$(code_of desync-host)"
 if finish "the netplay match is over" desync-host desync-join; then
     for name in desync-host desync-join; do
         # The desync itself: this peer's comparison found it ("desync at read"), or the other's did and

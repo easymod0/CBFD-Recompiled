@@ -2,20 +2,23 @@
 // would and each sends made-up pads for its own port, 30 reads a second as the game reads them; each
 // checks that every other port's pads arrive, and are the ones sent.
 //
-//   netplay_probe host <port> [--players 2] [options]
-//   netplay_probe join <address:port or join code> [options]
-//   netplay_probe join <address:port> --silent
-//   netplay_probe code <address:port>
+//   netplay_probe host <port> [--players 2] [options]     (prints its join code, for 127.0.0.1)
+//   netplay_probe join <join code> [options]
+//   netplay_probe join <address:port> --silent | --oversize
+//   netplay_probe code <address:port> <key, hex>
 //     --reads <n>        how many reads each peer sends (300: 10 s)
 //     --loss <percent>   the library drops this share of the packets sent (they're resent)
 //     --build/--rom/--profile/--mods <hex>   the handshake's hashes (all 1 by default), to test refusals
 //     --silent           connect but never say Hello: the host must drop it after its handshake time
+//     --oversize         connect and send a message bigger than any packet: the library must close it
 //     --own-view 1       (hosting) the match's rule that every player sees only their own view
 //     --hostile early    (joining) send Inputs before the match starts: the host must drop it
 //     --hostile far      (joining) send Inputs far beyond the reads it could have got to: dropped too
+//     --hostile hash     (joining) send the same Hash twice once the match starts: dropped too
 //
 // It exits 0 once it has every other port's pads for every read and they're all right, 1 otherwise;
-// --silent, once the host has closed the connection for a timeout. `code` prints the address's join code.
+// --silent, once the host has closed the connection for a timeout; --oversize, once it's closed before
+// that. `code` prints the join code for an address and key.
 
 #include <chrono>
 #include <cstdio>
@@ -57,24 +60,27 @@ namespace {
     };
 
     int usage() {
-        std::fprintf(stderr, "usage: netplay_probe host <port> [--players 2] | join <address:port or code> [--silent]\n"
+        std::fprintf(stderr, "usage: netplay_probe host <port> [--players 2] | join <code> | join <address:port> --silent|--oversize\n"
                              "       [--reads 300] [--loss <percent>] [--build <hex>] [--rom <hex>] [--profile <hex>] [--mods <hex>]\n"
-                             "       netplay_probe code <address:port>\n");
+                             "       netplay_probe code <address:port> <key, hex>\n");
         return 2;
     }
 
     // --silent: connects to `where` without a Session, so no Hello is sent, and waits for the host to
-    // close the connection. Passes if it does so for a timeout, after 5 to 20 seconds.
-    int join_silently(const std::string& where) {
+    // close the connection. Passes if it does so for a timeout, after 2 to 10 seconds. --oversize: sends a
+    // message bigger than any packet once connected, and passes if the connection is closed for it (not
+    // for a timeout) within 2 seconds.
+    int join_silently(const std::string& where, bool oversize) {
         SteamNetworkingIPAddr address;
         if (!address.ParseString(where.c_str())) {
-            std::fprintf(stderr, "--silent takes an address and port\n");
+            std::fprintf(stderr, "--silent and --oversize take an address and port\n");
             return 2;
         }
         ISteamNetworkingSockets* sockets = SteamNetworkingSockets();
         const HSteamNetConnection connection = sockets->ConnectByIPAddress(address, 0, nullptr);
         const auto start = std::chrono::steady_clock::now();
         bool connected = false;
+        double connected_at = 0;
         while (true) {
             sockets->RunCallbacks();
             SteamNetConnectionInfo_t info;
@@ -85,15 +91,23 @@ namespace {
             const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
             if (info.m_eState == k_ESteamNetworkingConnectionState_Connected && !connected) {
                 connected = true;
-                std::printf("connected, saying nothing\n");
+                connected_at = seconds;
+                if (oversize) {
+                    const std::vector<uint8_t> big(1024, 0x43);
+                    sockets->SendMessageToConnection(connection, big.data(), (uint32)big.size(), k_nSteamNetworkingSend_Reliable, nullptr);
+                    std::printf("connected, sent %zu bytes\n", big.size());
+                }
+                else {
+                    std::printf("connected, saying nothing\n");
+                }
             }
             if (info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer ||
                 info.m_eState == k_ESteamNetworkingConnectionState_ProblemDetectedLocally) {
                 const bool timeout = info.m_eEndReason == k_ESteamNetConnectionEnd_App_Min + (int)Reason::timeout;
                 std::printf("closed after %.1f s: %s (%d)\n", seconds, info.m_szEndDebug, info.m_eEndReason);
                 sockets->CloseConnection(connection, 0, nullptr, false);
-                const bool right = connected && timeout && seconds > 5 && seconds < 20;
-                std::printf("%s\n", right ? "dropped for saying nothing" : "FAILED");
+                const bool right = connected && (oversize ? !timeout && seconds - connected_at < 2 : timeout && seconds > 2 && seconds < 10);
+                std::printf("%s\n", !right ? "FAILED" : oversize ? "closed for the oversized message" : "dropped for saying nothing");
                 return right ? 0 : 1;
             }
             if (seconds > 30) {
@@ -107,8 +121,8 @@ namespace {
 }
 
 int main(int argc, char** argv) {
-    if (argc == 3 && std::strcmp(argv[1], "code") == 0) {
-        const std::string code = join_code_for(argv[2]);
+    if (argc == 4 && std::strcmp(argv[1], "code") == 0) {
+        const std::string code = join_code_for(argv[2], std::strtoull(argv[3], nullptr, 16));
         if (code.empty()) {
             return usage();
         }
@@ -140,7 +154,8 @@ int main(int argc, char** argv) {
         else if (option == "--own-view") own_view = std::atoi(value) != 0;
         else return usage();
     }
-    const bool silent = !hosting && argc == 4 && std::strcmp(argv[3], "--silent") == 0;
+    const bool oversize = !hosting && argc == 4 && std::strcmp(argv[3], "--oversize") == 0;
+    const bool silent = !hosting && argc == 4 && (std::strcmp(argv[3], "--silent") == 0 || oversize);
     if (reads == 0) {
         return usage();
     }
@@ -151,7 +166,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (silent) {
-        const int silent_result = join_silently(where);
+        const int silent_result = join_silently(where, oversize);
         shutdown();
         return silent_result;
     }
@@ -168,6 +183,10 @@ int main(int argc, char** argv) {
         }
         else {
             std::printf("%s %s\n", hosting ? "hosting on port" : "joining", where.c_str());
+            if (hosting) {
+                std::printf("join code %s\n", session.join_code("127.0.0.1:" + where).c_str());
+                std::fflush(stdout);
+            }
             std::map<int, Received> received;   // by port
             int joined = 1;                     // the host counts itself
             bool playing = false;               // started: all the ports are taken
@@ -201,6 +220,11 @@ int main(int argc, char** argv) {
                             if (hostile == "far") {
                                 session.send(inputs_for(session.port(), 100000));
                                 std::printf("sent Inputs far ahead\n");
+                            }
+                            if (hostile == "hash") {
+                                session.send(Hash{ 30, 1 });
+                                session.send(Hash{ 30, 1 });
+                                std::printf("sent the same Hash twice\n");
                             }
                             break;
                         case Event::Type::left:

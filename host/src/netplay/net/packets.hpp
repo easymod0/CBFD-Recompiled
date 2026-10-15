@@ -18,7 +18,7 @@
 
 namespace conker::netplay {
     // Changes whenever any packet's layout or meaning does: peers with another one are refused.
-    constexpr uint16_t protocol_version = 3;
+    constexpr uint16_t protocol_version = 4;
     // The game's controller ports.
     constexpr int max_players = 4;
     // The most reads an Inputs packet carries: a peer catching up can send several at once. (Inputs are
@@ -54,16 +54,19 @@ namespace conker::netplay {
         desync,         // the game's memory differs between peers
         timeout,        // a peer stopped answering
         mods,           // mods on (texture packs aside): netplay allows none
+        key,            // not this match's key (the join code's): nothing else is checked
     };
-    constexpr uint8_t last_reason = (uint8_t)Reason::mods;
+    constexpr uint8_t last_reason = (uint8_t)Reason::key;
     const char* describe(Reason reason);
 
-    // Joiner to host, first: what it's running. The handshake refuses any difference.
+    // Joiner to host, first: the match's key, then what it's running. The host checks the key first, and
+    // refuses a wrong one before anything else; then it refuses any difference.
     struct Hello {
         uint64_t build = 0;     // hash of the game's build
         uint64_t rom = 0;       // XXH3-64 of the ROM
         uint64_t profile = 0;   // hash of the netplay settings profile
         uint64_t mods = 0;      // hash of the mods on and their settings, texture packs aside (0: none)
+        uint64_t key = 0;       // the match's key, from the join code (the host's own: its random key)
         bool operator==(const Hello&) const = default;
     };
     // Host to joiner: accepted, on this port, in a match of this many players.

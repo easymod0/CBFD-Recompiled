@@ -1,10 +1,10 @@
-// Join codes: the host's address and port written as a short code to pass on, instead
-// of "203.0.113.7:27015". There is no server: the code is the address itself, with a check against
-// typos, so anyone with a code can connect just as with the address (it isn't a password).
+// Join codes: what a player needs to join a match, as a code to pass on. There is no server: the code
+// is the host's address and port, and the match's key (64 random bits the host makes for each match),
+// with a check against typos. Without the key a joiner is refused, so only those given the code can take
+// a place in the match; but the code is the host's address too, so it's for people the host trusts.
 //
-// An IPv4 code has 12 characters ("SC07-21V9-GX40" is 203.0.113.7:27015), an IPv6 one 31. They're
-// Crockford's base32 (0-9 and the letters but I, L, O and U), read without regard to case, dashes or
-// spaces, with O as 0 and I and L as 1.
+// An IPv4 code has 24 characters, an IPv6 one 44. They're Crockford's base32 (0-9 and the letters but
+// I, L, O and U), read without regard to case, dashes or spaces, with O as 0 and I and L as 1.
 
 #pragma once
 
@@ -19,6 +19,7 @@ namespace conker::netplay {
         bool ipv6 = false;
         std::array<uint8_t, 16> ip{};   // an IPv4 address in the first 4 bytes, the rest zero
         uint16_t port = 0;
+        uint64_t key = 0;               // the match's key
         bool operator==(const Endpoint&) const = default;
     };
 

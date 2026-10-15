@@ -22,10 +22,11 @@ namespace {
     }
 #define CHECK(x) check((x), #x, __LINE__)
 
-    Endpoint ipv4(uint8_t a, uint8_t b, uint8_t c, uint8_t d, uint16_t port) {
+    Endpoint ipv4(uint8_t a, uint8_t b, uint8_t c, uint8_t d, uint16_t port, uint64_t key = 0x0123456789ABCDEFull) {
         Endpoint endpoint;
         endpoint.ip = { a, b, c, d };
         endpoint.port = port;
+        endpoint.key = key;
         return endpoint;
     }
 
@@ -64,14 +65,17 @@ namespace {
 
 int main() {
     CHECK(encode_join_code(ipv4(203, 0, 113, 7, 0)).empty());
-    CHECK(round_trips(ipv4(203, 0, 113, 7, 27015), 12));
-    CHECK(round_trips(ipv4(127, 0, 0, 1, 1), 12));
-    CHECK(round_trips(ipv4(255, 255, 255, 255, 65535), 12));
+    CHECK(round_trips(ipv4(203, 0, 113, 7, 27015), 24));
+    CHECK(round_trips(ipv4(127, 0, 0, 1, 1, 0), 24));
+    CHECK(round_trips(ipv4(255, 255, 255, 255, 65535, ~0ull), 24));
     Endpoint v6;
     v6.ipv6 = true;
     v6.ip = { 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
     v6.port = 5000;
-    CHECK(round_trips(v6, 31));
+    v6.key = 0xFEDCBA9876543210ull;
+    CHECK(round_trips(v6, 44));
+    // The key is in the code: another key, another code.
+    CHECK(encode_join_code(ipv4(203, 0, 113, 7, 27015, 1)) != encode_join_code(ipv4(203, 0, 113, 7, 27015, 2)));
     Endpoint bad = ipv4(1, 2, 3, 4, 5);
     bad.ip[4] = 1;                                  // an IPv4 address with more than 4 bytes
     CHECK(encode_join_code(bad).empty());
@@ -94,8 +98,8 @@ int main() {
     CHECK(!decode_join_code(code.substr(1)));       // too short
     CHECK(!decode_join_code("U" + code.substr(1))); // not in the alphabet
     CHECK(!decode_join_code(code + std::string(19, '0')));
-    CHECK(!decode_join_code(std::string(12, '0'))); // port 0, with its check right
-    std::string spare = code;                       // the last character's spare bit set
+    CHECK(!decode_join_code(std::string(24, '0'))); // port 0, with its check right
+    std::string spare = encode_join_code(v6);       // the last character's spare bit set (IPv6; IPv4 has none)
     spare.back() = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"[std::string("0123456789ABCDEFGHJKMNPQRSTVWXYZ").find(spare.back()) ^ 1];
     CHECK(!decode_join_code(spare));
 
@@ -106,6 +110,7 @@ int main() {
         endpoint.ipv6 = i % 3 == 0;
         for (size_t b = 0; b < (endpoint.ipv6 ? 16u : 4u); b++) endpoint.ip[b] = (uint8_t)random();
         endpoint.port = (uint16_t)(random() % 65535 + 1);
+        endpoint.key = (uint64_t)random() << 32 | random();
         const std::string c = encode_join_code(endpoint);
         CHECK(decode_join_code(c) == endpoint);
         CHECK(typos_refused(c));

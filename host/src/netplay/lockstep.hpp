@@ -11,7 +11,9 @@
 //   --players <n>                ...of <n> players, 2 to 4 (2 by default)
 //   --split-screen               (hosting) let each player choose what they see; by default every player
 //                                sees only their own view of the split screen (the match's rule, for all)
-//   --netplay-join <code>        joins the host by its join code, or its address ("1.2.3.4:5000")
+//   --netplay-address <address>  (hosting) this computer's address as the others reach it: the join code
+//                                is made from it and printed (it holds the match's random key)
+//   --netplay-join <code>        joins the host by its join code
 //   --input-delay <reads>        how many reads ahead a peer's own pads are sent (2 by default, 0 to 8;
 //                                every peer must give the same)
 //   --netplay-desync-at <read>   (a test) changes a byte of game memory at that read, which the next
@@ -41,6 +43,10 @@ namespace conker::lockstep {
     void set_join(const std::string& where);
     // Checks the options, before the game starts (false: a message was printed).
     bool prepare();
+    // Hosting: the join code for this match at `address` (this computer's, as the others reach it; the
+    // port is added if it hasn't one), or empty if it isn't an address or nothing is hosted yet. It holds
+    // the match's key, which is new each time a match is hosted.
+    std::string join_code(std::string address);
 
     // Connecting, a step at a time, so a menu can show how it goes (and the networking is started the
     // first time): begin hosts or joins (false: `error` says why), then poll_connect until every player

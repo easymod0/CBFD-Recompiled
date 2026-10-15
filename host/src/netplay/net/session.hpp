@@ -1,10 +1,13 @@
 // A netplay session over GameNetworkingSockets: the host listens on a UDP port and the
-// others connect to it directly by address. Connections are encrypted by the library (they aren't
-// authenticated: there is no certificate authority, so someone in the path could still pose as the
-// host). All that's sent are the packets in packets.hpp, reliably (resent until they arrive, in order).
+// others connect to it directly, by its join code (its address, port and the match's key). Connections
+// are encrypted by the library (they aren't authenticated: there is no certificate authority, so someone
+// in the path could still pose as the host). All that's sent are the packets in packets.hpp, reliably
+// (resent until they arrive, in order); the library closes a connection that sends a bigger message, and
+// buffers little from each peer.
 //
-// The handshake: a joiner sends Hello (build, ROM and settings profile hashes); the host refuses any
-// difference, or a full or started match, and otherwise gives it the lowest free port (the host is
+// The handshake: a joiner sends Hello (the match's key, then build, ROM, settings profile and mods
+// hashes) within 3 s. The host closes a wrong key at once, telling it nothing else; then it refuses any
+// other difference, or a full or started match, and otherwise gives it the lowest free port (the host is
 // port 0) with Welcome. Once every port is taken, the host starts the match (Start). Then each peer sends its own port's pads (Inputs) and memory hashes (Hash) to
 // the host, which passes Inputs on to the others: the host is the hub, so joiners only ever connect to
 // it. A peer that sends anything else (another port's inputs, a second Hello) is dropped.
@@ -39,9 +42,9 @@ namespace conker::netplay {
         Packet packet;
     };
 
-    // The join code (join_code.hpp) for `address` ("1.2.3.4:5000" or "[::1]:5000"), or empty if it isn't
-    // an address and port.
-    std::string join_code_for(const std::string& address);
+    // The join code (join_code.hpp) for `address` ("1.2.3.4:5000" or "[::1]:5000") and a match's `key`, or
+    // empty if it isn't an address and port.
+    std::string join_code_for(const std::string& address, uint64_t key);
 
     // Starts and stops the library, once per process, around any sessions.
     bool startup(std::string& error);
@@ -54,10 +57,13 @@ namespace conker::netplay {
         Session(const Session&) = delete;
         Session& operator=(const Session&) = delete;
 
-        // Hosts a match of `players` (2 to 4) on UDP `port`, on every local address.
+        // Hosts a match of `players` (2 to 4) on UDP `port`, on every local address, with a new random key.
         bool host(uint16_t port, int players, const Hello& me, std::string& error);
-        // Joins the host at `address` ("1.2.3.4:5000" or "[::1]:5000"), or by its join code.
-        bool join(const std::string& address, const Hello& me, std::string& error);
+        // Host: the join code for this match at `address` (the host's, as the others reach it), or empty
+        // if it isn't an address and port.
+        std::string join_code(const std::string& address) const;
+        // Joins the host by its join code (`me`'s key is the code's).
+        bool join(const std::string& code, const Hello& me, std::string& error);
         // Host: once every port is taken (false until then), starts the match: tells the joiners, and
         // refuses any more. `own_view`: every player sees only their own view (the match's rule).
         bool start(bool own_view = false);
@@ -85,6 +91,7 @@ namespace conker::netplay {
             uint32_t connection = 0;
             int port = -1;          // -1 until the handshake is done
             double connected_at = 0;
+            int64_t last_hash = -1; // the read of the last Hash from it (one per read, in order)
         };
 
         void on_status_changed(const void* info);

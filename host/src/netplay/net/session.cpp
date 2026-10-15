@@ -7,15 +7,69 @@
 #include <chrono>
 #include <cstdio>
 
+#if defined(_WIN32)
+#include <windows.h>
+#include <bcrypt.h>
+#pragma comment(lib, "bcrypt.lib")
+#else
+#include <sys/types.h>
+#include <sys/random.h>   // getentropy (Linux, macOS)
+#endif
+
 #include <steam/isteamnetworkingutils.h>
 #include <steam/steamnetworkingsockets.h>
 
 namespace conker::netplay {
     namespace {
-        // A joiner that hasn't finished the handshake in this long is dropped.
-        constexpr double handshake_seconds = 10.0;
+        // A joiner that hasn't finished the handshake in this long is dropped (an honest Hello takes a
+        // round trip).
+        constexpr double handshake_seconds = 3.0;
         // Connections the host takes at once, joined or not: more are turned away unread.
         constexpr size_t max_connections = 8;
+        // What the library buffers from one peer, unread: a message bigger than the largest packet closes
+        // the connection before it's buffered, and past these limits more are dropped (and resent, as
+        // everything is sent reliably). An honest peer is never more than a few dozen messages ahead.
+        constexpr int recv_buffer_messages = 512;
+        constexpr int recv_buffer_bytes = recv_buffer_messages * (int)max_packet_size;
+        // The most messages one poll() takes: a flood can't hold the game's thread there.
+        constexpr int max_messages_per_poll = 256;
+
+        // The options for every connection, as the host's listen socket or a joiner's connection.
+        struct ConnectionOptions {
+            SteamNetworkingConfigValue_t values[4];
+            ConnectionOptions(void (*status_changed)(SteamNetConnectionStatusChangedCallback_t*)) {
+                values[0].SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, (void*)status_changed);
+                values[1].SetInt32(k_ESteamNetworkingConfig_RecvMaxMessageSize, (int32_t)max_packet_size);
+                values[2].SetInt32(k_ESteamNetworkingConfig_RecvBufferSize, recv_buffer_bytes);
+                values[3].SetInt32(k_ESteamNetworkingConfig_RecvBufferMessages, recv_buffer_messages);
+            }
+        };
+
+        // A match's key: 64 bits from the system's random source (never 0, which is "no key").
+        bool random_key(uint64_t& key) {
+            do {
+#if defined(_WIN32)
+                if (!BCRYPT_SUCCESS(BCryptGenRandom(nullptr, (PUCHAR)&key, sizeof(key), BCRYPT_USE_SYSTEM_PREFERRED_RNG))) {
+                    return false;
+                }
+#else
+                if (getentropy(&key, sizeof(key)) != 0) {
+                    return false;
+                }
+#endif
+            } while (key == 0);
+            return true;
+        }
+
+        // Whether two keys are the same, taking the same time whatever they are (no early exit for a
+        // stranger to time).
+        bool same_key(uint64_t a, uint64_t b) {
+            volatile uint64_t difference = 0;
+            for (int i = 0; i < 64; i += 8) {
+                difference = difference | (((a >> i) ^ (b >> i)) & 0xFF);
+            }
+            return difference == 0;
+        }
 
         Session* current = nullptr;
 
@@ -50,13 +104,14 @@ namespace conker::netplay {
         }
     }
 
-    std::string join_code_for(const std::string& address) {
+    std::string join_code_for(const std::string& address, uint64_t key) {
         SteamNetworkingIPAddr parsed;
         if (!parsed.ParseString(address.c_str())) {
             return {};
         }
         Endpoint endpoint;
         endpoint.port = parsed.m_port;
+        endpoint.key = key;
         if (parsed.IsIPv4()) {
             const uint32_t ip = parsed.GetIPv4();
             endpoint.ip = { (uint8_t)(ip >> 24), (uint8_t)(ip >> 16), (uint8_t)(ip >> 8), (uint8_t)ip };
@@ -101,12 +156,16 @@ namespace conker::netplay {
             error = "a match is 2 to 4 players";
             return false;
         }
+        hello = me;
+        if (!random_key(hello.key)) {
+            error = "couldn't make the match's key (no random source)";
+            return false;
+        }
         SteamNetworkingIPAddr address;
         address.Clear();
         address.m_port = port;
-        SteamNetworkingConfigValue_t option;
-        option.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, (void*)status_changed);
-        listen_socket = SteamNetworkingSockets()->CreateListenSocketIP(address, 1, &option);
+        ConnectionOptions options(status_changed);
+        listen_socket = SteamNetworkingSockets()->CreateListenSocketIP(address, 4, options.values);
         if (listen_socket == k_HSteamListenSocket_Invalid) {
             error = "couldn't listen on UDP port " + std::to_string(port);
             return false;
@@ -115,37 +174,34 @@ namespace conker::netplay {
         is_host = true;
         own_port = 0;
         match_players = players;
-        hello = me;
         return true;
     }
 
-    bool Session::join(const std::string& address, const Hello& me, std::string& error) {
-        SteamNetworkingIPAddr host_address;
-        if (!host_address.ParseString(address.c_str()) || host_address.m_port == 0) {
-            const std::optional<Endpoint> endpoint = decode_join_code(address);
-            if (!endpoint) {
-                error = "\"" + address + "\" isn't a join code, or an address and port (1.2.3.4:5000 or [::1]:5000)";
-                return false;
-            }
-            if (endpoint->ipv6) {
-                host_address.SetIPv6(endpoint->ip.data(), endpoint->port);
-            }
-            else {
-                const auto& ip = endpoint->ip;
-                host_address.SetIPv4((uint32_t)ip[0] << 24 | ip[1] << 16 | ip[2] << 8 | ip[3], endpoint->port);
-            }
+    bool Session::join(const std::string& code, const Hello& me, std::string& error) {
+        const std::optional<Endpoint> endpoint = decode_join_code(code);
+        if (!endpoint) {
+            error = "\"" + code + "\" isn't a join code (or has a typo)";
+            return false;
         }
-        SteamNetworkingConfigValue_t option;
-        option.SetPtr(k_ESteamNetworkingConfig_Callback_ConnectionStatusChanged, (void*)status_changed);
-        const HSteamNetConnection connection = SteamNetworkingSockets()->ConnectByIPAddress(host_address, 1, &option);
+        SteamNetworkingIPAddr host_address;
+        if (endpoint->ipv6) {
+            host_address.SetIPv6(endpoint->ip.data(), endpoint->port);
+        }
+        else {
+            const auto& ip = endpoint->ip;
+            host_address.SetIPv4((uint32_t)ip[0] << 24 | ip[1] << 16 | ip[2] << 8 | ip[3], endpoint->port);
+        }
+        ConnectionOptions options(status_changed);
+        const HSteamNetConnection connection = SteamNetworkingSockets()->ConnectByIPAddress(host_address, 4, options.values);
         if (connection == k_HSteamNetConnection_Invalid) {
-            error = "couldn't connect to " + address;
+            error = "couldn't connect to the host";
             return false;
         }
         poll_group = SteamNetworkingSockets()->CreatePollGroup();
         SteamNetworkingSockets()->SetConnectionPollGroup(connection, poll_group);
         is_host = false;
         hello = me;
+        hello.key = endpoint->key;
         peers.push_back({ connection, 0, now() });  // the host, on port 0
         return true;
     }
@@ -162,6 +218,10 @@ namespace conker::netplay {
             }
         }
         return true;
+    }
+
+    std::string Session::join_code(const std::string& address) const {
+        return is_host ? join_code_for(address, hello.key) : std::string();
     }
 
     Session::Peer* Session::find(uint32_t connection) {
@@ -229,7 +289,9 @@ namespace conker::netplay {
         if (poll_group != k_HSteamNetPollGroup_Invalid) {
             SteamNetworkingMessage_t* messages[32];
             int count;
-            while ((count = sockets->ReceiveMessagesOnPollGroup(poll_group, messages, 32)) > 0) {
+            int taken = 0;
+            while (taken < max_messages_per_poll && (count = sockets->ReceiveMessagesOnPollGroup(poll_group, messages, 32)) > 0) {
+                taken += count;
                 for (int i = 0; i < count; i++) {
                     SteamNetworkingMessage_t* message = messages[i];
                     Peer* peer = find(message->m_conn);
@@ -272,6 +334,14 @@ namespace conker::netplay {
                     drop(peer, Reason::protocol, &events);
                     return;
                 }
+                // The key first, and alone: a wrong one is closed at once, told nothing else (whether its
+                // build or ROM would have done).
+                if (!same_key(theirs->key, hello.key)) {
+                    SteamNetworkingSockets()->CloseConnection(peer.connection, k_ESteamNetConnectionEnd_App_Min + (int)Reason::key,
+                        describe(Reason::key), false);
+                    peers.erase(peers.begin() + (&peer - peers.data()));
+                    return;
+                }
                 std::optional<Reason> refusal;
                 if (theirs->build != hello.build) refusal = Reason::build;
                 else if (theirs->rom != hello.rom) refusal = Reason::rom;
@@ -306,10 +376,19 @@ namespace conker::netplay {
             // another take the port), and Inputs no further ahead than the game can have got (set_horizon):
             // anything else is a broken or hostile peer, refused before it's passed on.
             const Inputs* inputs = std::get_if<Inputs>(&packet);
-            if ((inputs != nullptr || std::holds_alternative<Hash>(packet)) &&
+            const Hash* hash = std::get_if<Hash>(&packet);
+            if ((inputs != nullptr || hash != nullptr) &&
                 (entry_open || (inputs != nullptr && (uint64_t)inputs->first_read + inputs->count > horizon))) {
                 drop(peer, Reason::protocol, &events);
                 return;
+            }
+            // One hash per read, in order: a repeat is a broken or hostile peer.
+            if (hash != nullptr) {
+                if ((int64_t)hash->read <= peer.last_hash) {
+                    drop(peer, Reason::protocol, &events);
+                    return;
+                }
+                peer.last_hash = hash->read;
             }
             if (inputs != nullptr && inputs->port == peer.port) {
                 // Passed on to the others, as they only connect to the host.
@@ -383,11 +462,13 @@ namespace conker::netplay {
             event.packet = packet;
             events.push_back(std::move(event));
         }
-        else if (std::holds_alternative<Hash>(packet)) {
-            if (!started) {
+        else if (const Hash* hash = std::get_if<Hash>(&packet); hash != nullptr) {
+            // Once started, one per read, in order.
+            if (!started || (int64_t)hash->read <= peer.last_hash) {
                 drop(peer, Reason::protocol, &events);
                 return;
             }
+            peer.last_hash = hash->read;
             Event event{ Event::Type::packet };
             event.port = 0;
             event.packet = packet;
