@@ -57,6 +57,9 @@ namespace {
 
     std::array<std::vector<Pad>, conker::netplay::max_players> received;
     std::array<bool, conker::netplay::max_players> gone{};
+    // Whether a peer that's gone stopped answering, rather than saying goodbye: a game quitting can stop
+    // sending before its goodbye goes out (upstream issue 127), so it's told as maybe having quit.
+    bool gone_silently = false;
     // This peer's hashes, and those of the others (the host's for a joiner, every joiner's for the host),
     // until they're compared.
     std::map<uint32_t, uint64_t> own_hashes;
@@ -108,14 +111,21 @@ namespace {
             case Event::Type::left:
                 std::printf("[netplay] port %d left: %s\n", event.port + 1, conker::netplay::describe(event.reason));
                 gone[event.port] = true;
+                gone_silently = gone_silently || event.reason == Reason::timeout;
                 if (event.reason == Reason::desync) {
                     end_match(Reason::desync, "a player's game went a different way (a desync)");
                 }
                 break;
             case Event::Type::ended:
-                std::printf("[netplay] the host ended the match: %s\n", conker::netplay::describe(event.reason));
+                if (event.reason == Reason::timeout) {
+                    std::printf("[netplay] the host stopped answering (it may have quit)\n");
+                }
+                else {
+                    std::printf("[netplay] the host ended the match: %s\n", conker::netplay::describe(event.reason));
+                }
                 // Every pad comes through the host.
                 for (bool& g : gone) g = true;
+                gone_silently = gone_silently || event.reason == Reason::timeout;
                 left = true;
                 if (event.reason == Reason::desync) {
                     end_match(Reason::desync, "a player's game went a different way (a desync)");
@@ -269,6 +279,7 @@ bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
     initial_sent = false;
     for (auto& pads : received) pads.clear();
     gone = {};
+    gone_silently = false;
     own_hashes.clear();
     their_hashes.clear();
     if (hosting) {
@@ -432,7 +443,7 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, con
         }
         for (int port = 0; port < match_players; port++) {
             if (received[port].size() <= read && gone[port]) {
-                end_match(Reason::quit, "a player left");
+                end_match(Reason::quit, gone_silently ? "a player stopped answering (they may have quit)" : "a player left");
                 return false;
             }
         }
