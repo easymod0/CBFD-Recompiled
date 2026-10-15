@@ -86,11 +86,11 @@ same headless or on another machine:
   aiming, Lock-On), Conker's Detail, Cutscene Aspect Ratio (Expand) and the sound volumes (100%).
 - **Widescreen:** the culls and sprites are widened for 16:9 whatever the window (a wider window can
   lose a little at its sides).
-- **Save states** (F5, F7) are off. **Mods:** in a netplay match, any, as long as everyone has the
-  same ones on, set the same: the handshake carries a hash of each mod's file and saved settings, in
-  load order, and refuses a player whose differ ("different mods"). Recordings and replays can't have
-  mods (a recording doesn't say which were on). Texture packs only change the picture: they're left
-  out of both, and can differ.
+- **Save states** (F5, F7) are off. **Mods:** none, in netplay matches, recordings and replays: a mod
+  is native code the other players would have to trust, and a recording doesn't say which were on.
+  Netplay won't host or join with one on, and the handshake still carries a hash of each mod's file
+  and saved settings, so the host refuses a player with any ("mods on"). Texture packs only change
+  the picture: they're left out, and can differ.
 - **The renderer** writes nothing into game memory. RT64's Render to RAM copies each frame's
   colour and depth images back into the game's memory, as the N64's RDP did, from the graphics thread
   whenever it gets to the display list. Headless, with no renderer, nothing is written. So a window

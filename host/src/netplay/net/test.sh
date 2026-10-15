@@ -62,7 +62,7 @@ refused() {
     kill $host 2>/dev/null
 }
 refused refused-rom 27202 --rom "a different ROM"
-refused refused-mods 27204 --mods "different mods"
+refused refused-mods 27204 --mods "mods on"
 
 # A hostile joiner: Inputs before the start (it joins a lobby of 3 alone, so the match hasn't started), or
 # far beyond what the game could have reached (in a started match of 2). The host must drop it as broken

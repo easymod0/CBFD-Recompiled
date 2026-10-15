@@ -53,7 +53,7 @@ namespace conker::netplay {
         protocol,       // a packet that wasn't expected or didn't decode
         desync,         // the game's memory differs between peers
         timeout,        // a peer stopped answering
-        mods,           // other mods on (texture packs aside), or the same ones set otherwise
+        mods,           // mods on (texture packs aside): netplay allows none
     };
     constexpr uint8_t last_reason = (uint8_t)Reason::mods;
     const char* describe(Reason reason);

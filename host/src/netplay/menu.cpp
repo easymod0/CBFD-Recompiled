@@ -231,8 +231,8 @@ namespace {
             recompui::Element* intro = column(this, 8.0f);
             text(intro, "Netplay", Typography::Header3);
             text(intro, "Play multiplayer over the internet: everyone runs the game, and every player's controller "
-                "is passed to the others. Everyone needs this same build, the same ROM, and the same mods on, set the "
-                "same (texture packs can differ). You play with your first controller; the game starts from the "
+                "is passed to the others. Everyone needs this same build and the same ROM, with no mods on (texture "
+                "packs are fine). You play with your first controller; the game starts from the "
                 "beginning, with an empty save.",
                 Typography::Body, color::TextDim);
 

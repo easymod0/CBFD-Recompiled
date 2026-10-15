@@ -12,9 +12,10 @@
 //   Widescreen: the culls and sprites are widened for 16:9, whatever the window's size and the aspect
 //     ratio setting (widescreen.cpp). A wider window can lose a little at its sides.
 //   Save states (F5, F7): off.
-//   Mods: in a netplay match, whatever everyone has the same of (mods_hash, in the handshake: each mod on,
-//     its file and its settings); in recordings and replays none (check_mods: a recording doesn't say which
-//     were on). Texture packs only change the picture, so they're left out of both.
+//   Mods: none, in netplay matches, recordings and replays (check_mods; lockstep::begin): a mod is native
+//     code the other players would have to trust, and a recording doesn't say which were on. The handshake
+//     still carries mods_hash (each mod on, its file and its settings), so a player with mods on is refused
+//     by the host. Texture packs only change the picture, so they're left out of both and can be on.
 //   The renderer: RT64 renders nothing back into game memory (its Render to RAM), as headless has no
 //     renderer to: see tools/netplay/README.md for what the game then reads instead.
 //
@@ -57,7 +58,7 @@ namespace {
         "mouse off; gyro off; mouse camera off; stick free camera off; swap sticks off\n"
         "camera tab defaults; conker detail always highest; cutscene aspect expand; volumes 100\n"
         "widescreen culls 16:9\n"
-        "save states off; mods the same for everyone (handshake), none in recordings, texture packs free\n"
+        "save states off; mods off, texture packs free\n"
         "renderer writes nothing to game memory\n";
 }
 
@@ -163,7 +164,7 @@ bool conker::netplay_profile::check_mods() {
         }
 #endif
         if (recomp::mods::is_mod_enabled(mod.mod_id)) {
-            std::fprintf(stderr, "[harness] the mod %s is on: turn it off in the Mods menu (recordings and replays can't have mods but texture packs)\n",
+            std::fprintf(stderr, "[harness] the mod %s is on: turn it off in the Mods menu (netplay, recordings and replays allow no mods but texture packs)\n",
                 mod.display_name.c_str());
             ok = false;
         }

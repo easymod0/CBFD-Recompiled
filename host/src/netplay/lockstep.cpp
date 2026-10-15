@@ -283,6 +283,12 @@ namespace {
 
 bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
     std::scoped_lock lock(session_mutex);
+    // No mods in a match (texture packs aside): a mod is native code the others would have to trust. The
+    // host refuses a joiner with any (the handshake's mods hash); this says so before connecting.
+    if (me.mods != 0) {
+        error = "netplay allows no mods but texture packs: turn them off in the Mods menu.";
+        return false;
+    }
     if (!library_started) {
         if (!netplay::startup(error)) {
             error = "couldn't start the networking: " + error;
