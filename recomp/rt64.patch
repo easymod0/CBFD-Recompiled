@@ -3180,15 +3180,16 @@ index 9131697..488e5be 100644
          void reloadReplacements(bool clearQueue, uint64_t exclusiveDbHash = 0);
          bool loadReplacementDirectory(const ReplacementDirectory &replacementDirectory);
 diff --git a/src/render/rt64_vi_renderer.cpp b/src/render/rt64_vi_renderer.cpp
-index b4ff4e9..3edef2f 100644
+index b4ff4e9..5b6bfd4 100644
 --- a/src/render/rt64_vi_renderer.cpp
 +++ b/src/render/rt64_vi_renderer.cpp
-@@ -4,10 +4,24 @@
+@@ -4,10 +4,39 @@
  
  #include "rt64_vi_renderer.h"
  
 +#include <algorithm>
 +#include <atomic>
++#include <cmath>
 +
  #include "shared/rt64_hlsl.h"
  #include "shared/rt64_video_interface.h"
@@ -3205,10 +3206,24 @@ index b4ff4e9..3edef2f 100644
 +        return presentationCropShare;
 +    }
 +
++    // Conker: the presentation focus (see rt64_vi_renderer.h), packed into one atomic as four 16-bit shares.
++    static std::atomic<uint64_t> presentationFocusPacked{ 0xFFFFFFFF00000000ull };
++
++    void setPresentationFocus(float left, float top, float right, float bottom) {
++        auto share = [](float v) { return uint64_t(std::lround(std::clamp(v, 0.0f, 1.0f) * 65535.0f)); };
++        presentationFocusPacked = share(left) | (share(top) << 16) | (share(right) << 32) | (share(bottom) << 48);
++    }
++
++    static hlslpp::float4 presentationFocus() {
++        const uint64_t packed = presentationFocusPacked;
++        auto share = [&](int i) { return float((packed >> (16 * i)) & 0xFFFF) / 65535.0f; };
++        return hlslpp::float4(share(0), share(1), share(2), share(3));
++    }
++
      // VIRenderer
  
      VIRenderer::VIRenderer() { }
-@@ -108,6 +122,18 @@ namespace RT64 {
+@@ -108,6 +137,42 @@ namespace RT64 {
          hlslpp::float4 viViewRect = vi.viewRectangle() * sdSize.xyxy;
          hlslpp::float4 viCropRect = vi.cropRectangle() * sdSize.xyxy;
  
@@ -3224,14 +3239,38 @@ index b4ff4e9..3edef2f 100644
 +            viViewRect = hlslpp::float4(x, y, width, height);
 +        }
 +
++        // Conker: the presentation focus. The picture is scaled by as much both ways for the focused part to
++        // fill as much of its area as it can, with that part's middle at the area's; the scissor then keeps
++        // only the focused part.
++        const hlslpp::float4 focus = presentationFocus();
++        const float focusWidth = float(focus.z) - float(focus.x);
++        const float focusHeight = float(focus.w) - float(focus.y);
++        if ((focusWidth > 0.01f) && (focusHeight > 0.01f) && ((focusWidth < 0.999f) || (focusHeight < 0.999f))) {
++            const float zoom = std::min(1.0f / focusWidth, 1.0f / focusHeight);
++            const float areaMiddleX = float(viViewRect.x) + float(viViewRect.z) / 2.0f;
++            const float areaMiddleY = float(viViewRect.y) + float(viViewRect.w) / 2.0f;
++            const float width = float(viViewRect.z) * zoom;
++            const float height = float(viViewRect.w) * zoom;
++            const float focusMiddleX = (float(focus.x) + float(focus.z)) / 2.0f;
++            const float focusMiddleY = (float(focus.y) + float(focus.w)) / 2.0f;
++            viViewRect = hlslpp::float4(areaMiddleX - focusMiddleX * width, areaMiddleY - focusMiddleY * height, width, height);
++            const float keptWidth = focusWidth * width;
++            const float keptHeight = focusHeight * height;
++            const float left = std::max(float(viCropRect.x), areaMiddleX - keptWidth / 2.0f);
++            const float top = std::max(float(viCropRect.y), areaMiddleY - keptHeight / 2.0f);
++            const float right = std::min(float(viCropRect.x + viCropRect.z), areaMiddleX + keptWidth / 2.0f);
++            const float bottom = std::min(float(viCropRect.y + viCropRect.w), areaMiddleY + keptHeight / 2.0f);
++            viCropRect = hlslpp::float4(left, top, right - left, bottom - top);
++        }
++
          // Scale all the rectangles to the space of the Window.
          hlslpp::float2 topLeftViewport = fromSDtoHD({ float(viViewRect.x), float(viViewRect.y) }, sdSize, hdSize);
          hlslpp::float2 bottomRightViewport = fromSDtoHD({ float(viViewRect.x + viViewRect.z), float(viViewRect.y + viViewRect.w) }, sdSize, hdSize);
 diff --git a/src/render/rt64_vi_renderer.h b/src/render/rt64_vi_renderer.h
-index 8a3782a..6fd46b1 100644
+index 8a3782a..e4923a6 100644
 --- a/src/render/rt64_vi_renderer.h
 +++ b/src/render/rt64_vi_renderer.h
-@@ -11,6 +11,13 @@
+@@ -11,6 +11,18 @@
  #include "rt64_shader_library.h"
  
  namespace RT64 {
@@ -3241,6 +3280,11 @@ index 8a3782a..6fd46b1 100644
 +    // a black border the N64 left for the TV's overscan (issue #72). Set by the game's host.
 +    void setPresentationCrop(float shareEachSide);
 +    float presentationCrop();
++
++    // Conker: a part of the picture to show alone, scaled up to fill it without stretching (the rest of the
++    // picture's area left black), as shares of the picture: left, top, right, bottom. (0, 0, 1, 1) shows it
++    // all. Netplay's "my view only": one player's view of the split screen. Set by the game's host.
++    void setPresentationFocus(float left, float top, float right, float bottom);
 +
      struct VIRenderer {
          std::unique_ptr<VideoInterfaceDescriptorSet> descriptorSet;

@@ -200,7 +200,7 @@ if (CONKER_RT64)
     target_compile_definitions(ConkerRecomp PRIVATE CONKER_RT64 HLSL_CPU)
     if (CONKER_NETPLAY)
         # The launcher's Netplay menu.
-        target_sources(ConkerRecomp PRIVATE src/netplay/menu.cpp)
+        target_sources(ConkerRecomp PRIVATE src/netplay/menu.cpp src/netplay/view.cpp)
     endif()
     if (WIN32)
         target_compile_definitions(ConkerRecomp PRIVATE NOMINMAX)

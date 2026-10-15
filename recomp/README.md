@@ -396,6 +396,14 @@ renderer zooms the picture about its middle by as much both ways, so it isn't
 stretched and as much comes off its top and bottom. Widening the 3D scissor to
 the full frame instead pillarboxed the picture.
 
+Netplay's "my view only" (`host/src/netplay/view.cpp`, fork issue #9) is
+done the same way, as the picture is shown: the game's host sets a part of
+the picture to show alone (`RT64::setPresentationFocus`, as shares of it: this
+player's camera rectangle while the split screen is on), and the VI renderer
+scales the picture by as much both ways for that part to fill as much of the
+window as it can, with a scissor keeping only that part. Nothing in game
+memory changes, so every machine's game stays the same.
+
 The patch also changes frame interpolation (a frame rate above the game's 30).
 RT64 draws frames between the game's by pairing each transform with last
 frame's; without help it guesses, from draw calls that look alike. Conker's

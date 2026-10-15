@@ -12,6 +12,7 @@
 //   --headless   null renderer, no window, input or sound
 //   --window WxH open the window at this size, e.g. 2520x1080 to try a 21:9 screen
 //                (the window mode, windowed or fullscreen, is still the setting's)
+//   --my-view-only  in a netplay match, show only this player's part of the split screen
 //   --data DIR   keep the game's data (the stored ROM, saves, settings) in DIR instead,
 //                created if need be: e.g. to run two copies at once, as netplay's tests do
 
@@ -455,6 +456,11 @@ int main(int argc, char** argv) {
         }
 #if defined(CONKER_NETPLAY)
         else if (conker::harness::parse_option(argc, argv, i)) {
+        }
+#endif
+#if defined(CONKER_RT64) && defined(CONKER_NETPLAY)
+        else if (std::strcmp(argv[i], "--my-view-only") == 0) {
+            conker::netplay_view::set_mine_only(true);
         }
 #endif
 #if defined(CONKER_RT64)

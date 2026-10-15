@@ -291,6 +291,14 @@ namespace conker {
         // On the main thread (update_gfx): says when a match is over.
         void update();
     }
+
+    // netplay/view.cpp: "my view only", the window showing only this player's part of the split screen.
+    namespace netplay_view {
+        void set_mine_only(bool on);
+        bool is_mine_only();
+        // At the start of each game frame's display list (widescreen.cpp's conker_frame_dl_begin).
+        void game_frame(uint8_t* rdram);
+    }
 #endif
 
     // notices.cpp: a line in the top-left corner for a few seconds, one at a time (an unlock, a save state's

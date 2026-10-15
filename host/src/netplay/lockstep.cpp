@@ -140,6 +140,11 @@ namespace {
     void send_own(uint64_t read, Pad pad) {
         pad.buttons &= (uint16_t)~conker::netplay::reserved_buttons;
         pad.err_no = 0;     // a player's port always has a controller
+        // CONKER_NETPLAY_LOG_PADS: each change of this peer's buttons, for debugging.
+        static const bool log_pads = std::getenv("CONKER_NETPLAY_LOG_PADS") != nullptr;
+        if (log_pads && (received[own_port].empty() || received[own_port].back().buttons != pad.buttons)) {
+            std::printf("[netplay] read %llu: port %d's buttons %04x\n", (unsigned long long)read, own_port + 1, pad.buttons);
+        }
         Inputs inputs;
         inputs.port = (uint8_t)own_port;
         inputs.first_read = (uint32_t)read;

@@ -274,6 +274,17 @@ namespace {
             join_button = context.create_element<recompui::Button>(join, "Join", recompui::ButtonStyle::Primary);
             join_button->add_pressed_callback([this]() { on_join(); });
 
+            // What this window shows of the split screen.
+            recompui::Element* display = column(this, 12.0f);
+            text(display, "Your screen", Typography::LabelLG);
+            recompui::Radio* display_radio = context.create_element<recompui::Radio>(display);
+            display_radio->add_option("Split screen");
+            display_radio->add_option("My view only");
+            display_radio->set_index(conker::netplay_view::is_mine_only() ? 1 : 0);
+            display_radio->add_index_changed_callback([](uint32_t index) { conker::netplay_view::set_mine_only(index == 1); });
+            text(display, "Every player's view is still drawn on every machine (that's what keeps the games the same): "
+                "\"My view only\" shows just yours, scaled up to fill the window.", Typography::Body, color::TextDim);
+
             // How it goes.
             recompui::Element* status = row(this);
             status_label = text(status, "", Typography::LabelLG);
