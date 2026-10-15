@@ -24,6 +24,14 @@ if (APPLE)
     enable_language(OBJC OBJCXX)
 endif()
 
+# Netplay runs the same game on every machine, so every compiler has to turn its floating-point code into the
+# same arithmetic. Clang fuses a multiply and an add into one instruction (one rounding instead of two) where the
+# processor has it, as ARM's always does (Apple Silicon); MSVC doesn't unless asked. So no fusing, for every
+# target here (the recompiled game, the runtime, the host).
+if (CONKER_NETPLAY AND NOT MSVC)
+    add_compile_options(-ffp-contract=off)
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -124,7 +132,6 @@ if (CONKER_NETPLAY)
     set(CONKER_BUILD_ID_CPP "${CMAKE_CURRENT_BINARY_DIR}/netplay_build_id.cpp")
     add_custom_target(conker_build_id
         COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=${REPO_ROOT} -DOUT=${CONKER_BUILD_ID_CPP}
-            "-DPLATFORM=${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}-${CMAKE_CXX_COMPILER_ID}"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/src/netplay/build_id.cmake"
         BYPRODUCTS "${CONKER_BUILD_ID_CPP}")
     target_sources(ConkerRecomp PRIVATE "${CONKER_BUILD_ID_CPP}")

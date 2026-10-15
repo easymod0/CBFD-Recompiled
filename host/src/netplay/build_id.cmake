@@ -1,12 +1,11 @@
 # Writes the game's build id for netplay's handshake (hello.cpp) into OUT, a C++ file, at every build:
 # the git commit, and if there are uncommitted changes "-dirty-" and a hash of them (git diff, with the
-# submodules' patched trees left out: their patches are in the repo), then the platform: the system,
-# processor and compiler (PLATFORM), as floating-point code can come out differently from one compiler or
-# processor to another, so netplay is between the same platforms for now (fork issue #8). Two builds of
-# the same commit from clean trees on the same platform have the same id; any change gives another.
-# Without git, the commit is "unknown".
+# submodules' patched trees left out: their patches are in the repo). Two builds of the same commit from
+# clean trees have the same id, on any platform: a match can be between Windows, Linux and macOS, as long as
+# their compilers turn the game's code into the same arithmetic (host/CMakeLists.txt keeps them from fusing
+# multiply-adds); the memory hashes the peers compare catch it if not. Without git, the commit is "unknown".
 # The file is rewritten only when the id changes, so nothing is rebuilt otherwise.
-#   cmake -DSOURCE_DIR=<repo> -DOUT=<file> -DPLATFORM=<system-processor-compiler> -P build_id.cmake
+#   cmake -DSOURCE_DIR=<repo> -DOUT=<file> -P build_id.cmake
 execute_process(COMMAND git rev-parse HEAD
     WORKING_DIRECTORY "${SOURCE_DIR}" OUTPUT_VARIABLE commit RESULT_VARIABLE failed
     OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
@@ -22,7 +21,6 @@ else()
         string(APPEND id "-dirty-${changes_hash}")
     endif()
 endif()
-string(APPEND id " ${PLATFORM}")
 set(content "// Written by host/src/netplay/build_id.cmake at each build.\nnamespace conker::netplay {\n    const char* build_id() { return \"${id}\"; }\n}\n")
 if (EXISTS "${OUT}")
     file(READ "${OUT}" old)
