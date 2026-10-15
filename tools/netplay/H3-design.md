@@ -151,10 +151,23 @@ Recordings and hash logs from normal mode can't be compared with it.
 ## Save states
 
 In deterministic mode, save states are taken and loaded only at delivery points (not also in
-`osRecvMesg`, as in normal mode). The timeline (virtual time, the next VI, DP done due) is saved with
-the timers, and loading clears the game's own queued messages and restores the timeline, so a state
-goes on the same way after loading. The song mark is saved too. States taken in normal mode still
-load: the timeline starts again from the state's clock.
+`osRecvMesg`, as in normal mode). A state (layout 4; layout 3's still load) now also holds:
+
+- the timeline: virtual time, the next VI, and the graphics tasks whose DP done is due;
+- the RSP's data memory (4KB): each audio task reloads most of it, but not all;
+- the host's own state that decides what it writes into game memory (`host_state.cpp`, in the save
+  file's spare block, empty in older files): the song marks, where the rings of our display lists
+  are (the widescreen iris wipe's, the cutscene bars'), and when each shadow was last drawn (a shadow
+  missing for a frame is dropped for one more, `interpolation.cpp`).
+
+The last two were found by the harness's `--state-test <s>:<l>` (save after read `s`, load at `l`,
+compare with a run without it). Without them, a load right after the save matched, but a longer
+rewind didn't: two reads after the load (the shadows) and 80 reads around a scene's iris wipe (the
+ring: a branch in the game's display list to a different slot). With them, every test matches read
+for read, on the made-up recording and the played one (saves and loads up to 23,000 reads apart),
+with jitter too.
+
+States taken in normal mode still load: the timeline starts again from the state's clock.
 
 ## The runtime patch
 
@@ -202,6 +215,7 @@ Built (step 1 below), behind the harness: `ultramodern/src/timeline.cpp` and hoo
 | Frame delta `D_800BE9E4` | 2 VIs at every read, the same as normal mode |
 | Bursts between idle points | at most 260 OS calls, at most 8.6 ms of real time |
 | A 13.5-minute played recording (24,449 reads), two replays | identical, about 17 s each |
+| `--state-test` (save, then load up to 23,000 reads later), both recordings, and with jitter | identical to runs without it |
 
 Normal mode (no harness) runs as before. With `--real-time`, runs still differ as they did before H3.
 
@@ -209,8 +223,18 @@ A replay of the played recording follows the windowed session for about 380 s (t
 same virtual times, with the same OS-call counts), then parts from it after a load. A window still
 differs from headless where H4 (the sound device) and H5 (the renderer) come in.
 
-Not done yet: save states, the two host patches, display-list events, windowed runs (they need H4 and
-H5).
+The song mark (`ultra_extras.cpp`) now runs on the game's clock (`osGetCount`, the timeline's in
+deterministic mode) instead of the time; `conker_spin_wait_pass` already went through the timeline
+(`yield_self_1ms` is a delivery point there).
+
+**Window vs headless.** A replay in a window differs from a headless one from read 1. Dumps show why,
+and none of it is the timeline: the field of view and widescreen settings write the cull scales
+(`cullScaleX_800D35E0`), and what looks like the audio state and buffers (`D_800314B0`, around
+`0x8010B108`) follows the sound device's buffer, which headless reports empty. They're the netplay
+settings profile (#5) and H4. A window replay also differs from the window session it was recorded
+in, so the window has a source of its own too (the sound device, most likely).
+
+Not done yet: display-list events (Conker doesn't use them), windowed runs (they need #5, H4 and H5).
 
 ## The steps
 
@@ -220,8 +244,8 @@ H5).
    core). Check: 20 or more replays identical; jitter and busy-core replays identical to them;
    `D_800BE9E4` the same as normal mode; OS calls and time between idle points on a level load.
 2. ~~The limit, from those numbers~~: measured, not needed (above).
-3. Save states: a state loaded at read N gives the same reads from N on.
-4. The two host patches on virtual time; display-list events.
+3. Save states: a state loaded at read N gives the same reads from N on. **Done** (above).
+4. The two host patches on virtual time (**done**); display-list events (Conker doesn't use them).
 5. **Done when:** a replay on one busy core (`taskset -c 3` next to a busy loop) matches a normal one
    read for read, and `--fast` matches paced.
 

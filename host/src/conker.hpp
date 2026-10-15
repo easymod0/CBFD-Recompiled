@@ -36,6 +36,9 @@ namespace conker {
         void update(uint8_t* rdram);
         // conker_config.cpp: whether the setting is 4:3.
         bool in_4x3();
+        // For save states (host_state.cpp): where the ring of its display lists is.
+        uint32_t dl_ring();
+        void set_dl_ring(uint32_t slot);
     }
 
     // rom_versions.cpp: the ROMs the game accepts, and the versions of them kept for the
@@ -218,6 +221,9 @@ namespace conker {
     namespace shadows {
         // From the game thread, as the game starts a frame's display list.
         void game_frame();
+        // For save states (host_state.cpp): the game frames so far and when each shadow was last drawn.
+        std::vector<uint32_t> drawn();
+        void set_drawn(const std::vector<uint32_t>& words);
     }
 
     // reticle.cpp: Aiming: Reticle, a ring in the middle of the screen while aiming (issue #74).
@@ -261,6 +267,25 @@ namespace conker {
         void on_ui_ready();
         // On the main thread (update_gfx): shows the waiting lines, one at a time, once the game has started.
         void update();
+    }
+
+    // host_state.cpp: what the host keeps outside game memory that decides what it writes into it, so a
+    // save state holds it too (save_states.cpp, the harness) and a load goes on as the state did: the
+    // song marks (ultra_extras.cpp), where our display lists' rings are (widescreen.cpp,
+    // cutscene_aspect.cpp), and when each shadow was last drawn (interpolation.cpp).
+    namespace host_state {
+        std::vector<uint8_t> save();
+        // Empty, or cut short (a state from before it was held): what's missing starts afresh.
+        void load(const std::vector<uint8_t>& bytes);
+    }
+    // Parts of it (the others are with their modules' functions above), as 32-bit words.
+    namespace songs {
+        std::vector<uint32_t> marks();
+        void set_marks(const std::vector<uint32_t>& words);
+    }
+    namespace widescreen {
+        uint32_t dl_ring();
+        void set_dl_ring(uint32_t offset);
     }
 
     // save_states.cpp: save states (issue #94), F5 to save, F7 to load, F6 for the next slot.

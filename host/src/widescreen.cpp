@@ -483,6 +483,18 @@ namespace {
     // A ring of display lists: RT64 has long finished with one when it comes round again.
     constexpr uint32_t wide_dl_size = 0x10000;
     uint32_t wide_dl_offset = 0;
+}
+
+// For save states (conker::host_state): where the ring is, so a load writes where the state would.
+uint32_t conker::widescreen::dl_ring() {
+    return wide_dl_offset;
+}
+
+void conker::widescreen::set_dl_ring(uint32_t offset) {
+    wide_dl_offset = offset < wide_dl_size ? offset & ~7u : 0;
+}
+
+namespace {
 
     // Beyond the frame's sides, in N64 screen pixels. The scissor clips the rest.
     constexpr int32_t wide_reach = 1024;

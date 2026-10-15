@@ -24,6 +24,7 @@ Its options (see `host/src/netplay/harness.cpp`):
 | `--ports <n>` | the game sees controllers on ports 1 to `n`, without paks (a replay uses its recording's) |
 | `--fast` | runs the timeline as fast as the host can, without waiting for real time (headless) |
 | `--jitter <us>` | sleeps at random, up to `us` microseconds, at the game's OS calls and in the graphics thread: a test that the host's speed doesn't change the game |
+| `--state-test <s>:<l>` | takes a save state after read `s` and loads it at read `l`, so the game goes back and on again: the hash log then holds the reads after the load, which should match a run without it |
 | `--real-time` | runs the game on the time, as normally, instead of the timeline, to compare |
 
 While any of these are used, the game starts from an empty save of its own (`saves/harness/`, emptied

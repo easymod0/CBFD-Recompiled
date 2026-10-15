@@ -19,6 +19,10 @@
 //                       replay uses its recording's)
 //   --real-time         runs the game on the time, as normally, not the virtual timeline (below), to compare
 //   --fast              doesn't wait for real time on the timeline: as fast as the host can
+//   --state-test <s>:<l>  takes a save state after read <s> and loads it at read <l> (later), so the
+//                       game goes back to <s> and on again from there: the hash log then holds the
+//                       reads after the load in place of the first ones (they should match a run
+//                       without it). The keys' save states (F5, F7) don't work in that run
 //   --jitter <us>       sleeps at random, up to <us> microseconds, at the game's OS calls and in the
 //                       graphics thread: a test that the host's speed doesn't change the game
 //
@@ -48,6 +52,7 @@
 
 #include "../conker.hpp"
 #include "librecomp/save_states.hpp"
+#include "recomp.h"
 #include "ultramodern/save_states.hpp"
 #include "ultramodern/input.hpp"
 #include "ultramodern/timeline.hpp"
@@ -71,6 +76,15 @@ namespace {
     std::vector<uint64_t> dump_at;
     uint64_t stop_after = no_limit;
     int ports = 1;
+    // --state-test's.
+    uint64_t state_save_at = no_limit;
+    uint64_t state_load_at = no_limit;
+    enum class StateRequest { None, Save, Load };
+    StateRequest state_request = StateRequest::None;
+    std::vector<uint8_t> state;
+    std::vector<uint8_t> state_host;
+    uint64_t state_next_read = 0;
+    long state_log_position = 0;
     bool real_time = false;
     bool fast = false;
     uint64_t jitter_us = 0;
@@ -226,6 +240,48 @@ namespace {
         std::printf("[harness] read %llu: memory written to %s\n", (unsigned long long)read, path.c_str());
     }
 
+    // At a safe point (a delivery point, on the idle thread), with a --state-test save or load asked for.
+    void on_safe_point(uint8_t* game_rdram) {
+        if (state_request == StateRequest::None || !ultramodern::save_states::is_quiet()) {
+            return;
+        }
+        std::string error;
+        if (state_request == StateRequest::Save) {
+            if (!recomp::save_states::capture(game_rdram, state, error)) {
+                return;
+            }
+            state_host = conker::host_state::save();
+            // The next read is the state's, and the hash log goes on from there.
+            state_next_read = reads;
+            if (hash_log != nullptr) {
+                std::fflush(hash_log);
+                state_log_position = std::ftell(hash_log);
+            }
+            std::printf("[harness] state taken before read %llu (%zu bytes)\n", (unsigned long long)state_next_read, state.size());
+        }
+        else {
+            switch (recomp::save_states::restore(game_rdram, state, error)) {
+                case recomp::save_states::LoadResult::Loaded:
+                    conker::host_state::load(state_host);
+                    std::printf("[harness] state loaded before read %llu: back to read %llu\n", (unsigned long long)reads,
+                        (unsigned long long)state_next_read);
+                    reads = state_next_read;
+                    if (hash_log != nullptr) {
+                        std::fflush(hash_log);
+                        std::fseek(hash_log, state_log_position, SEEK_SET);
+                    }
+                    break;
+                case recomp::save_states::LoadResult::NotNow:
+                    return;
+                case recomp::save_states::LoadResult::Invalid:
+                    std::fprintf(stderr, "[harness] the state couldn't be loaded: %s\n", error.c_str());
+                    break;
+            }
+        }
+        state_request = StateRequest::None;
+        ultramodern::save_states::set_safe_points_wanted(false);
+    }
+
     void request_quit() {
         std::lock_guard lock(quit_mutex);
         quit_requested = true;
@@ -235,6 +291,12 @@ namespace {
     // On the game thread, at each controller read, with the pads the game is about to get.
     void on_read_data(ultramodern::input::Pad* pads, int count) {
         const uint64_t read = reads++;
+        // Each once (after the load the game passes read <l> again).
+        if (read == state_save_at || read == state_load_at) {
+            state_request = read == state_save_at ? StateRequest::Save : StateRequest::Load;
+            (read == state_save_at ? state_save_at : state_load_at) = no_limit;
+            ultramodern::save_states::set_safe_points_wanted(true);
+        }
         if (read > last_read) {
             // Waiting for the quit: the game gets no input.
             for (int i = 0; i < max_pads; i++) {
@@ -362,6 +424,22 @@ bool conker::harness::parse_option(int argc, char** argv, int& i) {
         real_time = true;
         return true;
     }
+    if (std::strcmp(option, "--state-test") == 0) {
+        unsigned long long save_at = 0, load_at = 0;
+        char end = 0;
+        if (!has_value || std::sscanf(argv[i + 1], "%llu:%llu%c", &save_at, &load_at, &end) != 2 || load_at <= save_at) {
+            std::fprintf(stderr, "[harness] --state-test needs <save read>:<load read>, the load after the save\n");
+            options_valid = false;
+        }
+        else {
+            state_save_at = save_at;
+            state_load_at = load_at;
+        }
+        if (has_value) {
+            i++;
+        }
+        return true;
+    }
     if (std::strcmp(option, "--fast") == 0) {
         fast = true;
         return true;
@@ -487,6 +565,9 @@ void conker::harness::start(uint8_t* game_rdram) {
     }
     ultramodern::timeline::set_jitter((uint32_t)std::min<uint64_t>(jitter_us, 1'000'000));
     ultramodern::input::set_read_data_callback(on_read_data);
+    if (state_load_at != no_limit) {
+        ultramodern::save_states::set_safe_point_callback(on_safe_point);
+    }
 }
 
 void conker::harness::finish() {
