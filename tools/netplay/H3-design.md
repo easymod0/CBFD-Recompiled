@@ -1,13 +1,14 @@
 # H3: events at fixed points (design)
 
-Netplay phase H3 (fork issue #2, upstream issue 126). The design, to agree with the owner before it's
-built for real; a prototype checks the core of it (below). Nothing here changes the game when the
-harness (and later netplay) isn't used.
+Netplay phase H3 (fork issue #2, upstream issue 126). **Built, and in use:** every replay, every
+determinism check and every netplay match so far runs on it (the results are below, under *Status*).
+It's written up here for the owner to agree to (the list at the end) before any of it is proposed
+upstream. Nothing here changes the game when the harness (or netplay) isn't used.
 
 **Goal:** the host's speed can't change what the game does. A slow host slows the game, never changes
 it: a replay on one busy core matches a normal one read for read.
 
-## What makes a run differ today
+## What makes a run differ (in normal mode)
 
 The runtime runs one game thread at a time, and switches only inside OS calls (`osSendMesg`,
 `osRecvMesg`, `osStartThread`, ...): never in the middle of game code. So between two OS calls the
@@ -144,9 +145,16 @@ the runtime's: it can't rely on being interrupted in game code. Normal mode keep
 ## Netplay
 
 Every peer runs the same timeline from the same inputs, so the same events arrive at the same points.
-The lockstep wait (H8) happens at a controller read: a real-time wait inside a game thread, which
+The lockstep wait happens at a controller read: a real-time wait inside a game thread, which
 doesn't move virtual time, so it can't change the game. Deterministic mode is required on every peer.
 Recordings and hash logs from normal mode can't be compared with it.
+
+As built (`host/src/netplay/lockstep.cpp`): each peer sends its own pad a few reads ahead (2 by
+default), waits at each read for every player's pad, and compares a hash of game memory with the others
+every 30 reads; a difference ends the match as a desync. On different platforms the game is the same
+too, once the host's own code writes the same values into game memory: its trigonometry uses
+`host/src/same_math.hpp` (the C library's rounds some last bits differently on Windows and Linux), and
+Clang doesn't fuse multiply-adds (`-ffp-contract=off`).
 
 ## Save states
 
@@ -171,12 +179,14 @@ States taken in normal mode still load: the timeline starts again from the state
 
 ## The runtime patch
 
-- A new file, `ultramodern/src/timeline.cpp`, holds the timeline: the delivery point, pacing, the
-  limit.
-- Small hooks, each behind one check: the VI thread (stops), the timer thread (waits), `pause_self` and
-  `yield_self_1ms` (delivery points), `submit_rsp_task` (the audio task inline, SP done posted), and the
-  graphics thread (reports DP done to the timeline).
-- A few hundred lines, most in the new file. With the harness off, every hook takes today's path.
+- A new file, `ultramodern/src/timeline.cpp` (about 200 lines, and a 57-line header), holds the
+  timeline: the delivery point, pacing, and a jitter test mode (random sleeps at OS calls and in the
+  graphics thread, to find anything still depending on the host's speed). There's no limit (above).
+- Small hooks, each behind one check, in `events.cpp` (the VI thread stops; `submit_rsp_task` runs the
+  audio task inline and posts SP done; the graphics thread reports DP done to the timeline),
+  `timer.cpp` (the clock and timers on the timeline; the timer thread waits), `scheduling.cpp`
+  (`pause_self` and `yield_self_1ms` are delivery points) and `mesgqueue.cpp` (counting OS calls).
+  With the harness off, every hook takes today's path.
 - The API: `ultramodern::timeline::enable(fast)` before the game starts. It replaces H2's
   `set_virtual_clock`.
 
@@ -197,12 +207,14 @@ States taken in normal mode still load: the timeline starts again from the state
 8. All of it is in `recomp/n64modernruntime.patch`, like H1 and H2, rather than going to
    N64ModernRuntime.
 
-## The prototype
+## Status
 
-Built (step 1 below), behind the harness: `ultramodern/src/timeline.cpp` and hooks in `events.cpp`,
-`timer.cpp`, `scheduling.cpp` and `mesgqueue.cpp`, in `recomp/n64modernruntime.patch`. The harness's
-`--fast`, `--jitter <us>` and `--real-time` options drive it. Results, headless, on a made-up
-2,700-read recording (90 s of game):
+All of it is built, in `recomp/n64modernruntime.patch`, and used whenever the harness is: replays,
+recordings, hash logs, and netplay. The harness's `--fast`, `--jitter <us>` and `--real-time` options
+drive it, and `tools/netplay/check.sh` runs the main checks (a replay twice, with `--jitter 500`, and
+through a save state) after every change.
+
+Results, headless, on a made-up 2,700-read recording (90 s of game) unless said otherwise:
 
 | Test | Result |
 |---|---|
@@ -219,30 +231,33 @@ Built (step 1 below), behind the harness: `ultramodern/src/timeline.cpp` and hoo
 
 Normal mode (no harness) runs as before. With `--real-time`, runs still differ as they did before H3.
 
-A replay of the played recording follows the windowed session for about 380 s (the same scenes at the
-same virtual times, with the same OS-call counts), then parts from it after a load. A window still
-differs from headless where H4 (the sound device) and H5 (the renderer) come in.
+Since then, with the netplay settings profile (#5), the sound device's pace taken out of the game (H4)
+and the renderer writing nothing into game memory (H5):
+
+| Test | Result |
+|---|---|
+| A replay in a window against one headless: the played recording's first 12,000 reads | identical |
+| The same with 900 made-up reads, at 1600x900 and 2520x1080 | identical |
+| A Windows (MSVC) build against a Linux (Clang) one: four recordings, 35,000 reads in all | identical (after `same_math.hpp`) |
+| Two copies in a lockstep match, each giving its own port from a 2-port recording (`lockstep.sh`) | identical to the recording replayed alone, every read, also with `--jitter 500` on one |
+| Live matches between two PCs: Linux and Linux (about 6,000 reads), Linux and Windows (with mods on) | no desync |
 
 The song mark (`ultra_extras.cpp`) now runs on the game's clock (`osGetCount`, the timeline's in
 deterministic mode) instead of the time; `conker_spin_wait_pass` already went through the timeline
 (`yield_self_1ms` is a delivery point there).
 
-**Window vs headless.** Before the netplay settings profile (#5), a replay in a window differed from a
-headless one from read 1: the field of view and widescreen settings write the cull scales
-(`cullScaleX_800D35E0`), and the audio state (`D_800314B0`, around `0x8010B108`) differed too. With the
-profile, read 1 matches; the first difference is at read 2, about 126 KB at `0x800E9D80`-`0x80108A3B`
-and scattered bytes from `0x803B7B83`: in the window a regular pattern of descending 16-bit values,
-headless the data left there before. The same with SDL's dummy sound driver, so not the sound device:
-most likely the renderer writing an image back into game memory (H5). Two window replays match each
-other for 340 to 360 reads of a 900-read recording, then differ at a read that changes from run to run
-(at read 358, one byte of what looks like a thread's stack, `0x8004061B`): a source of timing in the
-window, the sound device (H4) or the renderer (H5).
+How the window was brought in line, for the record: before #5 a window differed from headless at read
+1 (the field of view and widescreen settings write the cull scales, `cullScaleX_800D35E0`); after it,
+at read 2, where RT64 wrote an image back into game memory (about 126 KB at `0x800E9D80`; H5 turns that
+off); and two window replays parted at a varying read, from the sound device's pace (H4 ends each audio
+buffer at a fixed timeline time instead).
 
-Not done yet: display-list events (Conker doesn't use them), windowed runs (they need #5, H4 and H5).
+Not covered: display-list events (`osExQueueDisplaylistEvent`), which Conker doesn't use: another game
+would need them on the timeline, or refused in this mode.
 
 ## The steps
 
-1. **Prototype** (headless; done, above): the VI and timer threads stop, the audio task inline, delivery points
+1. **The timeline** (done, above): the VI and timer threads stop, the audio task inline, delivery points
    with VI, timers and DP done, the clock from the timeline, pacing and `--fast`, and a jitter test
    mode (random sleeps at OS calls and in the graphics thread, which finds races better than a busy
    core). Check: 20 or more replays identical; jitter and busy-core replays identical to them;
@@ -251,6 +266,7 @@ Not done yet: display-list events (Conker doesn't use them), windowed runs (they
 3. Save states: a state loaded at read N gives the same reads from N on. **Done** (above).
 4. The two host patches on virtual time (**done**); display-list events (Conker doesn't use them).
 5. **Done when:** a replay on one busy core (`taskset -c 3` next to a busy loop) matches a normal one
-   read for read, and `--fast` matches paced.
+   read for read, and `--fast` matches paced. **Done** (both identical).
 
-H4 (the audio device) and H5 (the renderer) come after: windowed replays need both.
+H4 (the audio device) and H5 (the renderer) came after, for windowed runs: both done, and a window now
+matches headless (above).
