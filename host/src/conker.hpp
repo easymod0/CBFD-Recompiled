@@ -91,6 +91,56 @@ namespace conker {
         inline constexpr float widescreen_ratio = (16.0f / 9.0f) / (4.0f / 3.0f);
     }
 
+    // Mouse and gyro while the harness is used (netplay/motion.cpp): each player's movement is part of their
+    // input for each controller read, taken by the hooks of their camera (look_aim.cpp, mouse_camera.cpp),
+    // with their own Controls (netplay/net/packets.hpp): the settings that change what it does.
+    namespace netplay {
+        struct Motion;
+    }
+    namespace motion {
+        // A read's movement for one player: the mouse in pixels (sensitivity applied), gyro in recompinput's
+        // unit (sensitivity applied), the scroll wheel in notches.
+        struct Turn {
+            float mouse_x = 0, mouse_y = 0, gyro_x = 0, gyro_y = 0;
+            int wheel = 0;
+        };
+        // Controls' bits.
+        inline bool mouse_direct(uint16_t c) { return (c & 0x1) != 0; }
+        inline bool gyro_direct(uint16_t c) { return (c & 0x2) != 0; }
+        inline bool stick_direct(uint16_t c) { return (c & 0x4) != 0; }
+        inline bool mouse_turns_camera(uint16_t c) { return (c & 0x8) == 0; }
+        // 0 none, 1 X, 2 Y, 3 both.
+        inline int mouse_invert(uint16_t c) { return (c >> 4) & 3; }
+        inline int gyro_invert(uint16_t c) { return (c >> 6) & 3; }
+        inline int stick_invert(uint16_t c) { return (c >> 8) & 3; }
+        // Every setting's default (the stick's Invert Y), for a port with no player and recordings from before.
+        constexpr uint16_t default_controls = 0x0200;
+        // This machine's player's (look_aim.cpp, from their settings).
+        uint16_t local_controls();
+#if defined(CONKER_NETPLAY)
+        // From the input thread, after each poll: adds its movement for the next read.
+        void on_input_poll();
+        // On the game thread, at a read: this machine's movement since the last read; and dropping it.
+        void capture(netplay::Motion& out);
+        void clear_local();
+        // At each read, every port's movement (4).
+        void set_read(const netplay::Motion* motions);
+        // The current read's movement for `port`, once each for the aiming modes and the orbit (false: taken).
+        bool take_aim(int port, Turn& out);
+        bool take_orbit(int port, Turn& out);
+        // Each port's Controls, for the match or replay; and one's (the defaults for a port with no player).
+        void set_controls(const std::array<uint16_t, 4>& controls);
+        uint16_t controls(int port);
+        // For save states (host_state.cpp): the current read's movement and what took it.
+        std::vector<uint32_t> state();
+        void set_state(const std::vector<uint32_t>& words);
+#else
+        inline bool take_aim(int, Turn&) { return false; }
+        inline bool take_orbit(int, Turn&) { return false; }
+        inline uint16_t controls(int) { return default_controls; }
+#endif
+    }
+
 #if defined(CONKER_NETPLAY)
     // The determinism harness (netplay/harness.cpp): records and replays the game's inputs, and logs a
     // hash of its memory at each controller read.
@@ -217,6 +267,10 @@ namespace conker {
         void free_camera_invert(bool& x, bool& y);
         // Camera: Turning Speed, 1 at 100%.
         float camera_turn_speed();
+        // For save states (host_state.cpp): what each player's mouse turned of the aiming angle that was too
+        // small to take yet.
+        std::vector<uint32_t> state();
+        void set_state(const std::vector<uint32_t>& words);
         // Camera: Field of View: the normal camera's vertical field of view, degrees.
         float camera_field_of_view();
     }
@@ -396,6 +450,11 @@ namespace conker {
         // on, the normal camera, not R-Look or aiming): the controller's input then leaves the right
         // stick off the C-buttons (frontend.cpp). Safe from any thread.
         bool stick_turns_camera();
+        // The scroll wheel's notches since this was last called (netplay/motion.cpp, from the input thread).
+        int take_wheel_notches();
+        // For save states (host_state.cpp): every orbit, which writes the camera's eye.
+        std::vector<uint32_t> state();
+        void set_state(const std::vector<uint32_t>& words);
     }
 
     // SDL sound output (audio_output.cpp).

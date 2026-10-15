@@ -22,5 +22,6 @@ conker::netplay::Hello conker::netplay::hello_for_rom(std::span<const uint8_t> r
     hello.rom = XXH3_64bits(rom.data(), rom.size());
     hello.profile = conker::netplay_profile::hash();
     hello.mods = conker::netplay_profile::mods_hash();
+    hello.controls = conker::motion::local_controls();
     return hello;
 }

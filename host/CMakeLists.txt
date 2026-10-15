@@ -126,7 +126,7 @@ target_link_libraries(ConkerRecomp PRIVATE RecompiledFuncs librecomp ultramodern
 
 if (CONKER_NETPLAY)
     target_sources(ConkerRecomp PRIVATE src/netplay/harness.cpp src/netplay/profile.cpp src/netplay/hello.cpp
-        src/netplay/lockstep.cpp)
+        src/netplay/lockstep.cpp src/netplay/motion.cpp)
     target_compile_definitions(ConkerRecomp PRIVATE CONKER_NETPLAY)
     # The build id for the handshake (src/netplay/hello.cpp), from git at every build.
     set(CONKER_BUILD_ID_CPP "${CMAKE_CURRENT_BINARY_DIR}/netplay_build_id.cpp")

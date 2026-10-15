@@ -4,7 +4,9 @@
 //
 // The bytes: a version (u32, 1), then each part as its count of 32-bit words (u32) and the words, all
 // little-endian: the song marks, the widescreen ring, the cutscene bars' ring, the shadows, the sound
-// buffers on the timeline (the rate, then each one's end as two words, low first).
+// buffers on the timeline (the rate, then each one's end as two words, low first), the mouse aiming's
+// remainders (look_aim.cpp), the orbits (mouse_camera.cpp), and each player's movement for the current read
+// (netplay/motion.cpp: empty without netplay).
 
 #include <cstdint>
 #include <cstring>
@@ -63,6 +65,13 @@ std::vector<uint8_t> conker::host_state::save() {
     put_part(out, { conker::cutscene_aspect::dl_ring() });
     put_part(out, conker::shadows::drawn());
     put_part(out, conker::audio_clock::state());
+    put_part(out, conker::look_aim::state());
+    put_part(out, conker::mouse_camera::state());
+#if defined(CONKER_NETPLAY)
+    put_part(out, conker::motion::state());
+#else
+    put_part(out, {});
+#endif
     return out;
 }
 
@@ -79,4 +88,9 @@ void conker::host_state::load(const std::vector<uint8_t>& bytes) {
     conker::cutscene_aspect::set_dl_ring(bars.empty() ? 0 : bars[0]);
     conker::shadows::set_drawn(in.get_part());
     conker::audio_clock::set_state(in.get_part());
+    conker::look_aim::set_state(in.get_part());
+    conker::mouse_camera::set_state(in.get_part());
+#if defined(CONKER_NETPLAY)
+    conker::motion::set_state(in.get_part());
+#endif
 }

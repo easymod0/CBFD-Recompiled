@@ -14,8 +14,9 @@
 //   --netplay-address <address>  (hosting) this computer's address as the others reach it: the join code
 //                                is made from it and printed (it holds the match's random key)
 //   --netplay-join <code>        joins the host by its join code
-//   --input-delay <reads>        how many reads ahead a peer's own pads are sent (2 by default, 0 to 8;
-//                                every peer must give the same)
+//   --input-delay <reads|auto>   (hosting) how many reads ahead each peer's own pads are sent, 0 to 8, or
+//                                auto (the default): chosen from the round trips to the players as the
+//                                match starts. The host tells everyone (Start)
 //   --netplay-desync-at <read>   (a test) changes a byte of game memory at that read, which the next
 //                                hash comparison must catch
 //
@@ -25,6 +26,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -39,7 +41,8 @@ namespace conker::lockstep {
     // Hosting or joining.
     bool active();
     // The same as the options, from the menu (frontend's netplay.cpp).
-    void set_host(int port, int players, bool own_view = true);
+    // `input_delay`: reads, or -1 for auto.
+    void set_host(int port, int players, bool own_view = true, int input_delay = -1);
     void set_join(const std::string& where);
     // Checks the options, before the game starts (false: a message was printed).
     bool prepare();
@@ -70,15 +73,23 @@ namespace conker::lockstep {
     // This peer's port and the match's players, once connected.
     int port();
     int players();
+    // The match's input delay and each port's player's Controls (motion.cpp), once connected.
+    int input_delay();
+    const std::array<netplay::Controls, netplay::max_players>& controls();
 
-    // This peer's own pad for read `for_read`: `live` holds the pads the controllers give now, or is null
+    // A player's input for one read: their pad and their mouse and gyro movement.
+    struct Input {
+        netplay::Pad pad;
+        netplay::Motion motion;
+    };
+    // This peer's own input for read `for_read`: `live` holds the pads the controllers give now, or is null
     // for the reads before the first (sent at the start, as nobody has played yet).
-    using PadSource = std::function<netplay::Pad(uint64_t for_read, const ultramodern::input::Pad* live)>;
-    // At controller read `read`, on the game thread: sends this peer's pad for read + delay, waits for
-    // every player's pad for `read` and puts them in `pads`, and compares the memory hash (`hash` is
-    // called for it every so often). False if the match has ended (a message was printed): the game
-    // can't go on.
-    bool on_read(uint64_t read, ultramodern::input::Pad* pads, const PadSource& source,
+    using InputSource = std::function<Input(uint64_t for_read, const ultramodern::input::Pad* live)>;
+    // At controller read `read`, on the game thread: sends this peer's input for read + delay, waits for
+    // every player's for `read` and puts them in `pads` and `motions` (4 each), and compares the memory hash
+    // (`hash` is called for it every so often). False if the match has ended (a message was printed): the
+    // game can't go on.
+    bool on_read(uint64_t read, ultramodern::input::Pad* pads, netplay::Motion* motions, const InputSource& source,
         const std::function<uint64_t()>& hash, uint8_t* rdram);
     // Ends the match for `reason`, saying `why` (the reason is the peers').
     void end(netplay::Reason reason, const char* why);

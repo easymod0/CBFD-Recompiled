@@ -5,11 +5,15 @@
 #
 #   tools/netplay/check.sh [--exe host/build/ConkerRecomp] [--rom conker/baserom.us.z64]
 #                          [--reads 2700] [--seed 1] [--timeout 300] [--out <folder>]
+#                          [--mouse] [--recording <file.pads>]
 #
 # The runs, all on the timeline as fast as the host can (--fast):
 #   a, b     the same replay twice
 #   jitter   with random sleeps in the game's OS calls and graphics thread (a slower, uneven host)
 #   state    a save state taken at a third of the way and loaded at two thirds (it goes back and on again)
+# --mouse gives the made-up recording mouse and gyro movement and settings of its own; --recording replays
+# that recording instead of a made-up one (e.g. a match from make_match.py --mouse), and --reads is then
+# its length.
 # b, jitter and state must each match a. The logs are kept in --out (a temporary folder otherwise,
 # printed at the end). It exits 0 if everything matches, 1 if not.
 #
@@ -25,6 +29,8 @@ READS=2700
 SEED=1
 TIMEOUT=300
 OUT=
+MOUSE=
+RECORDING=
 while [ $# -gt 0 ]; do
     case "$1" in
         --exe) EXE=$2; shift 2 ;;
@@ -33,7 +39,9 @@ while [ $# -gt 0 ]; do
         --seed) SEED=$2; shift 2 ;;
         --timeout) TIMEOUT=$2; shift 2 ;;
         --out) OUT=$2; shift 2 ;;
-        -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --mouse) MOUSE=--mouse; shift ;;
+        --recording) RECORDING=$2; shift 2 ;;
+        -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -45,7 +53,13 @@ ROM=$(cd "$(dirname "$ROM")" && pwd)/$(basename "$ROM")
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 
-python3 tools/netplay/make_inputs.py "$OUT/inputs.pads" --reads "$READS" --seed "$SEED" || exit 2
+if [ -n "$RECORDING" ]; then
+    cp "$RECORDING" "$OUT/inputs.pads" || exit 2
+    # Its reads: the header (40 bytes in version 3, 32 in 2), then 57 bytes a read (21 in 2).
+    READS=$(python3 -c "import struct,sys; d=open(sys.argv[1],'rb').read(); v=struct.unpack_from('<I',d,8)[0]; print((len(d)-(40 if v==3 else 32))//(57 if v==3 else 21))" "$OUT/inputs.pads") || exit 2
+else
+    python3 tools/netplay/make_inputs.py "$OUT/inputs.pads" --reads "$READS" --seed "$SEED" $MOUSE || exit 2
+fi
 
 # run <name> [harness options...]: one replay, its hash log in $OUT/<name>.log and its output in
 # $OUT/<name>.out. Fails if it doesn't reach its last read within $TIMEOUT seconds, or its log is short.

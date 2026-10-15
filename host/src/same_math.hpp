@@ -105,6 +105,16 @@ namespace conker::same_math {
     inline float cos(float x) { return detail::in_range(x) ? (float)detail::cos_d((double)x) : NAN; }
     inline float tan(float x) { return detail::in_range(x) ? (float)(detail::sin_d((double)x) / detail::cos_d((double)x)) : NAN; }
     inline float atan(float x) { return (float)detail::atan_d((double)x); }
+    // atan2's quadrants, from atan; (0, 0) gives 0, as the C library's does.
+    inline float atan2(float y, float x) {
+        if (!std::isfinite(x) || !std::isfinite(y)) return NAN;
+        const double dy = (double)y, dx = (double)x;
+        if (dx > 0.0) return (float)detail::atan_d(dy / dx);
+        if (dx < 0.0) return (float)(detail::atan_d(dy / dx) + (dy < 0.0 ? -detail::pi : detail::pi));
+        if (dy > 0.0) return (float)detail::half_pi_hi;
+        if (dy < 0.0) return (float)-detail::half_pi_hi;
+        return 0.0f;
+    }
     inline float asin(float x) {
         const double d = (double)x;
         if (d >= 1.0) return (float)detail::half_pi_hi;

@@ -79,11 +79,19 @@ While the harness is used, the settings that change the game or what's in its me
 (`host/src/netplay/profile.cpp`), whatever the menus say, so a recording made in a window replays the
 same headless or on another machine:
 
-- **Off:** the mouse and gyro (R-Look, the aiming modes, the free camera, the bank's leaps), Mouse:
-  Turn the Camera, Right Stick: Free Camera and Aiming: Swap Sticks. They move the camera in game
-  memory from input the recording doesn't hold, or by the time.
-- **At their defaults:** the Camera tab (Field of View, Invert Turning, Turning Speed, the stick's
-  aiming, Lock-On), Conker's Detail, Cutscene Aspect Ratio (Expand) and the sound volumes (100%).
+- **Each player's own:** the mouse and gyro (R-Look, the aiming modes, the orbit camera) and the
+  settings that change what they and the stick do there: each response (Smooth or Direct), each
+  invert, and Mouse: Turn the Camera (`host/src/netplay/motion.cpp`). A player's movement is part of
+  their input for each controller read, like their pad: every poll's movement (with their sensitivity)
+  is added up and taken at the read on the game thread, in fixed point, so every machine gives the game
+  the same, and each player's camera takes their own (in a match, every player's camera turns by its
+  player's mouse). Their settings are their *Controls*: sent in the handshake, given to everyone with
+  Start, and recorded. The camera code then uses `same_math.hpp`'s trigonometry, as the C libraries'
+  differ in the last bit.
+- **Off:** Right Stick: Free Camera, Aiming: Swap Sticks and the mouse in the bank's leaps: single
+  player's, and the first two go by the time between frames.
+- **At their defaults:** the Camera tab's others (Field of View, Invert Turning, Turning Speed,
+  Lock-On), Conker's Detail, Cutscene Aspect Ratio (Expand) and the sound volumes (100%).
 - **Widescreen:** the culls and sprites are widened for 16:9 whatever the window (a wider window can
   lose a little at its sides).
 - **Save states** (F5, F7) are off. **Mods:** none, in netplay matches, recordings and replays: a mod
@@ -100,21 +108,25 @@ same headless or on another machine:
   is whatever was there before (as headless).
 
 What only changes the picture or the sound outside game memory (the renderer's settings, Overscan
-Borders, Show FPS, the reticle, texture packs) and what only changes the pads (the controls) is left to
-the player: the pads are what's recorded, and what netplay will send.
+Borders, Show FPS, the reticle, texture packs) and what only changes the pads or the movement (the
+controls, the sensitivities) is left to the player: those are what's recorded, and what netplay sends.
 
 ### Recordings
 
-A recording (version 2) holds the ROM's XXH3-64 and the profile's hash: a replay with another ROM or
+A recording (version 3) holds the ROM's XXH3-64 and the profile's hash: a replay with another ROM or
 another profile is refused before the game starts. `make_inputs.py` writes 0 for both, which isn't
-checked; version 1 recordings (before the profile) are replayed unchecked.
+checked. It holds each player's Controls too, and their mouse and gyro movement beside their pad at
+each read. Version 2 recordings (before the mouse) replay with no movement and the default settings;
+version 1 recordings (before the profile) are replayed unchecked.
 
 ### The determinism check
 
 After a change, run `tools/netplay/check.sh` (with the game built with `CONKER_NETPLAY=ON`). It makes a
 recording of 2,700 made-up reads (`make_inputs.py --seed 1`), replays it headless four ways (twice, with
 random sleeps in the host, and through a save state taken and loaded on the way) and compares each
-hash log with the first. Each run is stopped once its last read is logged. The CI runs it on pushes
+hash log with the first. Each run is stopped once its last read is logged. `--mouse` gives the made-up
+recording mouse and gyro movement and settings of its own; `--recording <file>` checks another
+recording instead, e.g. a match where everyone moves their mouse and aims (`make_match.py --mouse`). The CI runs it on pushes
 that touch what decides determinism (`.github/workflows/netplay.yml`), where the ROM secrets are set,
 as for the other builds.
 
@@ -166,8 +178,13 @@ and, at the read where they first differ, the memory itself:
 ## Lockstep
 
 `host/src/netplay/lockstep.cpp`, part of the harness: every peer runs the whole game, and at each
-controller read the game waits until it has every player's pad for that read. A peer sends its own pad
-`--input-delay` reads ahead (2 by default, every peer the same) to hide the time it takes to arrive. Every
+controller read the game waits until it has every player's pad (and mouse and gyro movement) for that
+read. A peer sends its own `--input-delay` reads ahead to hide the time it takes to arrive: the host
+chooses it for everyone and sends it with Start. By default it's `auto`: from the round trips to the
+players as the match starts, enough reads to cover the slowest way an input goes (half of each of the
+two slowest round trips, as the host passes joiners' inputs on), less the few ms a read can wait without
+the game falling behind. On a local network that's 0, so the others' input reaches the game as soon as
+this player's own, which matters for the mouse. Every
 30 reads the peers compare hashes of the game's memory, and a difference ends the match as a desync.
 Each peer starts from boot with an empty save, on the timeline and with the settings profile.
 
@@ -178,7 +195,7 @@ The game waits at its start for every player. Each plays with their first contro
 has to forward its UDP port if it's behind a router.
 
 In a window, the launcher's **Netplay** menu (`host/src/netplay/menu.cpp`, #9) does the same: host
-(players, port, and the host's own address, from which it shows the join code to send once hosting) or
+(players, port, input delay, and the host's own address, from which it shows the join code to send once hosting) or
 join by code. It says how the connecting goes and why a peer was refused, and the game starts on every
 machine once all are in. When a match started there ends (a desync, a player gone), a prompt says why
 instead of the game quitting.
@@ -193,17 +210,18 @@ modified build, which could still show every view: it keeps honest players on th
 With `--replay`, a peer's own pads come from its port in the recording instead: `lockstep.sh` plays two
 copies against each other on this machine (`--data` gives each its own folder) and checks that each
 gets exactly the game a replay alone does (each copy's recording has the other's port scrambled, so it
-only does if the pads came over the network), with input delay 0 and `--jitter` on one side too, and
-that a desync (`--netplay-desync-at <read>`) is caught. About 25 s.
+only does if the pads came over the network), with input delay 0 and `--jitter` on one side too; a
+3-player Deathmatch where everyone moves their mouse and aims, at the automatic delay (through the
+host's relay); and that a desync (`--netplay-desync-at <read>`) is caught. About 40 s.
 
 ## The scripts
 
 | Script | |
 |---|---|
 | `check.sh` | the determinism check: replays a made-up recording headless twice, with `--jitter` and with `--state-test`, and fails unless all four give the same hashes (about 30 s; the CI runs it, `.github/workflows/netplay.yml`) |
-| `lockstep.sh` | the lockstep check: two copies in a match over loopback give the same game as a replay alone, and a desync is caught (about 25 s) |
+| `lockstep.sh` | the lockstep check: copies in a match over loopback give the same game as a replay alone (2 players, and 3 with the mouse), and a desync is caught (about 40 s) |
 | `compare_hashes.py` | the first read two hash logs differ at (it exits 1 if they differ); with dumps, the ranges that differ, by data symbol |
-| `make_match.py` | a recording that plays from boot into a multiplayer match (`--mode`, `--players`, `--variant`, `--pause`), the same every time: for looking at multiplayer (split screen, "my view only") without the menus |
+| `make_match.py` | a recording that plays from boot into a multiplayer match (`--mode`, `--players`, `--variant`, `--pause`; `--mouse` has everyone move, aim and use their mouse and gyro), the same every time: for looking at multiplayer (split screen, "my view only") without the menus |
 | `shot.sh` | replays a recording in a window as fast as it goes and saves a screenshot of its end (X11; `SDL_VIDEODRIVER=x11` under Wayland), e.g. `make_match.py heist.pads --mode heist && shot.sh heist.pads heist.png --my-view-only` |
 | `xwin.py` | drives a game window from a script: screenshots, clicks, keys (X11, python-xlib) |
 | `make_inputs.py` | a recording of made-up inputs from a seed, to replay without anyone playing |

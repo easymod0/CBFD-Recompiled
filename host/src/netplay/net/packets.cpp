@@ -2,15 +2,18 @@
 // code that parses what arrives from the network; fuzz_packets.cpp fuzzes it.
 //
 // Each packet: "CN", u16 protocol version, u8 kind, then (all little-endian):
-//   1 Hello    u64 build, u64 rom, u64 profile, u64 mods, u64 key                     45 bytes
+//   1 Hello    u64 build, u64 rom, u64 profile, u64 mods, u64 key, u16 controls       47 bytes
+//              (only controls_mask's bits)
 //   2 Welcome  u8 port (< players), u8 players (2 to 4)                                7 bytes
 //   3 Refuse   u8 reason                                                               6 bytes
-//   4 Inputs   u8 port (< 4), u32 first read, u8 count (1 to 8), 8 pads of 5 bytes   51 bytes
-//              (u16 buttons, s8 stick x, s8 stick y, u8 err_no); the unused ones zero,
-//              and the last read not past 2^32 - 1
+//   4 Inputs   u8 port (< 4), u32 first read, u8 count (1 to 8), 8 pads of 5 bytes  123 bytes
+//              (u16 buttons, s8 stick x, s8 stick y, u8 err_no), then 8 motions of 9
+//              (s16 mouse x, y, s16 gyro x, y, s8 wheel); the unused ones zero, and the
+//              last read not past 2^32 - 1
 //   5 Hash     u32 read, u64 hash                                                     17 bytes
 //   6 Bye      u8 reason                                                               6 bytes
-//   7 Start    u8 players (2 to 4), u8 own view (0 or 1)                               7 bytes
+//   7 Start    u8 players (2 to 4), u8 own view (0 or 1), u8 delay (0 to 8),         16 bytes
+//              4 u16 controls (only controls_mask's bits; 0 past the players)
 // A packet of any other size, version or kind, or with any field out of range, is refused.
 
 #include "packets.hpp"
@@ -22,16 +25,17 @@ namespace conker::netplay {
         enum Kind : uint8_t { hello = 1, welcome, refuse, inputs, hash, bye, start };
         constexpr size_t header_size = 5;
         constexpr size_t pad_size = 5;
+        constexpr size_t motion_size = 9;
 
         constexpr size_t size_of(uint8_t kind) {
             switch (kind) {
-                case hello: return header_size + 40;
+                case hello: return header_size + 42;
                 case welcome: return header_size + 2;
                 case refuse: return header_size + 1;
-                case inputs: return header_size + 6 + input_window * pad_size;
+                case inputs: return header_size + 6 + input_window * (pad_size + motion_size);
                 case hash: return header_size + 12;
                 case bye: return header_size + 1;
-                case start: return header_size + 2;
+                case start: return header_size + 3 + 2 * max_players;
             }
             return 0;
         }
@@ -43,8 +47,8 @@ namespace conker::netplay {
 
         // Each kind's fields (plain overloads: MSVC misreads `p.count < 1 || p.count > n` in a generic
         // lambda as a template's arguments).
-        bool valid_fields(const Hello&) {
-            return true;
+        bool valid_fields(const Hello& p) {
+            return (p.controls & ~controls_mask) == 0;
         }
         bool valid_fields(const Welcome& p) {
             return p.players >= 2 && p.players <= max_players && p.port < p.players;
@@ -58,7 +62,7 @@ namespace conker::netplay {
                 return false;
             }
             for (int i = 0; i < input_window; i++) {
-                if (i < p.count ? !valid(p.pads[i]) : !(p.pads[i] == Pad{})) {
+                if (i < p.count ? !valid(p.pads[i]) : !(p.pads[i] == Pad{} && p.motions[i] == Motion{})) {
                     return false;
                 }
             }
@@ -71,7 +75,15 @@ namespace conker::netplay {
             return valid_reason(p.reason);
         }
         bool valid_fields(const Start& p) {
-            return p.players >= 2 && p.players <= max_players && p.own_view <= 1;
+            if (p.players < 2 || p.players > max_players || p.own_view > 1 || p.delay > max_delay) {
+                return false;
+            }
+            for (int i = 0; i < max_players; i++) {
+                if ((p.controls[i] & ~controls_mask) != 0 || (i >= p.players && p.controls[i] != 0)) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         bool valid_packet(const Packet& packet) {
@@ -137,6 +149,7 @@ namespace conker::netplay {
                 w.u64(p.profile);
                 w.u64(p.mods);
                 w.u64(p.key);
+                w.u16(p.controls);
             }
             else if constexpr (std::is_same_v<T, Welcome>) {
                 w.u8(p.port);
@@ -155,6 +168,13 @@ namespace conker::netplay {
                     w.u8((uint8_t)pad.stick_y);
                     w.u8(pad.err_no);
                 }
+                for (const Motion& m : p.motions) {
+                    w.u16((uint16_t)m.mouse_x);
+                    w.u16((uint16_t)m.mouse_y);
+                    w.u16((uint16_t)m.gyro_x);
+                    w.u16((uint16_t)m.gyro_y);
+                    w.u8((uint8_t)m.wheel);
+                }
             }
             else if constexpr (std::is_same_v<T, Hash>) {
                 w.u32(p.read);
@@ -163,6 +183,10 @@ namespace conker::netplay {
             else if constexpr (std::is_same_v<T, Start>) {
                 w.u8(p.players);
                 w.u8(p.own_view);
+                w.u8(p.delay);
+                for (Controls c : p.controls) {
+                    w.u16(c);
+                }
             }
         }, packet);
         return (size_t)(w.at - out.data());
@@ -187,6 +211,7 @@ namespace conker::netplay {
                 p.profile = r.u64();
                 p.mods = r.u64();
                 p.key = r.u64();
+                p.controls = r.u16();
                 packet = p;
                 break;
             }
@@ -211,6 +236,13 @@ namespace conker::netplay {
                     pad.stick_y = (int8_t)r.u8();
                     pad.err_no = r.u8();
                 }
+                for (Motion& m : p.motions) {
+                    m.mouse_x = (int16_t)r.u16();
+                    m.mouse_y = (int16_t)r.u16();
+                    m.gyro_x = (int16_t)r.u16();
+                    m.gyro_y = (int16_t)r.u16();
+                    m.wheel = (int8_t)r.u8();
+                }
                 packet = p;
                 break;
             }
@@ -229,6 +261,10 @@ namespace conker::netplay {
                     Start p;
                     p.players = r.u8();
                     p.own_view = r.u8();
+                    p.delay = r.u8();
+                    for (Controls& c : p.controls) {
+                        c = r.u16();
+                    }
                     packet = p;
                 }
                 break;

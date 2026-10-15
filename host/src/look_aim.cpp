@@ -21,7 +21,9 @@
 //     Conker's facing less an aiming angle the stick turns: the mouse and gyro turn that angle too.
 //   conker_aim_stick, in the second aiming mode (func_15126378: the sniper scope, the magnum,
 //     throwables): the stick's invert, and the mouse and gyro, scaled by the zoom.
-// The mouse and gyro are player 1's only: in multiplayer both modes run for each player's camera.
+// The mouse and gyro are player 1's only: in multiplayer both modes run for each player's camera. While the
+// harness is used (netplay, recordings, replays: netplay/motion.cpp), each player's camera takes their own
+// movement instead, one read's worth per aiming update, with their own settings (their Controls).
 
 #include <algorithm>
 #include <atomic>
@@ -39,6 +41,7 @@
 #include "recomp.h"
 
 #include "conker.hpp"
+#include "game_trig.hpp"
 
 #if defined(CONKER_RT64)
 #include "recompinput/input_state.h"
@@ -101,7 +104,7 @@ namespace {
     // way Conker faces less the aiming angle, for conker_look_targets: how many of the aiming angle's
     // 16-bit units turn the view a degree (0 when it doesn't). And the part of a unit not yet taken.
     float aim_units_per_degree = 0.0f;
-    float aim_remainder = 0.0f;
+    float aim_remainder[4] = {};    // each player's (only player 1's outside the harness)
 
     // Aiming: Swap Sticks (issue #84): when each player's camera (by its player, +0x23D) last ran either aiming
     // mode, from the game thread (steady clock ticks), for the input thread (swap_sticks_now). Like the reticle's,
@@ -193,6 +196,44 @@ namespace {
     void apply_invert(Invert invert, float& x, float& y) {
         if (invert == Invert::X || invert == Invert::Both) x = -x;
         if (invert == Invert::Y || invert == Invert::Both) y = -y;
+    }
+
+    // While the harness is used, each player's camera goes by their own input and settings (motion.cpp).
+    bool per_player() {
+        return conker::netplay_profile::active();
+    }
+
+    // A player's settings: their Controls while the harness is used, otherwise this machine's (player 1's).
+    Response stick_response(int player) {
+        return per_player() ? (conker::motion::stick_direct(conker::motion::controls(player)) ? Response::Direct : Response::Smooth)
+            : option<Response>(options::stick_response);
+    }
+    Response mouse_response(int player) {
+        return per_player() ? (conker::motion::mouse_direct(conker::motion::controls(player)) ? Response::Direct : Response::Smooth)
+            : option<Response>(options::mouse_response);
+    }
+    Response gyro_response(int player) {
+        return per_player() ? (conker::motion::gyro_direct(conker::motion::controls(player)) ? Response::Direct : Response::Smooth)
+            : option<Response>(options::gyro_response);
+    }
+    Invert stick_invert(int player) {
+        return per_player() ? (Invert)conker::motion::stick_invert(conker::motion::controls(player))
+            : option<Invert>(options::stick_invert, Invert::Y);
+    }
+    Invert mouse_invert(int player) {
+        return per_player() ? (Invert)conker::motion::mouse_invert(conker::motion::controls(player))
+            : option<Invert>(options::mouse_invert);
+    }
+    Invert gyro_invert(int player) {
+        return per_player() ? (Invert)conker::motion::gyro_invert(conker::motion::controls(player))
+            : option<Invert>(options::gyro_invert);
+    }
+
+    // This machine's own setting, whatever the netplay profile reads (for its Controls).
+    template <typename T>
+    T own_option(const std::string& id, T fallback) {
+        recomp::config::Config* config = recompui::config::find_option_config(id);
+        return config ? static_cast<T>(std::get<uint32_t>(config->get_option_value(id))) : fallback;
     }
 #endif
 }
@@ -342,11 +383,28 @@ void conker::look_aim::add_mouse_gyro_options(recomp::config::Config& config) {
 }
 #endif
 
+uint16_t conker::motion::local_controls() {
+    uint16_t c = 0;
+#if defined(CONKER_RT64)
+    if (own_option(options::mouse_response, Response::Smooth) == Response::Direct) c |= 0x1;
+    if (own_option(options::gyro_response, Response::Smooth) == Response::Direct) c |= 0x2;
+    if (own_option(options::stick_response, Response::Smooth) == Response::Direct) c |= 0x4;
+    if (own_option(options::mouse_camera, Toggle::On) == Toggle::Off) c |= 0x8;
+    c |= (uint16_t)((uint32_t)own_option(options::mouse_invert, Invert::None) << 4);
+    c |= (uint16_t)((uint32_t)own_option(options::gyro_invert, Invert::None) << 6);
+    c |= (uint16_t)((uint32_t)own_option(options::stick_invert, Invert::Y) << 8);
+#endif
+    return c;
+}
+
 void conker::look_aim::on_input_poll() {
 #if defined(CONKER_RT64)
-    // The netplay settings profile: no mouse or gyro. None is queued, so the game's code never takes any
-    // (whether a poll's movement was queued by the time the game looks depends on the host's timing).
+    // While the harness is used, the movement is part of each read's input instead (motion.cpp): its timing
+    // here depends on the host's.
     if (conker::netplay_profile::active()) {
+#if defined(CONKER_NETPLAY)
+        conker::motion::on_input_poll();
+#endif
         return;
     }
     Movement m;
@@ -519,7 +577,7 @@ void conker::look_aim::leap_frame(uint8_t* rdram) {
     const gpr conker = (gpr)(int32_t)conker_object;
     const uint16_t animation = (uint16_t)MEM_HU(0x84, conker);
     leaping = MEM_BU(0x4, conker) == bank_state && (animation == leap_animation || animation == leap_animation_other_way)
-        && recompinput::players::is_single_player_mode();
+        && recompinput::players::is_single_player_mode() && !conker::netplay_profile::active();
 }
 
 bool conker::look_aim::leaping_now() {
@@ -562,13 +620,13 @@ void conker::look_aim::free_camera_invert(bool& x, bool& y) {
 #if defined(CONKER_RT64)
 namespace {
     // The game's own stick is Invert Y, so X turns around when the setting has X, and Y when the
-    // setting lacks it.
-    bool turn_stick_x() {
-        const Invert invert = option<Invert>(options::stick_invert, Invert::Y);
+    // setting lacks it. For the player whose camera it is ($s0 in both aiming modes).
+    bool turn_stick_x(uint8_t* rdram, gpr camera) {
+        const Invert invert = stick_invert(camera_player(rdram, camera));
         return invert == Invert::X || invert == Invert::Both;
     }
-    bool turn_stick_y() {
-        const Invert invert = option<Invert>(options::stick_invert, Invert::Y);
+    bool turn_stick_y(uint8_t* rdram, gpr camera) {
+        const Invert invert = stick_invert(camera_player(rdram, camera));
         return invert == Invert::None || invert == Invert::X;
     }
 }
@@ -578,7 +636,7 @@ namespace {
 // through the next one too) and at 0x15120A44 (every state). Turned around, it's a +.
 extern "C" void conker_look_stick_yaw_a(uint8_t* rdram, recomp_context* ctx) {
 #if defined(CONKER_RT64)
-    if (turn_stick_x()) {
+    if (turn_stick_x(rdram, ctx->r16)) {
         ctx->f6.fl = ctx->f8.fl + ctx->f18.fl;  // 0x15120A10: sub.s $f6, $f8, $f18
     }
 #endif
@@ -586,7 +644,7 @@ extern "C" void conker_look_stick_yaw_a(uint8_t* rdram, recomp_context* ctx) {
 
 extern "C" void conker_look_stick_yaw_b(uint8_t* rdram, recomp_context* ctx) {
 #if defined(CONKER_RT64)
-    if (turn_stick_x()) {
+    if (turn_stick_x(rdram, ctx->r16)) {
         ctx->f18.fl = ctx->f4.fl + ctx->f10.fl;  // 0x15120A40: sub.s $f18, $f4, $f10
     }
 #endif
@@ -595,7 +653,7 @@ extern "C" void conker_look_stick_yaw_b(uint8_t* rdram, recomp_context* ctx) {
 // The stick's pitch: target + stick y * scale, stored at 0x15120A98. Turned around, it's a -.
 extern "C" void conker_look_stick_pitch(uint8_t* rdram, recomp_context* ctx) {
 #if defined(CONKER_RT64)
-    if (turn_stick_y()) {
+    if (turn_stick_y(rdram, ctx->r16)) {
         ctx->f10.fl = ctx->f6.fl - ctx->f8.fl;  // 0x15120A94: add.s $f10, $f6, $f8
     }
 #endif
@@ -613,6 +671,20 @@ extern "C" void conker_camera_turn_invert(uint8_t* rdram, recomp_context* ctx) {
 }
 
 #if defined(CONKER_RT64)
+std::vector<uint32_t> conker::look_aim::state() {
+    std::vector<uint32_t> words(4);
+    std::memcpy(words.data(), aim_remainder, sizeof(aim_remainder));
+    return words;
+}
+
+void conker::look_aim::set_state(const std::vector<uint32_t>& words) {
+    if (words.size() < 4) {
+        std::fill(std::begin(aim_remainder), std::end(aim_remainder), 0.0f);
+        return;
+    }
+    std::memcpy(aim_remainder, words.data(), sizeof(aim_remainder));
+}
+
 float conker::look_aim::camera_turn_speed() {
     return (float)(number_option(options::camera_turn_speed, 100.0) / 100.0);
 }
@@ -637,16 +709,29 @@ extern "C" void conker_camera_turn_speed_released(uint8_t* rdram, recomp_context
 namespace {
     // The mouse and keyboard are player 1's. The camera (struct108, the look mode's and the second
     // aiming mode's $s0) keeps its index into the cameras (D_800BE628) at + 0x23D, 0 for player 1;
-    // in multiplayer the aiming code runs for each player's camera in turn.
-    bool is_player_one(uint8_t* rdram, gpr camera) {
-        return MEM_BU(0x23D, camera) == 0;
+    // in multiplayer the aiming code runs for each player's camera in turn. While the harness is used,
+    // each player's camera takes their own movement (motion.cpp). The player whose movement turns this
+    // camera, or -1.
+    int mover(uint8_t* rdram, gpr camera) {
+        if (per_player()) {
+            return camera_player(rdram, camera);
+        }
+        return MEM_BU(0x23D, camera) == 0 ? 0 : -1;
     }
 
     // One poll's mouse and gyro movement as a turn of the view, in degrees: the yaw grows to the left
-    // and the pitch downward (see conker_look_targets). False if there was none.
-    bool take_movement(float& mouse_yaw, float& mouse_pitch, float& gyro_yaw, float& gyro_pitch) {
+    // and the pitch downward (see conker_look_targets). False if there was none. While the harness is
+    // used, `player`'s movement for this read.
+    bool take_movement(int player, float& mouse_yaw, float& mouse_pitch, float& gyro_yaw, float& gyro_pitch) {
         Movement m;
-        {
+        if (per_player()) {
+            conker::motion::Turn turn;
+            if (!conker::motion::take_aim(player, turn)) {
+                return false;
+            }
+            m = { turn.mouse_x, turn.mouse_y, turn.gyro_x, turn.gyro_y };
+        }
+        else {
             std::lock_guard lock{queue_mutex};
             if (queue.empty()) {
                 return false;
@@ -658,8 +743,8 @@ namespace {
         mouse_pitch = m.mouse_y * mouse_degrees_per_pixel;
         gyro_yaw = m.gyro_y * gyro_scale;
         gyro_pitch = -m.gyro_x * gyro_scale;
-        apply_invert(option<Invert>(options::mouse_invert), mouse_yaw, mouse_pitch);
-        apply_invert(option<Invert>(options::gyro_invert), gyro_yaw, gyro_pitch);
+        apply_invert(mouse_invert(player), mouse_yaw, mouse_pitch);
+        apply_invert(gyro_invert(player), gyro_yaw, gyro_pitch);
         return true;
     }
 }
@@ -681,19 +766,20 @@ extern "C" void conker_aim_stick(uint8_t* rdram, recomp_context* ctx) {
     conker::reticle::aim_frame(rdram, ctx->r16);
     // Aiming: Swap Sticks: this camera's player is aiming.
     note_aiming(rdram, ctx->r16, camera_player(rdram, ctx->r16));
-    if (turn_stick_x()) {
+    if (turn_stick_x(rdram, ctx->r16)) {
         ctx->f14.fl = -ctx->f14.fl;
     }
-    if (turn_stick_y()) {
+    if (turn_stick_y(rdram, ctx->r16)) {
         ctx->f12.fl = -ctx->f12.fl;
     }
 
     const gpr camera = ctx->r16;
-    if (!is_player_one(rdram, camera)) {
+    const int player = mover(rdram, camera);
+    if (player < 0) {
         return;
     }
     float mouse_yaw, mouse_pitch, gyro_yaw, gyro_pitch;
-    if (!take_movement(mouse_yaw, mouse_pitch, gyro_yaw, gyro_pitch)) {
+    if (!take_movement(player, mouse_yaw, mouse_pitch, gyro_yaw, gyro_pitch)) {
         return;
     }
     const gpr view = (gpr)(int32_t)((uint32_t)MEM_W(0, (gpr)(int32_t)0x800BE628) + MEM_BU(0x23D, camera) * 0x180);
@@ -701,7 +787,7 @@ extern "C" void conker_aim_stick(uint8_t* rdram, recomp_context* ctx) {
     const float fov = read_float(rdram, view, 0x74), unzoomed = read_float(rdram, view, 0x6C);
     float zoom = 1.0f;
     if (fov > 0.0f && unzoomed > 0.0f && fov < 180.0f && unzoomed < 180.0f) {
-        zoom = std::clamp(std::tan(fov * half_degrees_to_radians) / std::tan(unzoomed * half_degrees_to_radians), 0.02f, 2.0f);
+        zoom = std::clamp(conker::game_trig::tan(fov * half_degrees_to_radians) / conker::game_trig::tan(unzoomed * half_degrees_to_radians), 0.02f, 2.0f);
     }
     // The yaw's turn is subtracted, the pitch's added.
     ctx->f14.fl -= (mouse_yaw + gyro_yaw) * zoom;
@@ -730,7 +816,7 @@ extern "C" void conker_look_targets(uint8_t* rdram, recomp_context* ctx) {
     conker::reticle::look_frame(rdram, ctx->r16, (uint32_t)MEM_W(0xA0, ctx->r29));
     // Aiming: Swap Sticks: this camera's player is aiming (the look mode, R-Look too: the stick aims, not moves).
     note_aiming(rdram, ctx->r16, camera_player(rdram, ctx->r16));
-    if (is_player_one(rdram, ctx->r16)) {
+    if (MEM_BU(0x23D, ctx->r16) == 0) {
         show_shotgun_laser(rdram, (gpr)(int32_t)MEM_W(0x3D0, ctx->r16));
     }
 #endif
@@ -766,7 +852,7 @@ extern "C" void conker_look_targets(uint8_t* rdram, recomp_context* ctx) {
             MEM_H(0x7A, conker) = (int16_t)view;
             MEM_H(0x12, aim) = 0;
             MEM_H(0x76, conker) = (int16_t)moving;
-            aim_remainder = 0.0f;
+            aim_remainder[0] = 0.0f;
         }
     }
 #endif
@@ -776,11 +862,12 @@ extern "C" void conker_look_targets(uint8_t* rdram, recomp_context* ctx) {
     // downward. recompinput's gyro gives the controller's turn on y (positive turning left) and
     // its tilt on x (positive tilting it back, toward you). Without inverting, the mouse and gyro
     // look the way they move: mouse or controller up looks up (take_movement).
-    if (!is_player_one(rdram, ctx->r16)) {
+    const int player = mover(rdram, ctx->r16);
+    if (player < 0) {
         return;
     }
     float mouse_yaw, mouse_pitch, gyro_yaw, gyro_pitch;
-    if (!take_movement(mouse_yaw, mouse_pitch, gyro_yaw, gyro_pitch)) {
+    if (!take_movement(player, mouse_yaw, mouse_pitch, gyro_yaw, gyro_pitch)) {
         return;
     }
 
@@ -793,9 +880,9 @@ extern "C" void conker_look_targets(uint8_t* rdram, recomp_context* ctx) {
     if (units_per_degree != 0.0f) {
         // Turn the aiming angle as far, for the next frame's target, which grows as it shrinks.
         const gpr aim = (gpr)(int32_t)MEM_W(0x3D4, ctx->r16);
-        const float units = yaw * units_per_degree + aim_remainder;
+        const float units = yaw * units_per_degree + aim_remainder[player];
         const int32_t whole = (int32_t)units;
-        aim_remainder = units - (float)whole;
+        aim_remainder[player] = units - (float)whole;
         // As the stick's turn does (func_15063A38, 0x15063AEC): past +-9000 units the aim stops there and Conker
         // turns by the rest (his facing, +0x7A, and +0x76 with it), so the view (facing less the aim) turns the
         // same and his body follows. The mouse turned the aim alone: swung fast, it went past 9000 and his body
@@ -815,11 +902,11 @@ extern "C" void conker_look_targets(uint8_t* rdram, recomp_context* ctx) {
     frame.pitch_target_set = read_float(rdram, targets, target_pitch) + pitch;
     write_float(rdram, targets, target_pitch, frame.pitch_target_set);
     frame.targets_moved = true;
-    if (option<Response>(options::mouse_response) == Response::Direct) {
+    if (mouse_response(player) == Response::Direct) {
         frame.direct_yaw += mouse_yaw;
         frame.direct_pitch += mouse_pitch;
     }
-    if (option<Response>(options::gyro_response) == Response::Direct) {
+    if (gyro_response(player) == Response::Direct) {
         frame.direct_yaw += gyro_yaw;
         frame.direct_pitch += gyro_pitch;
     }
@@ -843,7 +930,7 @@ extern "C" void conker_look_currents(uint8_t* rdram, recomp_context* ctx) {
         swap_view_yaw[player] = yaw;
         swap_view_yaw_set[player] = true;
     }
-    if (option<Response>(options::stick_response) == Response::Direct) {
+    if (stick_response(player) == Response::Direct) {
         // The view is where the targets are, and the spring keeps no speed to overshoot with.
         write_float(rdram, state, current_yaw, read_float(rdram, targets, target_yaw));
         write_float(rdram, targets, current_pitch, read_float(rdram, targets, target_pitch));

@@ -17,4 +17,7 @@ namespace conker::game_trig {
     inline float tan(float x) { return same() ? same_math::tan(x) : std::tan(x); }
     inline float atan(float x) { return same() ? same_math::atan(x) : std::atan(x); }
     inline float asin(float x) { return same() ? same_math::asin(x) : std::asin(x); }
+    inline float atan2(float y, float x) { return same() ? same_math::atan2(y, x) : std::atan2(y, x); }
+    // hypot isn't required to be correctly rounded either; a square root is.
+    inline float hypot(float x, float y) { return same() ? std::sqrt(x * x + y * y) : std::hypot(x, y); }
 }

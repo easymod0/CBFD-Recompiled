@@ -12,11 +12,14 @@
 #   match      host and joiner, input delay 2: both hash logs must match solo's. Each is given a copy
 #              of the recording with the other's port scrambled, so it only gets the right game if the
 #              other's pads come over the network
+#   mouse      a 3-player Deathmatch where everyone moves their mouse, gyro and scroll wheel and aims
+#              (make_match.py --mouse), alone and as a match of three at the automatic input delay, each
+#              copy with the others' pads and movement scrambled: all three must match the solo replay
 #   jittery    the same with input delay 0 and random sleeps (--jitter 500) on the joiner, so the two
 #              are out of step and wait for each other all the time
 #   desync     the host changes a byte of its memory at read 300: both must stop for a desync
 # It exits 0 if all is as it should be, 1 if not. The logs are kept in --out (a temporary folder
-# otherwise). As in check.sh, a run is judged by what it prints and then stopped. It uses UDP ports 27310 to 27312 on 127.0.0.1.
+# otherwise). As in check.sh, a run is judged by what it prints and then stopped. It uses UDP ports 27310 to 27313 on 127.0.0.1.
 set -u
 
 cd "$(dirname "$0")/../.."
@@ -47,23 +50,38 @@ ROM=$(cd "$(dirname "$ROM")" && pwd)/$(basename "$ROM")
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 
-python3 tools/netplay/make_inputs.py "$OUT/inputs.pads" --reads "$READS" --seed "$SEED" --ports 2 || exit 2
-# <port>.pads: the recording with the other port's pads (of 2) from another seed.
-python3 tools/netplay/make_inputs.py "$OUT/other.pads" --reads "$READS" --seed "$((SEED + 1))" --ports 2 > /dev/null || exit 2
-python3 - "$OUT" <<'PY' || exit 2
+# scramble <recording> <other> <ports> <prefix>: <prefix><n>.pads for each port n (from 1), the recording
+# with every other port's pads and movement taken from <other> (the same length, from another seed).
+scramble() {
+    python3 - "$@" <<'PY'
 import sys
-out = sys.argv[1]
-real = bytearray(open(f"{out}/inputs.pads", "rb").read())
-other = open(f"{out}/other.pads", "rb").read()
-header, read_size, pad_size = 32, 21, 5
-for own in (1, 2):
+real_path, other_path, ports, prefix = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
+real = open(real_path, "rb").read()
+other = open(other_path, "rb").read()
+assert len(real) == len(other)
+header, read_size, pad_size, motion_size = 40, 57, 5, 9   # version 3 (harness.cpp)
+for own in range(ports):
     scrambled = bytearray(real)
-    port = 2 - own  # the other one, counted from 0
-    for at in range(header + 1 + port * pad_size, len(real), read_size):
-        scrambled[at:at + pad_size] = other[at:at + pad_size]
+    for port in range(ports):
+        if port == own:
+            continue
+        for start in range(header, len(real), read_size):
+            pad = start + 1 + port * pad_size
+            motion = start + 1 + 4 * pad_size + port * motion_size
+            scrambled[pad:pad + pad_size] = other[pad:pad + pad_size]
+            scrambled[motion:motion + motion_size] = other[motion:motion + motion_size]
     assert scrambled != real
-    open(f"{out}/{own}.pads", "wb").write(scrambled)
+    open(f"{prefix}{own + 1}.pads", "wb").write(scrambled)
 PY
+}
+
+python3 tools/netplay/make_inputs.py "$OUT/inputs.pads" --reads "$READS" --seed "$SEED" --ports 2 --mouse || exit 2
+python3 tools/netplay/make_inputs.py "$OUT/other.pads" --reads "$READS" --seed "$((SEED + 1))" --ports 2 --mouse > /dev/null || exit 2
+scramble "$OUT/inputs.pads" "$OUT/other.pads" 2 "$OUT/" || exit 2
+python3 tools/netplay/make_match.py "$OUT/mouse.pads" --mode deathmatch --players 3 --mouse --seed "$SEED" || exit 2
+python3 tools/netplay/make_match.py "$OUT/mouse-other.pads" --mode deathmatch --players 3 --mouse --seed "$((SEED + 1))" > /dev/null || exit 2
+scramble "$OUT/mouse.pads" "$OUT/mouse-other.pads" 3 "$OUT/mouse-" || exit 2
+MOUSE_READS=$(( ($(wc -c < "$OUT/mouse.pads") - 40) / 57 ))
 
 # start <name> [options...]: one copy in the background, with its own data folder, its hash log in
 # $OUT/<name>.log and its output in $OUT/<name>.out; its PID is added to $pids.
@@ -128,18 +146,20 @@ finish() {
     echo "  in $(( $(date +%s) - began )) s"
 }
 
-# same <name>: whether <name>'s hash log is solo's.
+# same <name> [<solo> <reads>]: whether <name>'s hash log is solo's (or <solo>'s, of <reads> reads).
 same() {
-    if result=$(python3 tools/netplay/compare_hashes.py "$OUT/solo.log" "$OUT/$1.log"); then
+    ref=${2:-solo}
+    reads=${3:-$READS}
+    if result=$(python3 tools/netplay/compare_hashes.py "$OUT/$ref.log" "$OUT/$1.log"); then
         lines=$(wc -l < "$OUT/$1.log")
-        if [ "$lines" -eq "$READS" ]; then
-            echo "  $1 same as solo: $result"
+        if [ "$lines" -eq "$reads" ]; then
+            echo "  $1 same as $ref: $result"
             return 0
         fi
-        echo "  $1 has $lines reads, not $READS"
+        echo "  $1 has $lines reads, not $reads"
         return 1
     fi
-    echo "  $1 NOT the same as solo: $result"
+    echo "  $1 NOT the same as $ref: $result"
     return 1
 }
 
@@ -149,7 +169,7 @@ start solo
 finish "was the last: quitting" solo || exit 1
 
 echo "match"
-pads=1.pads start match-host --netplay-host 27310 --netplay-address 127.0.0.1 --players 2
+pads=1.pads start match-host --netplay-host 27310 --netplay-address 127.0.0.1 --players 2 --input-delay 2
 pads=2.pads start match-join --netplay-join "$(code_of match-host)"
 if finish "was the last: quitting" match-host match-join; then
     same match-host || failed=1
@@ -164,6 +184,25 @@ start jittery-join --netplay-join "$(code_of jittery-host)" --input-delay 0 --ji
 if finish "was the last: quitting" jittery-host jittery-join; then
     same jittery-host || failed=1
     same jittery-join || failed=1
+else
+    failed=1
+fi
+
+echo "mouse"
+pads=mouse.pads start mouse-solo
+finish "was the last: quitting" mouse-solo || exit 1
+pads=mouse-1.pads start mouse-host --netplay-host 27313 --netplay-address 127.0.0.1 --players 3
+code=$(code_of mouse-host)
+pads=mouse-2.pads start mouse-join1 --netplay-join "$code"
+# Ports go to joiners in the order they're let in, and each copy plays its own file's port: the second waits
+# for the first to be in (port 2).
+i=0
+while ! grep -q "in, on port 2" "$OUT/mouse-join1.out" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+pads=mouse-3.pads start mouse-join2 --netplay-join "$code"
+if finish "was the last: quitting" mouse-host mouse-join1 mouse-join2; then
+    for name in mouse-host mouse-join1 mouse-join2; do
+        same $name mouse-solo "$MOUSE_READS" || failed=1
+    done
 else
     failed=1
 fi

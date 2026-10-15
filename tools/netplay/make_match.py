@@ -5,23 +5,29 @@ Writes a recording that plays from boot into a multiplayer match, for the determ
 moment of the same match. For trying multiplayer things (netplay's "my view only", split-screen rendering)
 without playing through the menus each time. Replay it with --fast, in a window with shot.sh.
 
-    make_match.py <out.pads> [--mode war] [--players 4] [--variant 0] [--pause]
+    make_match.py <out.pads> [--mode war] [--players 4] [--variant 0] [--pause] [--mouse] [--seed 1]
 
 From boot: the intro (it can't be skipped), Start on the title, the main menu's MULTI, the mode's barrel in
 the cellar, its list's --variant'th entry (War's 1 is Colors, Race's 1 is Race B, Deathmatch's are maps),
 every other player pressing Start once (twice takes them out again), then player 1 starting the match and
 some 30 seconds of it with nobody moving. --pause pauses it at the end. A Race is started with Start
-alone (more presses pause it and quit).
+alone (more presses pause it and quit). --mouse has every player play in those 30 seconds instead: move
+and turn with the stick, hold R to aim at times, and move their mouse, gyro and scroll wheel (from
+--seed, as make_inputs.py --mouse does), with settings (Controls) of their own.
 
 The recording's format is the harness's (see its header comment), with its ROM and settings profile hashes
 0 (not checked). The timings were measured with the US ROM on the timeline: a change to what the game does
 before the match (the boot, the menus) can make them miss.
 """
 import argparse
+import random
 import struct
 
+from make_inputs import DEFAULT_CONTROLS, NO_MOTION, Movement, random_controls
+
 MAGIC = b"CBFDPADS"
-VERSION = 2
+VERSION = 3
+R = 0x0010
 START, A = 0x1000, 0x8000
 NO_RESPONSE = 8
 # The cellar's barrels, as many presses right from the first (Deathmatch's skull); 4 is the way back.
@@ -35,7 +41,12 @@ def main():
     parser.add_argument("--players", type=int, default=4, choices=range(2, 5))
     parser.add_argument("--variant", type=int, default=0)
     parser.add_argument("--pause", action="store_true")
+    parser.add_argument("--mouse", action="store_true")
+    parser.add_argument("--seed", type=int, default=1)
     args = parser.parse_args()
+    rng = random.Random(args.seed)
+    controls = [random_controls(rng) if args.mouse and p < args.players else DEFAULT_CONTROLS for p in range(4)]
+    motions = {}  # read: each port's 9 bytes
 
     reads = []
 
@@ -75,14 +86,34 @@ def main():
         press(0, buttons); wait(120 if args.mode != "race" else 60)
     # Some 30 seconds in (a Race 10: its bikes move by themselves, so with nobody steering they crash until
     # they run out of lives, and it ends).
-    wait(300 if args.mode == "race" else 900)
+    if args.mouse and args.mode != "race":
+        moving = [Movement(rng) for _ in range(4)]
+        held = [[0, 0, 0, 0] for _ in range(4)]  # buttons, stick x, stick y, reads left
+        for _ in range(900):
+            read = bytearray([4])
+            for p in range(4):
+                if p >= args.players:
+                    read += struct.pack("<HbbB", 0, 0, 0, NO_RESPONSE)
+                    continue
+                h = held[p]
+                if h[3] == 0:
+                    h[0] = R if rng.random() < 0.4 else 0
+                    h[1] = rng.randint(-70, 70) if rng.random() < 0.5 else 0
+                    h[2] = rng.randint(-70, 70) if rng.random() < 0.5 else 0
+                    h[3] = rng.randint(20, 90)
+                h[3] -= 1
+                read += struct.pack("<HbbB", h[0], h[1], h[2], 0)
+            motions[len(reads)] = b"".join(moving[p].next() if p < args.players else NO_MOTION for p in range(4))
+            reads.append(read)
+    else:
+        wait(300 if args.mode == "race" else 900)
     if args.pause:
         press(0, START); wait(200)
 
     with open(args.out, "wb") as f:
-        f.write(MAGIC + struct.pack("<IIQQ", VERSION, args.players, 0, 0))
-        for read in reads:
-            f.write(read)
+        f.write(MAGIC + struct.pack("<IIQQ", VERSION, args.players, 0, 0) + struct.pack("<4H", *controls))
+        for i, read in enumerate(reads):
+            f.write(read + motions.get(i, NO_MOTION * 4))
     print(f"{args.out}: {len(reads)} reads, {args.mode} ({args.variant}), {args.players} players")
 
 
