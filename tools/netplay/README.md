@@ -68,8 +68,10 @@ and headless; in the window the device ran dry once, before the first buffer sta
 nothing. Before H4, two windows split from each other at about read 360, and before H5 (the renderer
 writing into game memory) a window split from headless at read 2.
 
-Run one at a time from the same build: runs share the data folder (the stored ROM, which `--rom`
-writes, and `saves/harness/`), so two at once break each other.
+Runs from the same build share the data folder (the stored ROM, which `--rom` writes, and
+`saves/harness/`), so two at once break each other: give each its own with `--data <folder>` (made if
+need be; pass `--rom` too the first time). Two `--fast` replays run at once that way give the same
+hashes as one run alone.
 
 ### The netplay settings profile
 
