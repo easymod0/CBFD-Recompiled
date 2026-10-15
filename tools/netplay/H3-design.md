@@ -103,12 +103,23 @@ While the harness is used, the runtime runs the game as a discrete-event simulat
 
 ### A game that doesn't go idle
 
-During a long load the game may not go idle for a long time. Then no VIs arrive, the scheduler stops
-sending its per-VI messages, and audio starves. So the runtime counts the OS calls that empty the
-queue (send, jam, receive) since the last delivery point. At a fixed count it treats the next one as
-a delivery point that moves virtual time on a fixed amount: in effect a fixed CPU speed. The count
-and the amount have to come from measuring a level load (the most OS calls and the longest real time
-between two idle points).
+During a long load the game may not go idle for a while. Then no VIs arrive, the scheduler stops
+sending its per-VI messages, and audio starves. The review suggested a limit: after a fixed count of
+OS calls without going idle, move virtual time on a fixed amount.
+
+Measured on a 13.5-minute session played in a window (24,449 reads, through several areas and loads;
+the timeline logs each new longest burst):
+
+| | OS calls | Real time |
+|---|---|---|
+| The most OS calls in one burst | 260 | 5.8 ms |
+| The longest burst (a load, at 381 s) | 16 | 161 ms |
+
+So a load is long in game code, not in OS calls: a count of OS calls can't see it, and the game always
+went idle again by itself. Determinism doesn't need a limit: the load takes no virtual time, the same
+in every run. All it costs is up to 161 ms without VIs during a load, which only matters to how the
+sound plays (H4). **So no limit for now.** The timeline keeps logging the longest bursts; if a game
+thread ever spins without going idle, a limit on virtual time per OS call can be added then.
 
 `pause_self` is also called by three loops that hang the game when an allocation fails
 (`func_151AE0E4`, `func_1501878C`, `func_1509B950`). A delivery point checks that nothing else is
@@ -165,8 +176,8 @@ load: the timeline starts again from the state's clock.
    and the frame delta is unchanged.
 4. VIs come at exactly 60 Hz of virtual time (as today's VI thread), which is a whole 781,250 ticks
    per VI; not 59.94.
-5. The limit for a game that doesn't go idle: a fixed number of OS calls is a fixed amount of virtual
-   time (a fixed CPU speed), with the numbers measured on a level load.
+5. No limit for a game that doesn't go idle: loads are long in game code, not OS calls (measured: at
+   most 260 OS calls, and 161 ms with 16), and the game always goes idle by itself.
 6. Save states, in deterministic mode, only at delivery points.
 7. Deterministic mode is required on every netplay peer; settings that change game memory are forced
    or synced between peers.
@@ -190,12 +201,16 @@ Built (step 1 below), behind the harness: `ultramodern/src/timeline.cpp` and hoo
 | Paced vs `--fast` | identical |
 | Frame delta `D_800BE9E4` | 2 VIs at every read, the same as normal mode |
 | Bursts between idle points | at most 260 OS calls, at most 8.6 ms of real time |
+| A 13.5-minute played recording (24,449 reads), two replays | identical, about 17 s each |
 
 Normal mode (no harness) runs as before. With `--real-time`, runs still differ as they did before H3.
 
-Not done yet: the OS-call limit (the recording doesn't reach a level load: one recorded by playing
-is needed to measure it), save states, the two host patches, display-list events, windowed runs
-(they need H4 and H5).
+A replay of the played recording follows the windowed session for about 380 s (the same scenes at the
+same virtual times, with the same OS-call counts), then parts from it after a load. A window still
+differs from headless where H4 (the sound device) and H5 (the renderer) come in.
+
+Not done yet: save states, the two host patches, display-list events, windowed runs (they need H4 and
+H5).
 
 ## The steps
 
@@ -204,7 +219,7 @@ is needed to measure it), save states, the two host patches, display-list events
    mode (random sleeps at OS calls and in the graphics thread, which finds races better than a busy
    core). Check: 20 or more replays identical; jitter and busy-core replays identical to them;
    `D_800BE9E4` the same as normal mode; OS calls and time between idle points on a level load.
-2. The limit, from those numbers.
+2. ~~The limit, from those numbers~~: measured, not needed (above).
 3. Save states: a state loaded at read N gives the same reads from N on.
 4. The two host patches on virtual time; display-list events.
 5. **Done when:** a replay on one busy core (`taskset -c 3` next to a busy loop) matches a normal one

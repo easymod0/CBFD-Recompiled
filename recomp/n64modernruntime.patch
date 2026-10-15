@@ -1027,10 +1027,10 @@ index 0000000..0c9078a
 +#endif
 diff --git a/ultramodern/include/ultramodern/timeline.hpp b/ultramodern/include/ultramodern/timeline.hpp
 new file mode 100644
-index 0000000..e38477f
+index 0000000..98c9b60
 --- /dev/null
 +++ b/ultramodern/include/ultramodern/timeline.hpp
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,49 @@
 +#ifndef __ULTRAMODERN_TIMELINE_HPP__
 +#define __ULTRAMODERN_TIMELINE_HPP__
 +
@@ -1056,6 +1056,9 @@ index 0000000..e38477f
 +        // anything that still depends on how fast the host is (a test; 0 is off).
 +        void set_jitter(uint32_t max_us);
 +        void jitter();
++        // At each OS call that hands over messages (send, jam, receive), on a game thread: counts them
++        // (and jitters).
++        void os_call();
 +
 +        // A delivery point, on a game thread: delivers the events due next, in order, until one wakes a
 +        // thread (`until_woken`), or (not `until_woken`) for at most `max_ticks` of virtual time.
@@ -1409,7 +1412,7 @@ index 23228c7..97ed936 100644
  
  /* Rumble */
 diff --git a/ultramodern/src/mesgqueue.cpp b/ultramodern/src/mesgqueue.cpp
-index 9944a02..c1f2ef3 100644
+index 9944a02..a7a40ae 100644
 --- a/ultramodern/src/mesgqueue.cpp
 +++ b/ultramodern/src/mesgqueue.cpp
 @@ -5,6 +5,8 @@
@@ -1458,7 +1461,7 @@ index 9944a02..c1f2ef3 100644
  
  extern "C" s32 osSendMesg(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, s32 flags) {
      OSMesgQueue *mq = TO_PTR(OSMesgQueue, mq_);
-+    ultramodern::timeline::jitter();
++    ultramodern::timeline::os_call();
      bool jam = false;
      
      // Don't directly send to the message queue if this isn't a game thread to avoid contention.
@@ -1466,7 +1469,7 @@ index 9944a02..c1f2ef3 100644
  
  extern "C" s32 osJamMesg(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, s32 flags) {
      OSMesgQueue *mq = TO_PTR(OSMesgQueue, mq_);
-+    ultramodern::timeline::jitter();
++    ultramodern::timeline::os_call();
      bool jam = true;
      
      // Don't directly send to the message queue if this isn't a game thread to avoid contention.
@@ -1474,7 +1477,7 @@ index 9944a02..c1f2ef3 100644
  
  extern "C" s32 osRecvMesg(RDRAM_ARG PTR(OSMesgQueue) mq_, PTR(OSMesg) msg_, s32 flags) {
      OSMesgQueue *mq = TO_PTR(OSMesgQueue, mq_);
-+    ultramodern::timeline::jitter();
++    ultramodern::timeline::os_call();
      
      assert(ultramodern::is_game_thread() && "RecvMesg not allowed outside of game threads.");
 -    
@@ -1929,13 +1932,14 @@ index 6e3ed18..221ad3d 100644
  
 diff --git a/ultramodern/src/timeline.cpp b/ultramodern/src/timeline.cpp
 new file mode 100644
-index 0000000..fb85d49
+index 0000000..f29c325
 --- /dev/null
 +++ b/ultramodern/src/timeline.cpp
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,173 @@
 +#include <algorithm>
 +#include <atomic>
 +#include <chrono>
++#include <cstdio>
 +#include <random>
 +#include <thread>
 +
@@ -1962,6 +1966,43 @@ index 0000000..fb85d49
 +    std::chrono::high_resolution_clock::time_point real_start;
 +
 +    std::atomic<uint32_t> jitter_max_us = 0;
++
++    // The game's bursts of work between two delivery points: the OS calls in each, and the real time it
++    // took. The longest are logged, to choose the limit for a game that doesn't go idle (H3-design.md).
++    uint64_t burst_calls = 0;
++    std::chrono::high_resolution_clock::time_point burst_start;
++    bool in_burst = false;
++    uint64_t most_calls = 0;
++    std::chrono::microseconds longest{ 0 };
++
++    void burst_ended() {
++        if (!in_burst) {
++            return;
++        }
++        in_burst = false;
++        const auto took = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - burst_start);
++        bool more = false;
++        if (burst_calls > most_calls) {
++            most_calls = burst_calls;
++            more = true;
++        }
++        if (took > longest) {
++            longest = took;
++            more = true;
++        }
++        if (more) {
++            std::printf("[timeline] at %.2f s: a burst of %llu OS calls, %.2f ms (the most so far: %llu calls, %.2f ms)\n",
++                now / 46'875'000.0, (unsigned long long)burst_calls, took.count() / 1000.0,
++                (unsigned long long)most_calls, longest.count() / 1000.0);
++            std::fflush(stdout);
++        }
++    }
++
++    void burst_started() {
++        in_burst = true;
++        burst_calls = 0;
++        burst_start = std::chrono::high_resolution_clock::now();
++    }
 +
 +    // Waits for real time to reach virtual time `ticks`.
 +    void pace(uint64_t ticks) {
@@ -1998,6 +2039,14 @@ index 0000000..fb85d49
 +    jitter_max_us = max_us;
 +}
 +
++void ultramodern::timeline::os_call() {
++    if (!deterministic) {
++        return;
++    }
++    burst_calls++;
++    jitter();
++}
++
 +void ultramodern::timeline::jitter() {
 +    const uint32_t max_us = jitter_max_us.load();
 +    if (max_us == 0) {
@@ -2008,10 +2057,12 @@ index 0000000..fb85d49
 +}
 +
 +void ultramodern::timeline::deliver(RDRAM_ARG bool until_woken, uint64_t max_ticks) {
++    burst_ended();
 +    // The game's own messages first (PI, SI, SP done: posted by game threads, so in the same order
 +    // every run).
 +    dequeue_external_messages(PASS_RDRAM1);
 +    if (until_woken && !thread_queue_empty(PASS_RDRAM running_queue)) {
++        burst_started();
 +        return;
 +    }
 +    const uint64_t stop_at = until_woken ? UINT64_MAX : now + max_ticks;
@@ -2033,6 +2084,7 @@ index 0000000..fb85d49
 +            pace(stop_at);
 +            now = stop_at;
 +            ultramodern::timeline_parts::clock_advance_to(now);
++            burst_started();
 +            return;
 +        }
 +
@@ -2052,6 +2104,7 @@ index 0000000..fb85d49
 +        dequeue_external_messages(PASS_RDRAM1);
 +
 +        if (until_woken && !thread_queue_empty(PASS_RDRAM running_queue)) {
++            burst_started();
 +            return;
 +        }
 +    }

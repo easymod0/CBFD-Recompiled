@@ -278,6 +278,10 @@ namespace {
                 pad[4] = pads[i].err_no;
             }
             std::fwrite(out, 1, sizeof(out), record_file);
+            // Written out every 2 s of game or so: quitting can crash (issue #127) before finish() closes it.
+            if (read % 60 == 59) {
+                std::fflush(record_file);
+            }
         }
 
         if (read == last_read) {
