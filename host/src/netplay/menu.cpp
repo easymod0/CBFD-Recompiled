@@ -135,9 +135,8 @@ namespace {
             host_button->set_enabled(state == State::idle);
             join_button->set_enabled(state == State::idle);
             cancel_button->set_display(state == State::connecting ? recompui::Display::Flex : recompui::Display::None);
-            if (state == State::connecting) {
-                queue_update();
-            }
+            // An update applies the text (and, while connecting, polls).
+            queue_update();
         }
 
         // Hosting or joining: the Hello from the stored ROM, then lockstep's begin.
