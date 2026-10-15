@@ -32,6 +32,7 @@
 #include <deque>
 #include <string>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 
@@ -154,15 +155,26 @@ namespace {
     // config has them. There are none with --headless, which makes no menus, though the game still
     // asks for the camera's settings (its field of view every frame): reading the General tab's then
     // threw, and the headless run aborted ("General config has not been created yet").
+    //
+    // The netplay settings profile (netplay/profile.cpp) reads them all as headless does, but the reticle
+    // (drawn over the picture, not in the game): their fallbacks are each setting's default, but the mouse's
+    // and the free camera's, which are off.
     recomp::config::Config* option_config(const std::string& id) {
+        if (conker::netplay_profile::active() && id != options::aim_reticle) {
+            return nullptr;
+        }
         return recompui::config::find_option_config(id);
     }
 
-    // An enum setting, or its first value without the settings (Off for a toggle).
+    // An enum setting, or the fallback without the settings (by default its first value, or Off for a
+    // toggle).
     template <typename T>
-    T option(const std::string& id) {
+    T option(const std::string& id, std::optional<T> fallback = std::nullopt) {
         recomp::config::Config* config = option_config(id);
         if (config == nullptr) {
+            if (fallback) {
+                return *fallback;
+            }
             if constexpr (std::is_same_v<T, Toggle>) {
                 return Toggle::Off;
             }
@@ -313,6 +325,11 @@ void conker::look_aim::add_mouse_gyro_options(recomp::config::Config& config) {
 
 void conker::look_aim::on_input_poll() {
 #if defined(CONKER_RT64)
+    // The netplay settings profile: no mouse or gyro. None is queued, so the game's code never takes any
+    // (whether a poll's movement was queued by the time the game looks depends on the host's timing).
+    if (conker::netplay_profile::active()) {
+        return;
+    }
     Movement m;
     recompinput::get_mouse_deltas(&m.mouse_x, &m.mouse_y);
     recompinput::get_gyro_deltas(0, &m.gyro_x, &m.gyro_y);
@@ -487,7 +504,7 @@ bool conker::look_aim::leaping_now() {
 }
 
 void conker::look_aim::leap_stick(float& x, float& y) {
-    if (!leaping) {
+    if (!leaping || conker::netplay_profile::active()) {
         leap_x = leap_y = 0.0f;
         return;
     }
@@ -524,11 +541,11 @@ namespace {
     // The game's own stick is Invert Y, so X turns around when the setting has X, and Y when the
     // setting lacks it.
     bool turn_stick_x() {
-        const Invert invert = option<Invert>(options::stick_invert);
+        const Invert invert = option<Invert>(options::stick_invert, Invert::Y);
         return invert == Invert::X || invert == Invert::Both;
     }
     bool turn_stick_y() {
-        const Invert invert = option<Invert>(options::stick_invert);
+        const Invert invert = option<Invert>(options::stick_invert, Invert::Y);
         return invert == Invert::None || invert == Invert::X;
     }
 }

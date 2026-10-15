@@ -19,6 +19,7 @@
 #include "ultramodern/config.hpp"
 
 #include "conker.hpp"
+#include "game_trig.hpp"
 
 #if defined(CONKER_RT64)
 namespace RT64 {
@@ -69,7 +70,12 @@ namespace {
 
     // How much wider than the game's 4:3 the window shows: RT64 widens the 3D
     // view to the window's aspect ratio unless the aspect ratio is set to Original.
+    // With the netplay settings profile, 16:9's whatever the window, as what's
+    // widened is in the game's memory.
     float widescreen_ratio() {
+        if (conker::netplay_profile::active()) {
+            return conker::netplay_profile::widescreen_ratio;
+        }
         if (ultramodern::renderer::get_graphics_config().ar_option == ultramodern::renderer::AspectRatio::Original || window == nullptr) {
             return 1.0f;
         }
@@ -88,13 +94,13 @@ namespace {
             const char* value = SDL_getenv("CONKER_CULL_EXTRA");
             return value != nullptr ? std::max(1.0f, (float)std::atof(value)) : 1.0f;
         }();
-        return extra;
+        return conker::netplay_profile::active() ? 1.0f : extra;
     }
 
     // TEMP-DEBUG: CONKER_NO_CULL_WIDEN leaves the frustum and cull scale at 4:3.
     bool no_cull_widen() {
         static const bool off = SDL_getenv("CONKER_NO_CULL_WIDEN") != nullptr;
-        return off;
+        return off && !conker::netplay_profile::active();
     }
 
     // How far past each 4:3 edge sprites are kept, in N64 screen pixels: as far as
@@ -483,6 +489,18 @@ namespace {
     // A ring of display lists: RT64 has long finished with one when it comes round again.
     constexpr uint32_t wide_dl_size = 0x10000;
     uint32_t wide_dl_offset = 0;
+}
+
+// For save states (conker::host_state): where the ring is, so a load writes where the state would.
+uint32_t conker::widescreen::dl_ring() {
+    return wide_dl_offset;
+}
+
+void conker::widescreen::set_dl_ring(uint32_t offset) {
+    wide_dl_offset = offset < wide_dl_size ? offset & ~7u : 0;
+}
+
+namespace {
 
     // Beyond the frame's sides, in N64 screen pixels. The scissor clips the rest.
     constexpr int32_t wide_reach = 1024;
@@ -643,6 +661,8 @@ extern "C" void conker_iris_end(uint8_t* rdram, recomp_context* ctx) {
     put_command(rdram, game_dl, g_dl_branch, wide_dl);
 }
 
+// (Its trigonometry, as the backdrop's below and field_of_view.cpp's, is game_trig.hpp's: in netplay the same
+// on every platform, as the C library's rounds some last bits differently on Windows and Linux.)
 // func_1501B22C builds a camera's frustum from its fields of view: the view-space
 // normals of its four side planes, which the game culls the world and its objects
 // against. RT64 widens the picture, but those planes still hold the 4:3 view, so
@@ -658,9 +678,9 @@ extern "C" void conker_widen_frustum(uint8_t* rdram, recomp_context* ctx) {
     const gpr camera = ctx->r16;
     constexpr float degrees_to_radians = 3.14159265358979f / 180.0f;
     const float half_x = read_float(rdram, camera, 0x74) * 0.5f * degrees_to_radians;
-    const float wide_half_x = std::min(std::atan(std::tan(half_x) * ratio * cull_extra()), 1.5f);
-    const float c = std::cos(wide_half_x);
-    const float s = std::sin(wide_half_x);
+    const float wide_half_x = std::min(conker::game_trig::atan(conker::game_trig::tan(half_x) * ratio * cull_extra()), 1.5f);
+    const float c = conker::game_trig::cos(wide_half_x);
+    const float s = conker::game_trig::sin(wide_half_x);
     // Left (cos, 0, -sin) and right (-cos, 0, -sin), as the game writes them.
     write_float(rdram, camera, 0x88, c);
     write_float(rdram, camera, 0x8C, 0.0f);
@@ -742,14 +762,14 @@ extern "C" void conker_widen_backdrop_sectors(uint8_t* rdram, recomp_context* ct
     const uint32_t camera_index = (uint32_t)MEM_W(0, (gpr)(int32_t)0x80082FA4); // D_80082FA4
     const gpr camera = (gpr)(int32_t)MEM_W(0, (gpr)(int32_t)0x800BE628) + (gpr)(int32_t)(camera_index * 0x180);
     const gpr view = (gpr)(int32_t)(0x800D9C10 + camera_index * 0x40);
-    const float half_x = std::atan(std::tan(read_float(rdram, camera, 0x74) * 0.5f * degrees_to_radians) * ratio);
+    const float half_x = conker::game_trig::atan(conker::game_trig::tan(read_float(rdram, camera, 0x74) * 0.5f * degrees_to_radians) * ratio);
     const float half_y = read_float(rdram, camera, 0x78) * 0.5f * degrees_to_radians;
     // The camera looks along -z of its view: the y part of that is its pitch.
-    const float pitch = std::asin(std::clamp(-read_float(rdram, view, 0x18), -1.0f, 1.0f));
+    const float pitch = conker::game_trig::asin(std::clamp(-read_float(rdram, view, 0x18), -1.0f, 1.0f));
     const float corner_pitch = std::fabs(pitch) + half_y;
     float reach = 180.0f;
     if (corner_pitch < 89.0f * degrees_to_radians) {
-        reach = std::atan(std::tan(half_x) / std::cos(corner_pitch)) / degrees_to_radians + half_sector + spare;
+        reach = conker::game_trig::atan(conker::game_trig::tan(half_x) / conker::game_trig::cos(corner_pitch)) / degrees_to_radians + half_sector + spare;
     }
     ctx->f0.fl = std::max(ctx->f0.fl, std::min(reach, 180.0f));
 }

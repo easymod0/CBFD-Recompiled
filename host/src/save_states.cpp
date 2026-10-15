@@ -20,9 +20,9 @@
 // what the game has saved.
 //
 // The file: "CBFDSTAT", the file's version (u32), the program's version (u32 length, text), when it was
-// taken (u64, seconds since 1970), a block for achievements' progress (u32 length, bytes: empty now; it
-// held RetroAchievements', which was removed, and stays so the files keep their layout), then the
-// runtime's state (u32 length, bytes; librecomp/save_states.hpp).
+// taken (u64, seconds since 1970), a block of the host's own state (u32 length, bytes: conker::host_state;
+// it held RetroAchievements' progress, which was removed, then stayed empty so the files kept their
+// layout), then the runtime's state (u32 length, bytes; librecomp/save_states.hpp).
 
 #include <atomic>
 #include <chrono>
@@ -254,7 +254,7 @@ namespace {
             log_line("[save] slot %d taken after %u tries, thread %d running\n%s", request_slot, attempts,
                 (int)osGetThreadId(rdram, NULLPTR),
                 recomp::save_states::describe_current_threads(rdram).c_str());
-            write_state(request_slot, std::move(state), {});
+            write_state(request_slot, std::move(state), conker::host_state::save());
             notify_done("State saved to slot " + std::to_string(request_slot));
             finish();
             return;
@@ -266,6 +266,7 @@ namespace {
             case recomp::save_states::LoadResult::Loaded:
                 log_line("[load] slot %d loaded after %u tries", request_slot, attempts);
                 conker::local_achievements::state_loaded();
+                conker::host_state::load(load_progress);
                 notify_done("Loaded the state in slot " + std::to_string(request_slot));
                 finish();
                 break;
@@ -342,7 +343,13 @@ namespace {
         if (event->type != SDL_KEYDOWN || event->key.repeat != 0 || !ultramodern::is_game_started()) {
             return 0;
         }
-        switch (event->key.keysym.sym) {
+        // The netplay settings profile (netplay/profile.cpp): a recording or a replay goes on from boot.
+        const SDL_Keycode key = event->key.keysym.sym;
+        if ((key == SDLK_F5 || key == SDLK_F7) && conker::netplay_profile::active()) {
+            conker::notices::show("Save states are off while recording or replaying");
+            return 0;
+        }
+        switch (key) {
             case SDLK_F5:
                 ask_to_save();
                 break;

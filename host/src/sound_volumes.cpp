@@ -141,7 +141,8 @@ void conker::sound_volumes::add_options(recomp::config::Config& config) {
 }
 
 void conker::sound_volumes::game_frame(uint8_t* rdram) {
-    if (!options_added) {
+    // The netplay settings profile: 100%, as without the settings (the sounds' volumes are in game memory).
+    if (!options_added || conker::netplay_profile::active()) {
         return;
     }
     // A new volume is taken once its slider has been left alone for a few frames, not on every frame

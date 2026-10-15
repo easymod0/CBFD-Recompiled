@@ -495,6 +495,15 @@ hashes (`ReverseDXT`, `CalculateMaxCI`, the tile and block dimensions) are Rice
 Video's (mupen64plus-video-rice, GPL 2 or later). Its header says so; see
 [the licenses](../README.md#license) for what that means for builds.
 
+Render to RAM can be turned off by the host (`RT64::setRenderToRAMOff`,
+`rt64_workload.cpp`), whatever the emulator's setting or the game's extended
+command, for netplay's deterministic mode (issue #126;
+`host/src/netplay/profile.cpp`). It copies each frame's colour and depth images
+back into the game's memory from the graphics thread, whenever that thread gets
+to the display list, so a window run differed from a headless one (which has no
+renderer) from the second read, and the copies raced the game. RT64 still draws
+everything; only the copy back is skipped.
+
 RecompFrontend (`recompfrontend.patch`): mouse buttons can be bound, with the
 keyboard's controls (and in single player with the controller's too, as both are
 read then). recompinput already had a mouse input type, but reading it

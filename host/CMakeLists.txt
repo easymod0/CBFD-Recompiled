@@ -9,11 +9,23 @@ cmake_minimum_required(VERSION 3.20)
 #   cmake -S host -B host/build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=RelWithDebInfo
 #   cmake --build host/build
 
+# Netplay (issue #126), off until it has been reviewed and tested. So far: the determinism harness
+# (--record, --replay, --hash-log: src/netplay/harness.cpp).
+option(CONKER_NETPLAY "Build the netplay work in progress" OFF)
+
 project(ConkerRecomp C CXX)
 if (APPLE)
     # RT64 and RecompFrontend have Objective-C++ sources (Metal, Cocoa); rt64 enables
     # the languages only in its own directory.
     enable_language(OBJC OBJCXX)
+endif()
+
+# Netplay runs the same game on every machine, so every compiler has to turn its floating-point code into the
+# same arithmetic. Clang fuses a multiply and an add into one instruction (one rounding instead of two) where the
+# processor has it, as ARM's always does (Apple Silicon); MSVC doesn't unless asked. So no fusing, for every
+# target here (the recompiled game, the runtime, the host).
+if (CONKER_NETPLAY AND NOT MSVC)
+    add_compile_options(-ffp-contract=off)
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -83,6 +95,8 @@ add_executable(ConkerRecomp
     src/null_renderer.cpp
     src/overlays.cpp
     src/ultra_extras.cpp
+    src/host_state.cpp
+    src/audio_clock.cpp
     src/mod_api.cpp
     src/rom_versions.cpp
     src/widescreen.cpp
@@ -105,6 +119,11 @@ target_include_directories(ConkerRecomp PRIVATE
     "${REPO_ROOT}/RecompiledFuncs"
 )
 target_link_libraries(ConkerRecomp PRIVATE RecompiledFuncs librecomp ultramodern)
+
+if (CONKER_NETPLAY)
+    target_sources(ConkerRecomp PRIVATE src/netplay/harness.cpp src/netplay/profile.cpp)
+    target_compile_definitions(ConkerRecomp PRIVATE CONKER_NETPLAY)
+endif()
 
 if (CONKER_RT64)
     set(RT64_STATIC ON CACHE BOOL "" FORCE)
