@@ -161,8 +161,9 @@ namespace {
     // threw, and the headless run aborted ("General config has not been created yet").
     //
     // The netplay settings profile (netplay/profile.cpp) reads them all as headless does, but the reticle
-    // (drawn over the picture, not in the game): their fallbacks are each setting's default, but the mouse's
-    // and the free camera's, which are off.
+    // (drawn over the picture, not in the game): their fallbacks are each setting's default, but the free
+    // camera's, which is off. The mouse's and gyro's, and the stick's aiming, are each player's own then
+    // (their Controls: stick_response and the others below; own_option reads this machine's for them).
     recomp::config::Config* option_config(const std::string& id) {
         if (conker::netplay_profile::active() && id != options::aim_reticle) {
             return nullptr;
@@ -394,7 +395,8 @@ uint16_t conker::motion::local_controls() {
     c |= (uint16_t)((uint32_t)own_option(options::gyro_invert, Invert::None) << 6);
     c |= (uint16_t)((uint32_t)own_option(options::stick_invert, Invert::Y) << 8);
 #endif
-    return c;
+    // Only Controls' bits (a value out of range in the config would make the others refuse the packet).
+    return c & 0x03FF;
 }
 
 void conker::look_aim::on_input_poll() {
@@ -852,7 +854,7 @@ extern "C" void conker_look_targets(uint8_t* rdram, recomp_context* ctx) {
             MEM_H(0x7A, conker) = (int16_t)view;
             MEM_H(0x12, aim) = 0;
             MEM_H(0x76, conker) = (int16_t)moving;
-            aim_remainder[0] = 0.0f;
+            aim_remainder[camera_player(rdram, ctx->r16)] = 0.0f;
         }
     }
 #endif

@@ -211,12 +211,18 @@ namespace {
     std::chrono::steady_clock::time_point stick_time;
 
     // The orbit of `camera`, or -1 if it has none.
+    // Player 1's is the camera being played, as outside the harness (in multiplayer that's player 1's camera);
+    // the other players' cameras are known by their player (+0x23D).
     int orbit_of(uint8_t* rdram, gpr camera) {
+        const bool played = (uint32_t)camera == (uint32_t)MEM_W(0, (gpr)(int32_t)current_camera);
         if (conker::netplay_profile::active()) {
             const int player = (int)MEM_BU(0x23D, camera);
+            if (player == 0) {
+                return played ? 0 : -1;
+            }
             return player < orbit_count ? player : -1;
         }
-        return (uint32_t)camera == (uint32_t)MEM_W(0, (gpr)(int32_t)current_camera) ? 0 : -1;
+        return played ? 0 : -1;
     }
 
     // The scroll wheel's zoom: zoom_step to the power of -notches, by multiplying (the same on every machine).
@@ -497,6 +503,11 @@ extern "C" void conker_mouse_camera_collide(uint8_t* rdram, recomp_context* ctx)
         constexpr float two_pi = 2.0f * 3.14159265358979f;
         orbit.yaw += std::remainder(eye_yaw(rdram, camera, 0x2F8, cx, cz) - eye_yaw(rdram, camera, 0x304, cx, cz), two_pi);
     }
+    // While the harness is used, kept within a turn (remainder is exact): a player's movement could otherwise
+    // turn it on without end, past where same_math's sine and cosine give up, and the eye would be NaN.
+    if (harness) {
+        orbit.yaw = std::remainder(orbit.yaw, 2.0f * 3.14159265358979f);
+    }
     // Looking up: the eye no further than it can stay above Conker's feet and outside him (issue #70).
     // Tilting further up than that, the eye stays there and the view aims up instead (orbit.aim, see
     // conker_mouse_camera_aim), as Ocarina of Time's free camera does: from close to a tower its top
@@ -524,7 +535,7 @@ extern "C" void conker_mouse_camera_collide(uint8_t* rdram, recomp_context* ctx)
     if (first) {
         const bool unchanged = orbit.has_last && (notches == 0) &&
             (std::fabs(cx - orbit.last_look[0]) < rest_move) && (std::fabs(cy - orbit.last_look[1]) < rest_move) && (std::fabs(cz - orbit.last_look[2]) < rest_move) &&
-            (std::fabs(orbit.yaw - orbit.last_yaw) < rest_turn) && (std::fabs(orbit.pitch - orbit.last_pitch) < rest_turn) && (std::fabs(orbit.wanted - orbit.last_wanted) < rest_distance);
+            (std::fabs(std::remainder(orbit.yaw - orbit.last_yaw, 2.0f * 3.14159265358979f)) < rest_turn) && (std::fabs(orbit.pitch - orbit.last_pitch) < rest_turn) && (std::fabs(orbit.wanted - orbit.last_wanted) < rest_distance);
         orbit.resting = unchanged && (orbit.resting || orbit.contact);
         orbit.last_look[0] = cx; orbit.last_look[1] = cy; orbit.last_look[2] = cz;
         orbit.last_yaw = orbit.yaw; orbit.last_pitch = orbit.pitch; orbit.last_wanted = orbit.wanted;
@@ -730,7 +741,8 @@ std::vector<uint32_t> conker::mouse_camera::state() {
 }
 
 void conker::mouse_camera::set_state(const std::vector<uint32_t>& words) {
-    if (words.size() * 4 < sizeof(orbits)) {
+    // Not this build's orbits (missing from an older state, or laid out otherwise): they start afresh.
+    if (words.size() != (sizeof(orbits) + 3) / 4) {
         for (Orbit& o : orbits) o = Orbit{};
         return;
     }

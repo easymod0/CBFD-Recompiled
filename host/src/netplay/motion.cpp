@@ -53,6 +53,9 @@ namespace {
 
     // `total` in fixed point, as far as an int16 goes; what's left stays in `total`.
     int16_t take_fixed(float& total, float unit) {
+        if (!std::isfinite(total)) {
+            total = 0;
+        }
         const float units = std::clamp(std::trunc(total * unit), -32767.0f, 32767.0f);
         total -= units / unit;
         return (int16_t)units;

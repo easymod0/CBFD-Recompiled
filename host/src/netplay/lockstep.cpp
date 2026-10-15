@@ -232,10 +232,15 @@ namespace {
     // is a frame, 33 ms at 30 frames a second, most of it spare), so a LAN's sub-millisecond trips give 0:
     // the others' inputs reach the game as soon as this one's own. Each read past that hides a frame's
     // worth of trip, with a few ms for the trip to vary.
-    int delay_for(std::vector<int> round_trips) {
+    int delay_for(std::vector<int> round_trips, size_t joiners) {
         constexpr double frame_ms = 1000.0 / 30.0;
         constexpr double wait_ms = 8.0;     // what a read can wait without the game falling behind
         constexpr double spare_ms = 4.0;    // for the trip varying
+        // A round trip the library doesn't know yet: the delay a match had before it was chosen.
+        if (round_trips.size() < joiners) {
+            std::printf("[netplay] the round trips to the players aren't all known: input delay 2\n");
+            return 2;
+        }
         std::sort(round_trips.rbegin(), round_trips.rend());
         double one_way = 0;
         for (size_t i = 0; i < round_trips.size() && i < 2; i++) {
@@ -453,7 +458,7 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
                 joined++;
                 std::printf("[netplay] port %d joined (%d of %d)\n", event.port + 1, joined, match_players);
                 if (joined == match_players) {
-                    const int chosen = delay_option == auto_delay ? delay_for(session->round_trips_ms()) : delay_option;
+                    const int chosen = delay_option == auto_delay ? delay_for(session->round_trips_ms(), (size_t)(match_players - 1)) : delay_option;
                     if (session->start(host_own_view, chosen)) {
                         match_started = true;
                         match_own_view = host_own_view;
