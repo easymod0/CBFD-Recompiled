@@ -75,7 +75,8 @@ namespace conker::netplay {
         void send(const Inputs& inputs);
         // This peer's memory hash (a joiner's go to the host, the host's to everyone).
         void send(const Hash& hash);
-        // Says goodbye to every peer and closes the connections.
+        // Says goodbye to every peer and closes the connections. The goodbyes go out as the library is
+        // polled: poll a moment before deleting the session or stopping the library, or they may be lost.
         void leave(Reason reason);
         // The furthest read a peer's Inputs may reach (their first read plus their count); beyond it they're
         // refused as broken or hostile, before the host passes them on. Lockstep sets it as the game goes;

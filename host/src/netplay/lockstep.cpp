@@ -25,6 +25,10 @@
 
 #include "net/session.hpp"
 
+// The runtime's flag for the program quitting (ultramodern::quit), set before it waits for the game's
+// threads to end. librecomp's pi.cpp reads it the same way.
+extern std::atomic_bool exited;
+
 using conker::netplay::Event;
 using conker::netplay::Hash;
 using conker::netplay::Inputs;
@@ -77,6 +81,10 @@ namespace {
     // the game thread leaves the session alone.
     std::recursive_mutex session_mutex;
     std::atomic<bool> stopping = false;
+    // Watches for the program quitting, to say goodbye at once: finish only runs once the runtime has
+    // ended every game thread, and by then the others have long given up on this peer (the game thread
+    // may be waiting in on_read for pads that won't come, as they're waiting for this one's).
+    std::thread quit_watcher;
     // This peer's hashes, and those of the others (the host's for a joiner, every joiner's for the host),
     // until they're compared.
     std::map<uint32_t, uint64_t> own_hashes;
@@ -93,6 +101,21 @@ namespace {
         if (!left && session != nullptr) {
             session->leave(reason);
             left = true;
+        }
+        ended = true;
+    }
+
+    // Leaves the match with a goodbye, and polls the library a moment for it to go out (it's sent as the
+    // library is polled), or the others only hear the match is over when their connection times out.
+    void say_goodbye() {
+        std::scoped_lock lock(session_mutex);
+        if (session != nullptr && !left) {
+            session->leave(Reason::quit);
+            left = true;
+            for (int i = 0; i < 30; i++) {
+                session->poll();
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            }
         }
         ended = true;
     }
@@ -445,9 +468,7 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
 void conker::lockstep::cancel() {
     std::scoped_lock lock(session_mutex);
     if (session != nullptr) {
-        if (!left) {
-            session->leave(Reason::quit);
-        }
+        say_goodbye();
         delete session;
         session = nullptr;
     }
@@ -504,6 +525,18 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, con
     current_read = read;
     session->set_horizon(horizon());
     if (!initial_sent) {
+        if (!quit_watcher.joinable()) {
+            quit_watcher = std::thread([] {
+                while (!stopping && !exited) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                }
+                if (exited) {
+                    std::printf("[netplay] quitting: leaving the match\n");
+                    stopping = true;
+                    say_goodbye();
+                }
+            });
+        }
         for (int r = 0; r < delay; r++) {
             send_own((uint64_t)r, source((uint64_t)r, nullptr));
         }
@@ -589,18 +622,11 @@ void conker::lockstep::finish() {
     // stop first, and the session is only touched under the lock. The session isn't deleted (the game
     // thread may still look at it), and the library is stopped next anyway.
     stopping = true;
-    std::scoped_lock lock(session_mutex);
-    if (session != nullptr && !left) {
-        session->leave(Reason::quit);
-        left = true;
-        // The goodbye is sent as the library is polled: poll a moment for it to go out, or the others
-        // only hear the match is over when their connection times out.
-        for (int i = 0; i < 30; i++) {
-            session->poll();
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
-        }
+    if (quit_watcher.joinable()) {
+        quit_watcher.join();
     }
-    ended = true;
+    say_goodbye();
+    std::scoped_lock lock(session_mutex);
     if (library_started) {
         netplay::shutdown();
         library_started = false;
