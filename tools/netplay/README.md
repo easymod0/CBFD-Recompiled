@@ -180,6 +180,9 @@ that a desync (`--netplay-desync-at <read>`) is caught. About 25 s.
 | `check.sh` | the determinism check: replays a made-up recording headless twice, with `--jitter` and with `--state-test`, and fails unless all four give the same hashes (about 30 s; the CI runs it, `.github/workflows/netplay.yml`) |
 | `lockstep.sh` | the lockstep check: two copies in a match over loopback give the same game as a replay alone, and a desync is caught (about 25 s) |
 | `compare_hashes.py` | the first read two hash logs differ at (it exits 1 if they differ); with dumps, the ranges that differ, by data symbol |
+| `make_match.py` | a recording that plays from boot into a multiplayer match (`--mode`, `--players`, `--variant`, `--pause`), the same every time: for looking at multiplayer (split screen, "my view only") without the menus |
+| `shot.sh` | replays a recording in a window as fast as it goes and saves a screenshot of its end (X11; `SDL_VIDEODRIVER=x11` under Wayland), e.g. `make_match.py heist.pads --mode heist && shot.sh heist.pads heist.png --my-view-only` |
+| `xwin.py` | drives a game window from a script: screenshots, clicks, keys (X11, python-xlib) |
 | `make_inputs.py` | a recording of made-up inputs from a seed, to replay without anyone playing |
 | `scan_clock.py` | every read of the game's clock in its code, and whether it's in a loop (needs your ROM, unpacked with `recomp/unpack_rom.py`) |
 | `dis_around.py` | the instructions around a function's clock reads |
