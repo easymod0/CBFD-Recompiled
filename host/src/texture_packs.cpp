@@ -10,11 +10,18 @@
 // runtime, which saves it as if done in the Mods menu. "Set in the Mods Menu" (the default) leaves them
 // as the Mods menu has them, where several can be on at once, the later ones taking precedence. The
 // choice is applied again when the launcher opens, once the runtime has opened the mods.
+//
+// Texture Pack On/Off (the Controls tab's Hotkeys, F8 by default) switches, while playing, between the
+// texture packs and the game's own textures, to compare them: RT64 hides the replacements (rt64.patch,
+// RT64::setReplacementsHidden) without unloading the packs, so the switch is at once, both ways. It isn't
+// kept: each start shows the packs.
 
 #include <algorithm>
+#include <atomic>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include "json/json.hpp"
@@ -24,6 +31,11 @@
 #include "recompui/renderer.h"
 
 #include "conker.hpp"
+
+namespace RT64 {
+    // rt64.patch: the texture packs hidden, the game's own textures shown.
+    void setReplacementsHidden(bool hidden);
+}
 
 namespace {
     const std::string option_id = "texture_pack";
@@ -116,7 +128,8 @@ void conker::texture_packs::add_options(recomp::config::Config& config) {
         "it's listed here from the next start. "
         "<recomp-color primary>Set in the Mods Menu</recomp-color> leaves the packs as the Mods menu has them, where "
         "several can be on at once. <recomp-color primary>None</recomp-color> turns them all off. Choosing a pack turns "
-        "it on and the others off.",
+        "it on and the others off. While playing, <b>F8</b> switches between the pack and the game's own textures, "
+        "to compare them (Texture Pack On/Off in the Controls tab's Hotkeys, to bind it to another key or a button).",
         options, mods_menu);
     config.add_option_change_callback(option_id,
         [](recomp::config::ConfigValueVariant, recomp::config::ConfigValueVariant, recomp::config::OptionChangeContext context) {
@@ -142,4 +155,40 @@ bool conker::texture_packs::is_pack(const std::string& mod_id) {
     // The packs are listed with the settings, which headless doesn't make.
     static const std::vector<Pack> listed = find_packs(recomp::mods::get_mods_directory());
     return std::any_of(listed.begin(), listed.end(), [&](const Pack& pack) { return pack.id == mod_id; });
+}
+
+namespace {
+    std::atomic<bool> originals_shown = false;
+
+    // General: Texture Pack Notifications, On or Off (add_notification_options).
+    const std::string notifications_option = "texture_pack_notifications";
+    enum class Notifications : uint32_t { On, Off };
+
+    // The line saying the textures were switched, unless Texture Pack Notifications is Off.
+    void notify(const std::string& text) {
+        recomp::config::Config* config = recompui::config::find_option_config(notifications_option);
+        if (config != nullptr && static_cast<Notifications>(std::get<uint32_t>(config->get_option_value(notifications_option))) == Notifications::Off) {
+            return;
+        }
+        conker::notices::show(text, true);
+    }
+}
+
+// The Controls tab's Hotkeys (frontend.cpp's update_hotkeys): Texture Pack On/Off, F8 by default.
+void conker::texture_packs::toggle_originals() {
+    const bool shown = !originals_shown.load();
+    originals_shown = shown;
+    RT64::setReplacementsHidden(shown);
+    notify(shown ? "Texture pack: Disabled" : "Texture pack: Enabled");
+}
+
+void conker::texture_packs::add_notification_options(recomp::config::Config& config) {
+    static const std::vector<recomp::config::ConfigOptionEnumOption> choices = {
+        {Notifications::On, "On", "On"},
+        {Notifications::Off, "Off", "Off"},
+    };
+    config.add_enum_option(notifications_option, "Texture Pack Notifications",
+        "Shows a line in the corner when F8 switches the texture pack on or off while playing. With "
+        "<recomp-color primary>Off</recomp-color> it isn't shown.",
+        choices, Notifications::On);
 }

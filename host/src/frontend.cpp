@@ -43,6 +43,9 @@ void conker_mouse_camera_init();
 namespace {
     std::vector<char> thumbnail;
 
+    // The Controls tab's Hotkeys, each frame (below, with the controller reading it uses).
+    void update_hotkeys();
+
     // Each poll also tells the look mode that the next mouse and gyro movement is in.
     void poll_inputs() {
         recompinput::poll_inputs();
@@ -241,6 +244,7 @@ namespace {
 #if defined(CONKER_NETPLAY)
         conker::netplay_menu::update();
 #endif
+        update_hotkeys();
         conker::reticle::update();
         std::string title;
         {
@@ -483,6 +487,61 @@ namespace {
     // can be bound with the keyboard's controls or, in single player, the controller's.
     bool is_keyboard_or_mouse(const recompinput::InputField& field) {
         return field.input_type == recompinput::InputType::Keyboard || field.input_type == recompinput::InputType::Mouse;
+    }
+
+    // Whether one of the Controls tab's Hotkeys is held: player 1's, by its keyboard and mouse bindings, or by
+    // its controller bindings on the first controller (or the mouse, bound there).
+    bool hotkey_held(recompinput::GameInput input) {
+        std::array<SDL_GameController*, max_ports> controllers{};
+        get_port_controllers(controllers);
+        SDL_GameController* controller = controllers[0];
+        const int cont_profile = recompinput::profiles::get_sp_controller_profile_index();
+        const int kb_profile = recompinput::profiles::get_sp_keyboard_profile_index();
+        for (size_t i = 0; i < recompinput::num_bindings_per_input; i++) {
+            if (kb_profile >= 0) {
+                const recompinput::InputField& field = recompinput::profiles::get_input_binding(kb_profile, input, i);
+                if (is_keyboard_or_mouse(field) && recompinput::get_input_digital(0, field)) {
+                    return true;
+                }
+            }
+            if (cont_profile >= 0) {
+                const recompinput::InputField& field = recompinput::profiles::get_input_binding(cont_profile, input, i);
+                if (field.input_type == recompinput::InputType::Mouse) {
+                    if (recompinput::get_input_digital(0, field)) {
+                        return true;
+                    }
+                }
+                else if (field.input_type != recompinput::InputType::None && controller != nullptr && controller_field_digital(controller, field)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    // The Hotkeys, each frame on the main thread: each acts as it's pressed (not again until it's let go),
+    // while the game runs and no menu is open.
+    void update_hotkeys() {
+        using recompinput::GameInput;
+        struct Hotkey {
+            GameInput input;
+            void (*action)();
+            bool held;
+        };
+        static Hotkey hotkeys[] = {
+            { GameInput::SAVE_STATE, conker::save_states::save, false },
+            { GameInput::LOAD_STATE, conker::save_states::load, false },
+            { GameInput::NEXT_STATE_SLOT, conker::save_states::next_slot, false },
+            { GameInput::TOGGLE_TEXTURE_PACK, conker::texture_packs::toggle_originals, false },
+        };
+        const bool active = ultramodern::is_game_started() && !recompinput::game_input_disabled();
+        for (Hotkey& hotkey : hotkeys) {
+            const bool held = active && hotkey_held(hotkey.input);
+            if (held && !hotkey.held) {
+                hotkey.action();
+            }
+            hotkey.held = held;
+        }
     }
 
     // A binding to the right stick (either axis, either way).

@@ -1,3 +1,36 @@
+diff --git a/recompinput/include/recompinput/input_types.h b/recompinput/include/recompinput/input_types.h
+index f5ed6c0..bbfb829 100644
+--- a/recompinput/include/recompinput/input_types.h
++++ b/recompinput/include/recompinput/input_types.h
+@@ -37,10 +37,19 @@ namespace recompinput {
+         DEFINE_INPUT(TAB_LEFT_MENU, 0, "Tab Left (Menu)") \
+         DEFINE_INPUT(TAB_RIGHT_MENU, 0, "Tab Right (Menu)")
+ 
++    // The game's own actions beyond the N64's (Conker: save states and the texture pack switch), bound in the
++    // Controls tab's Hotkeys section like the rest. The host reads them (recompinput::profiles bindings).
++    #define DEFINE_HOTKEY_INPUTS() \
++        DEFINE_INPUT(SAVE_STATE, 0, "Save State") \
++        DEFINE_INPUT(LOAD_STATE, 0, "Load State") \
++        DEFINE_INPUT(NEXT_STATE_SLOT, 0, "Next Save State Slot") \
++        DEFINE_INPUT(TOGGLE_TEXTURE_PACK, 0, "Texture Pack On/Off")
++
+     #define DEFINE_ALL_INPUTS() \
+         DEFINE_N64_AXIS_INPUTS() \
+         DEFINE_N64_BUTTON_INPUTS() \
+-        DEFINE_RECOMP_UI_INPUTS()
++        DEFINE_RECOMP_UI_INPUTS() \
++        DEFINE_HOTKEY_INPUTS()
+ 
+     #define DEFINE_INPUT(name, value, readable) name,
+     // - Enum containing every recomp input.
+@@ -127,6 +136,7 @@ namespace recompinput {
+ 
+     bool get_game_input_clearable(GameInput input);
+     bool get_game_input_is_menu(GameInput input);
++    bool get_game_input_is_hotkey(GameInput input);
+ 
+     const std::string& get_game_input_enum_name(GameInput input);
+ }
 diff --git a/recompinput/src/input_events.cpp b/recompinput/src/input_events.cpp
 index c76a1dc..e17c26f 100644
 --- a/recompinput/src/input_events.cpp
@@ -24,6 +57,24 @@ index c76a1dc..e17c26f 100644
      default:
          queue_if_enabled(event);
          break;
+diff --git a/recompinput/src/input_mapping.cpp b/recompinput/src/input_mapping.cpp
+index bfcfef4..2f551d7 100644
+--- a/recompinput/src/input_mapping.cpp
++++ b/recompinput/src/input_mapping.cpp
+@@ -31,7 +31,12 @@ namespace recompinput {
+         { GameInput::BACK_MENU,      { InputField::keyboard(SDL_SCANCODE_F15) } },
+         { GameInput::APPLY_MENU,     { InputField::keyboard(SDL_SCANCODE_F) } },
+         { GameInput::TAB_LEFT_MENU,  { InputField::keyboard(SDL_SCANCODE_F16) } },
+-        { GameInput::TAB_RIGHT_MENU, { InputField::keyboard(SDL_SCANCODE_F17) } }
++        { GameInput::TAB_RIGHT_MENU, { InputField::keyboard(SDL_SCANCODE_F17) } },
++
++        { GameInput::SAVE_STATE,          { InputField::keyboard(SDL_SCANCODE_F5) } },
++        { GameInput::LOAD_STATE,          { InputField::keyboard(SDL_SCANCODE_F7) } },
++        { GameInput::NEXT_STATE_SLOT,     { InputField::keyboard(SDL_SCANCODE_F6) } },
++        { GameInput::TOGGLE_TEXTURE_PACK, { InputField::keyboard(SDL_SCANCODE_F8) } }
+     };
+ 
+     default_game_input_device_mapping default_n64_mappings_controller = {
 diff --git a/recompinput/src/input_state.cpp b/recompinput/src/input_state.cpp
 index 03ed871..d6e76c9 100644
 --- a/recompinput/src/input_state.cpp
@@ -77,10 +128,40 @@ index 03ed871..d6e76c9 100644
          return false;
      }
 diff --git a/recompinput/src/input_types.cpp b/recompinput/src/input_types.cpp
-index c6786e6..7db1735 100644
+index c6786e6..833b9a3 100644
 --- a/recompinput/src/input_types.cpp
 +++ b/recompinput/src/input_types.cpp
-@@ -250,6 +250,29 @@ static std::string controller_axis_to_string(int axis) {
+@@ -23,6 +23,10 @@ constexpr std::array<std::string, num_game_inputs> get_default_game_input_descri
+     descriptions[static_cast<size_t>(GameInput::APPLY_MENU)] = "In the recomp interface, if changes are made to a configuration that requires applying your settings, this will apply the current changes.";
+     descriptions[static_cast<size_t>(GameInput::TAB_LEFT_MENU)] = "In the recomp interface, switches the active tab to the one on the left of the current tab.";
+     descriptions[static_cast<size_t>(GameInput::TAB_RIGHT_MENU)] = "In the recomp interface, switches the active tab to the one on the right of the current tab.";
++    descriptions[static_cast<size_t>(GameInput::SAVE_STATE)] = "Saves the game exactly as it is to the current save state slot.";
++    descriptions[static_cast<size_t>(GameInput::LOAD_STATE)] = "Loads the game back from the current save state slot.";
++    descriptions[static_cast<size_t>(GameInput::NEXT_STATE_SLOT)] = "Picks the next of the nine save state slots.";
++    descriptions[static_cast<size_t>(GameInput::TOGGLE_TEXTURE_PACK)] = "Switches between the texture pack and the game's own textures, to compare them.";
+ #undef DEFINE_INPUT
+     return descriptions;
+ }
+@@ -81,6 +85,18 @@ bool get_game_input_is_menu(GameInput input) {
+ #undef DEFINE_INPUT
+ }
+ 
++bool get_game_input_is_hotkey(GameInput input) {
++#define DEFINE_INPUT(name, value, readable) case GameInput::name: return true;
++
++    switch (input) {
++        DEFINE_HOTKEY_INPUTS()
++    default:
++        return false;
++    }
++
++#undef DEFINE_INPUT
++}
++
+ const std::string& get_game_input_enum_name(GameInput input) {
+     return game_input_enum_names.at(static_cast<size_t>(input));
+ }
+@@ -250,6 +266,29 @@ static std::string controller_axis_to_string(int axis) {
      }
  }
  
@@ -110,7 +191,7 @@ index c6786e6..7db1735 100644
  std::string recompinput::InputField::to_string() const {
      switch (input_type) {
      case InputType::None:
-@@ -260,6 +283,8 @@ std::string recompinput::InputField::to_string() const {
+@@ -260,6 +299,8 @@ std::string recompinput::InputField::to_string() const {
          return controller_axis_to_string(input_id);
      case InputType::Keyboard:
          return keyboard_input_to_string((SDL_Scancode)input_id);
@@ -298,6 +379,34 @@ index 86428c9..39f7d0e 100644
      slider->add_value_changed_callback([this](double v){
          this->set_option_value(this->option_id, v);
      });
+diff --git a/recompui/src/config/ui_config_page_controls.cpp b/recompui/src/config/ui_config_page_controls.cpp
+index f379a6f..d18745d 100644
+--- a/recompui/src/config/ui_config_page_controls.cpp
++++ b/recompui/src/config/ui_config_page_controls.cpp
+@@ -190,6 +190,7 @@ void ConfigPageControls::create_game_input_contexts() {
+     game_input_sections.n64.contexts.clear();
+     game_input_sections.menu.contexts.clear();
+     game_input_sections.other.clear();
++    GameInputSection hotkeys("Hotkeys");
+ 
+     for (int i = 0; i < static_cast<int>(recompinput::GameInput::COUNT); i++) {
+         recompinput::GameInput input = static_cast<recompinput::GameInput>(i);
+@@ -206,10 +207,15 @@ void ConfigPageControls::create_game_input_contexts() {
+ 
+         if (recompinput::get_game_input_is_menu(input)) {
+             game_input_sections.menu.contexts.push_back(input_ctx);
++        } else if (recompinput::get_game_input_is_hotkey(input)) {
++            hotkeys.contexts.push_back(input_ctx);
+         } else {
+             game_input_sections.n64.contexts.push_back(input_ctx);
+         }
+     }
++    if (!hotkeys.contexts.empty()) {
++        game_input_sections.other.push_back(std::move(hotkeys));
++    }
+ 
+     // TODO: fetch other (e.g. mod) inputs to game_input_sections.other
+ }
 diff --git a/recompui/src/config/ui_config_tab_general.cpp b/recompui/src/config/ui_config_tab_general.cpp
 index 296ce0e..193466d 100644
 --- a/recompui/src/config/ui_config_tab_general.cpp
