@@ -22,12 +22,19 @@ Its options (see `host/src/netplay/harness.cpp`):
 | `--ignore <addr>:<size>` | leaves a known difference out of the hash (hex, e.g. `800BE6F0:8`; can be repeated) |
 | `--stop-after <n>` | quits after read `n` |
 | `--ports <n>` | the game sees controllers on ports 1 to `n`, without paks (a replay uses its recording's) |
+| `--real-clock` | keeps the game's clock on the time instead of the virtual clock, to compare |
 
 While any of these are used, the game starts from an empty save of its own (`saves/harness/`, emptied
 each run; your own save isn't touched) and sees fixed controllers. Reads are counted from the first,
 so read `n` of one run is read `n` of another, and the pads are recorded as the N64 reads them (after
 the sticks are converted), which is what netplay will send. The runtime's own host pointers in game
 memory (each thread's context in its `OSThread`) are always left out of the hash.
+
+The game's clock (`osGetCount`, `osGetTime` and the timers' deadlines) is a virtual one while the
+harness is used: each controller read is a frame, 1/30 of a second on the clock, and each read of the
+clock moves it on a little (about a microsecond), so the same inputs give the same clock. The timers
+still run out on time, in real time. `--real-clock` turns it off; then two replays differ at the
+deadlines of two timers the game sets from the clock (`--ignore 8003A598:8 --ignore 800BE6F0:8`).
 
 Run one at a time from the same build: runs share the data folder (the stored ROM, which `--rom`
 writes, and `saves/harness/`), so two at once break each other.

@@ -1021,7 +1021,7 @@ index 0000000..0c9078a
 +
 +#endif
 diff --git a/ultramodern/include/ultramodern/ultramodern.hpp b/ultramodern/include/ultramodern/ultramodern.hpp
-index 46aea61..17be6dd 100644
+index 46aea61..e7ecc34 100644
 --- a/ultramodern/include/ultramodern/ultramodern.hpp
 +++ b/ultramodern/include/ultramodern/ultramodern.hpp
 @@ -25,6 +25,19 @@ struct UltraThreadContext {
@@ -1054,6 +1054,19 @@ index 46aea61..17be6dd 100644
  void set_entrypoint_thread();
  bool is_entrypoint_thread();
  bool is_game_thread();
+@@ -109,6 +125,12 @@ std::chrono::high_resolution_clock::duration time_since_start();
+ void measure_input_latency();
+ void sleep_milliseconds(uint32_t millis);
+ void sleep_until(const std::chrono::high_resolution_clock::time_point& time_point);
++// The virtual clock, for replays and netplay: from now on the game's clock (osGetCount, osGetTime and
++// the timers' deadlines) is `ticks_per_frame` ticks a frame, plus `ticks_per_read` each time the game
++// reads it, rather than the time, so the same inputs give the same clock. The host says when each frame
++// starts (`frame` counts up from 1). Call it before the game starts; it can't be turned off.
++void set_virtual_clock(uint64_t ticks_per_frame, uint64_t ticks_per_read);
++void virtual_clock_frame(uint64_t frame);
+ 
+ // Graphics
+ uint32_t get_target_framerate(uint32_t original);
 diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
 index 17d7a47..d4fb0de 100644
 --- a/ultramodern/src/events.cpp
@@ -1691,10 +1704,10 @@ index 6e3ed18..221ad3d 100644
  }
  
 diff --git a/ultramodern/src/timer.cpp b/ultramodern/src/timer.cpp
-index ee26c45..2cde81b 100644
+index ee26c45..17c4b09 100644
 --- a/ultramodern/src/timer.cpp
 +++ b/ultramodern/src/timer.cpp
-@@ -1,10 +1,15 @@
+@@ -1,10 +1,16 @@
  #include <thread>
  #include <variant>
 -#include <set>
@@ -1702,6 +1715,7 @@ index ee26c45..2cde81b 100644
 +#include <atomic>
 +#include <condition_variable>
 +#include <mutex>
++#include <unordered_map>
 +#include <vector>
  #include "blockingconcurrentqueue.h"
  
@@ -1711,7 +1725,7 @@ index ee26c45..2cde81b 100644
  
  #ifdef _WIN32
  #define WIN32_LEAN_AND_MEAN
-@@ -29,21 +34,20 @@ struct OSTimer {
+@@ -29,21 +35,22 @@ struct OSTimer {
      OSMesg msg;
  };
  
@@ -1734,6 +1748,8 @@ index ee26c45..2cde81b 100644
 +    std::mutex mutex;
 +    std::condition_variable changed;
 +    std::vector<PTR(OSTimer)> active;
++    // With the virtual clock, when each running timer runs out in real time (see below).
++    std::unordered_map<PTR(OSTimer), std::chrono::high_resolution_clock::time_point> real_deadlines;
  } timer_context;
  
 +// The game's clock is the time since the program started, less this offset, in ticks. Loading a save
@@ -1743,7 +1759,7 @@ index ee26c45..2cde81b 100644
  uint64_t duration_to_ticks(std::chrono::high_resolution_clock::duration duration) {
      uint64_t delta_micros = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
      // More accurate than using a floating point timer, will only overflow after running for 12.47 years
-@@ -59,83 +63,52 @@ std::chrono::microseconds ticks_to_duration(uint64_t ticks) {
+@@ -59,84 +66,124 @@ std::chrono::microseconds ticks_to_duration(uint64_t ticks) {
  }
  
  std::chrono::high_resolution_clock::time_point ticks_to_timepoint(uint64_t ticks) {
@@ -1751,25 +1767,70 @@ index ee26c45..2cde81b 100644
 +    return start_time + ticks_to_duration(ticks + clock_offset.load());
  }
  
++// The virtual clock (ultramodern::set_virtual_clock): the game's clock comes from its progress, not
++// the time, so the same inputs give the same clock. Each frame (ultramodern::virtual_clock_frame)
++// starts at its base, or where the clock already is if that's later, and each read of the clock moves
++// it on a step, so reads still differ and loops that wait on the clock still end. Timers keep their
++// deadlines on this clock in game memory, but run out after their countdown in real time.
++static std::atomic<bool> virtual_clock = false;
++static uint64_t virtual_ticks_per_frame = 0;
++static uint64_t virtual_ticks_per_read = 0;
++// The clock's last value, the last frame, and what each frame's base is offset by (loading a save
++// state sets the clock going on from the state's time).
++static std::atomic<uint64_t> virtual_now = 0;
++static std::atomic<uint64_t> virtual_frame = 0;
++static std::atomic<int64_t> virtual_base_offset = 0;
++
++uint64_t real_time_now() {
++    return duration_to_ticks(std::chrono::high_resolution_clock::now() - start_time) - clock_offset.load();
++}
++
++// The game's clock, for the game's own reads: with the virtual clock, each moves it on.
  uint64_t time_now() {
 -    return duration_to_ticks(std::chrono::high_resolution_clock::now() - start_time);
-+    return duration_to_ticks(std::chrono::high_resolution_clock::now() - start_time) - clock_offset.load();
++    if (virtual_clock.load()) {
++        return virtual_now.fetch_add(virtual_ticks_per_read) + virtual_ticks_per_read;
++    }
++    return real_time_now();
  }
  
- void timer_thread(RDRAM_ARG1) {
-     ultramodern::set_native_thread_name("Timer Thread");
-     ultramodern::set_native_thread_priority(ultramodern::ThreadPriority::VeryHigh);
+-void timer_thread(RDRAM_ARG1) {
+-    ultramodern::set_native_thread_name("Timer Thread");
+-    ultramodern::set_native_thread_priority(ultramodern::ThreadPriority::VeryHigh);
++// The game's clock without moving it, for the runtime's own reads.
++uint64_t peek_time_now() {
++    if (virtual_clock.load()) {
++        return virtual_now.load();
++    }
++    return real_time_now();
++}
  
 -    // Lambda comparator function to keep the set ordered
 -    auto timer_sort = [PASS_RDRAM1](PTR(OSTimer) a_, PTR(OSTimer) b_) {
 -        OSTimer* a = TO_PTR(OSTimer, a_);
 -        OSTimer* b = TO_PTR(OSTimer, b_);
--
++void ultramodern::set_virtual_clock(uint64_t ticks_per_frame, uint64_t ticks_per_read) {
++    virtual_ticks_per_frame = ticks_per_frame;
++    virtual_ticks_per_read = ticks_per_read;
++    // From 0, not the time since the program started, which differs from run to run.
++    virtual_now = 0;
++    virtual_frame = 0;
++    virtual_base_offset = 0;
++    virtual_clock = true;
++}
+ 
 -        // Order by timestamp if the timers have different timestamps
 -        if (a->timestamp != b->timestamp) {
 -            return a->timestamp < b->timestamp;
 -        }
--
++void ultramodern::virtual_clock_frame(uint64_t frame) {
++    virtual_frame = frame;
++    const uint64_t base = frame * virtual_ticks_per_frame + virtual_base_offset.load();
++    uint64_t now = virtual_now.load();
++    while (now < base && !virtual_now.compare_exchange_weak(now, base)) {
++    }
++}
+ 
 -        // If they have the exact same timestamp then order by address instead
 -        return a < b;
 -    };
@@ -1786,7 +1847,23 @@ index ee26c45..2cde81b 100644
 -            active_timers.erase(remove_action->timer);
 -        }
 -    };
--
++// With the virtual clock, when a timer that runs out at `timestamp` (on the game's clock) runs out in
++// real time, if it isn't known yet (it was set before a save state was loaded).
++static std::chrono::high_resolution_clock::time_point real_deadline(PTR(OSTimer) t_, OSTime timestamp) {
++    auto found = timer_context.real_deadlines.find(t_);
++    if (found != timer_context.real_deadlines.end()) {
++        return found->second;
++    }
++    const uint64_t now = peek_time_now();
++    const auto deadline = std::chrono::high_resolution_clock::now() + ticks_to_duration(timestamp > now ? timestamp - now : 0);
++    timer_context.real_deadlines[t_] = deadline;
++    return deadline;
++}
++
++void timer_thread(RDRAM_ARG1) {
++    ultramodern::set_native_thread_name("Timer Thread");
++    ultramodern::set_native_thread_priority(ultramodern::ThreadPriority::VeryHigh);
+ 
 +    std::unique_lock lock{ timer_context.mutex };
      while (true) {
 -        // Empty the action queue
@@ -1822,13 +1899,8 @@ index ee26c45..2cde81b 100644
 -        active_timers.erase(cur_timer_);
 -
 -        // Determine how long to wait to reach the timer's timestamp
-+        // Wait to reach the timer's timestamp, or for the timers to change (then look again).
-         auto wait_duration = ticks_to_timepoint(cur_timer->timestamp) - std::chrono::high_resolution_clock::now();
-+        if (wait_duration.count() > 0) {
-+            timer_context.changed.wait_for(lock, wait_duration);
-+            continue;
-+        }
- 
+-        auto wait_duration = ticks_to_timepoint(cur_timer->timestamp) - std::chrono::high_resolution_clock::now();
+-
 -        // Wait for either the duration to complete or a new action to come through
 -        if (wait_duration.count() >= 0 && timer_context.action_queue.wait_dequeue_timed(cur_action, wait_duration)) {
 -            // Timer was interrupted by a new action 
@@ -1836,25 +1908,42 @@ index ee26c45..2cde81b 100644
 -            active_timers.insert(cur_timer_);
 -            // Process the new action
 -            process_timer_action(cur_action);
-+        // The timer ran out, so send the timer's message to its message queue
-+        ultramodern::enqueue_external_message_src(cur_timer->mq, cur_timer->msg, false, ultramodern::EventMessageSource::Timer);
-+        // If the timer has a specified interval then reload it with that value
-+        if (cur_timer->interval != 0) {
-+            cur_timer->timestamp = cur_timer->interval + time_now();
++        // Wait to reach the timer's timestamp, or for the timers to change (then look again).
++        const auto deadline = virtual_clock.load() ? real_deadline(cur_timer_, cur_timer->timestamp) : ticks_to_timepoint(cur_timer->timestamp);
++        auto wait_duration = deadline - std::chrono::high_resolution_clock::now();
++        if (wait_duration.count() > 0) {
++            timer_context.changed.wait_for(lock, wait_duration);
++            continue;
          }
-         else {
+-        else {
 -            // Waiting for the timer completed, so send the timer's message to its message queue
 -            ultramodern::enqueue_external_message_src(cur_timer->mq, cur_timer->msg, false, ultramodern::EventMessageSource::Timer);
 -            // If the timer has a specified interval then reload it with that value
 -            if (cur_timer->interval != 0) {
--                cur_timer->timestamp = cur_timer->interval + time_now();
++
++        // The timer ran out, so send the timer's message to its message queue
++        ultramodern::enqueue_external_message_src(cur_timer->mq, cur_timer->msg, false, ultramodern::EventMessageSource::Timer);
++        // If the timer has a specified interval then reload it with that value
++        if (cur_timer->interval != 0) {
++            if (virtual_clock.load()) {
++                // The game's clock isn't read here, on the timer thread: that would move it at a
++                // different point each run.
++                cur_timer->timestamp += cur_timer->interval;
++                timer_context.real_deadlines[cur_timer_] = std::chrono::high_resolution_clock::now() + ticks_to_duration(cur_timer->interval);
++            }
++            else {
+                 cur_timer->timestamp = cur_timer->interval + time_now();
 -                active_timers.insert(cur_timer_);
--            }
-+            timer_context.active.erase(next);
+             }
          }
++        else {
++            timer_context.active.erase(next);
++            timer_context.real_deadlines.erase(cur_timer_);
++        }
      }
  }
-@@ -180,6 +153,7 @@ extern "C" void osSetTime(OSTime t) {
+ 
+@@ -180,30 +227,74 @@ extern "C" void osSetTime(OSTime t) {
  
  extern "C" int osSetTimer(RDRAM_ARG PTR(OSTimer) t_, OSTime countdown, OSTime interval, PTR(OSMesgQueue) mq, OSMesg msg) {
      OSTimer* t = TO_PTR(OSTimer, t_);
@@ -1862,7 +1951,17 @@ index ee26c45..2cde81b 100644
  
      // Determine the time when this timer will trigger off
      if (countdown == 0) {
-@@ -192,18 +166,53 @@ extern "C" int osSetTimer(RDRAM_ARG PTR(OSTimer) t_, OSTime countdown, OSTime in
+         // Set the timestamp based on the interval
+-        t->timestamp = interval + time_now();
+-    } else {
+-        t->timestamp = countdown + time_now();
++        countdown = interval;
++    }
++    t->timestamp = countdown + time_now();
++    if (virtual_clock.load()) {
++        timer_context.real_deadlines[t_] = std::chrono::high_resolution_clock::now() + ticks_to_duration(countdown);
+     }
+     t->interval = interval;
      t->mq = mq;
      t->msg = msg;
  
@@ -1881,21 +1980,22 @@ index ee26c45..2cde81b 100644
 +    const auto found = std::find(timer_context.active.begin(), timer_context.active.end(), t_);
 +    if (found != timer_context.active.end()) {
 +        timer_context.active.erase(found);
++        timer_context.real_deadlines.erase(t_);
 +        timer_context.changed.notify_all();
 +    }
-+
-+    // TODO libultra returns -1 for a timer that isn't running; 0 as before, so games see no change.
-+    return 0;
-+}
  
 -    // TODO don't blindly return 0 here; requires some response from the timer thread to know what the returned value was
++    // TODO libultra returns -1 for a timer that isn't running; 0 as before, so games see no change.
+     return 0;
+ }
+ 
 +// --- Save states (save_states.hpp) ---
 +
 +int32_t ultramodern::save_states::timer_actions_pending() {
 +    // osSetTimer and osStopTimer change the timers themselves (under the lock), so nothing waits.
-     return 0;
- }
- 
++    return 0;
++}
++
 +void ultramodern::save_states::lock_timers() {
 +    timer_context.mutex.lock();
 +}
@@ -1906,12 +2006,17 @@ index ee26c45..2cde81b 100644
 +}
 +
 +ultramodern::save_states::TimerState ultramodern::save_states::get_timer_state() {
-+    return TimerState{ time_now(), ostime_offset, timer_context.active };
++    return TimerState{ peek_time_now(), ostime_offset, timer_context.active };
 +}
 +
 +void ultramodern::save_states::set_timer_state(const TimerState& state) {
 +    // The clock goes on from the state's time: the offset that makes time_now() the state's now.
 +    clock_offset = (int64_t)duration_to_ticks(std::chrono::high_resolution_clock::now() - start_time) - (int64_t)state.now;
++    if (virtual_clock.load()) {
++        virtual_now = state.now;
++        virtual_base_offset = (int64_t)state.now - (int64_t)(virtual_frame.load() * virtual_ticks_per_frame);
++    }
++    timer_context.real_deadlines.clear();
 +    ostime_offset = state.ostime_offset;
 +    timer_context.active = state.active;
 +}
