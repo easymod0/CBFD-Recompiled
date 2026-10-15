@@ -1845,7 +1845,7 @@ index 61bb3b1..782ed13 100644
          void setVertexSegmentV1(bool isEnabled, uint32_t vertexElement, uint32_t vertexAddress, uint32_t baseSegmentAddress);
          template<uint32_t floatCount, uint32_t vertexSize>
 diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
-index 2970e71..5358814 100644
+index 2970e71..3a8d39e 100644
 --- a/src/hle/rt64_state.cpp
 +++ b/src/hle/rt64_state.cpp
 @@ -4,6 +4,8 @@
@@ -1936,7 +1936,17 @@ index 2970e71..5358814 100644
              if (!differentFbs.empty()) {
                  RenderWorkerExecution execution(ext.framebufferGraphicsWorker);
                  framebufferManager.uploadRAM(ext.framebufferGraphicsWorker, differentFbs.data(), differentFbs.size(), workload.fbChangePool, RDRAM, true, drawFbOperations, drawFbDiscards, ext.shaderLibrary);
-@@ -1611,6 +1657,9 @@ namespace RT64 {
+@@ -818,7 +864,8 @@ namespace RT64 {
+ 
+         // Validate all tile copies to be used during the rendering.
+         const bool extendedRenderToRAMSet = (extended.renderToRAM < UINT8_MAX);
+-        const bool renderToRDRAM = extendedRenderToRAMSet ? (extended.renderToRAM != 0) : ext.emulatorConfig->framebuffer.renderToRAM;
++        // Conker: not while the game's host has it off (setRenderToRAMOff).
++        const bool renderToRDRAM = !renderToRAMOff() && (extendedRenderToRAMSet ? (extended.renderToRAM != 0) : ext.emulatorConfig->framebuffer.renderToRAM);
+         const bool warningsEnabled = ext.userConfig->developerMode;
+         const bool linearFiltering = !ext.userConfig->threePointFiltering;
+         const size_t callTileCount = workload.drawData.callTiles.size();
+@@ -1611,6 +1658,9 @@ namespace RT64 {
          }
  #   endif
  
@@ -1946,7 +1956,7 @@ index 2970e71..5358814 100644
          // Store the presentation rate in the workload.
          if (extended.refreshRate != UINT16_MAX) {
              workload.viOriginalRate = extended.refreshRate;
-@@ -2727,6 +2776,13 @@ namespace RT64 {
+@@ -2727,6 +2777,13 @@ namespace RT64 {
      void State::setDitherNoiseStrength(float noiseStrength) {
          extended.ditherNoiseStrength = noiseStrength;
      }
@@ -1973,10 +1983,10 @@ index 7a8c13b..373815a 100644
          void endSpriteCommand();
          uint8_t *fromRDRAM(uint32_t rdramAddress) const;
 diff --git a/src/hle/rt64_workload.cpp b/src/hle/rt64_workload.cpp
-index b4c85f5..61c515c 100644
+index b4c85f5..a876a1c 100644
 --- a/src/hle/rt64_workload.cpp
 +++ b/src/hle/rt64_workload.cpp
-@@ -4,7 +4,23 @@
+@@ -4,7 +4,33 @@
  
  #include "rt64_workload.h"
  
@@ -1997,10 +2007,20 @@ index b4c85f5..61c515c 100644
 +        return interpolationPausedFlag;
 +    }
 +
++    static std::atomic<bool> renderToRAMOffFlag{ false };
++
++    void setRenderToRAMOff(bool off) {
++        renderToRAMOffFlag = off;
++    }
++
++    bool renderToRAMOff() {
++        return renderToRAMOffFlag;
++    }
++
      // Common functions.
  
      static uint64_t roundUp(uint64_t value, uint64_t powerOf2Alignment) {
-@@ -22,6 +38,8 @@ namespace RT64 {
+@@ -22,6 +48,8 @@ namespace RT64 {
          workloadId = 0;
          extended.testZIndexCount = 0;
          extended.ditherNoiseStrength = 1.0f;
@@ -2009,7 +2029,7 @@ index b4c85f5..61c515c 100644
  
          commandWarnings.clear();
          spriteCommands.clear();
-@@ -315,6 +333,55 @@ namespace RT64 {
+@@ -315,6 +343,55 @@ namespace RT64 {
          return addedPair;
      }
  
@@ -2066,10 +2086,10 @@ index b4c85f5..61c515c 100644
          if (fbPairCount > 0) {
              return fbPairCount - 1;
 diff --git a/src/hle/rt64_workload.h b/src/hle/rt64_workload.h
-index 8ea27d5..5e7cbdc 100644
+index 8ea27d5..e47ce37 100644
 --- a/src/hle/rt64_workload.h
 +++ b/src/hle/rt64_workload.h
-@@ -23,6 +23,13 @@
+@@ -23,6 +23,19 @@
  #include "rt64_transform_group.h"
  
  namespace RT64 {
@@ -2080,10 +2100,16 @@ index 8ea27d5..5e7cbdc 100644
 +    void setInterpolationPaused(bool paused);
 +    bool interpolationPaused();
 +
++    // Conker: renders nothing back into the game's memory (its color and depth images), whatever the emulator's
++    // Render to RAM, while the game's host asks (netplay's deterministic mode): those writes come from the
++    // renderer's thread whenever it gets to a display list, and a headless run, with no renderer, has none.
++    void setRenderToRAMOff(bool off);
++    bool renderToRAMOff();
++
      struct DrawData {
          std::vector<float> posFloats;
          std::vector<float> velFloats;
-@@ -234,11 +241,16 @@ namespace RT64 {
+@@ -234,11 +247,16 @@ namespace RT64 {
          uint64_t workloadId = 0;
          uint64_t presentId = 0;
          bool paused = false;
@@ -2100,7 +2126,7 @@ index 8ea27d5..5e7cbdc 100644
          } extended;
  
          void reset();
-@@ -253,5 +265,16 @@ namespace RT64 {
+@@ -253,5 +271,16 @@ namespace RT64 {
          void begin(uint64_t submissionFrame);
          bool addFramebufferPair(uint32_t colorAddress, uint8_t colorFmt, uint8_t colorSiz, uint16_t colorWidth, uint32_t depthAddress);
          int currentFramebufferPairIndex() const;

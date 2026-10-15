@@ -59,6 +59,13 @@ same headless or on another machine:
   lose a little at its sides).
 - **Save states** (F5, F7) are off, and **mods** are refused but for texture packs: turn them off in
   the Mods menu.
+- **The renderer** writes nothing into game memory (H5). RT64's Render to RAM copies each frame's
+  colour and depth images back into the game's memory, as the N64's RDP did, from the graphics thread
+  whenever it gets to the display list. Headless, with no renderer, nothing is written. So a window
+  run differed from a headless one from read 2 (the depth image at `0x800E9D80`), and the copies raced
+  the game. RT64 still draws everything on the GPU; only the copy back is off
+  (`RT64::setRenderToRAMOff`, `rt64.patch`), so what the game's own code reads back from those images
+  is whatever was there before (as headless).
 
 What only changes the picture or the sound outside game memory (the renderer's settings, Overscan
 Borders, Show FPS, the reticle, texture packs) and what only changes the pads (the controls) is left to

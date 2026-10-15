@@ -12,6 +12,8 @@
 //   Widescreen: the culls and sprites are widened for 16:9, whatever the window's size and the aspect
 //     ratio setting (widescreen.cpp). A wider window can lose a little at its sides.
 //   Save states (F5, F7): off. Mods: refused, but for texture packs (check_mods).
+//   The renderer: RT64 renders nothing back into game memory (its Render to RAM, H5), as headless has no
+//     renderer to: see the H5 notes in tools/netplay/README.md for what the game then reads instead.
 //
 // Left to the player: what only changes the picture or the sound outside the game's memory (the
 // renderer's settings, Overscan Borders, Show FPS, the reticle, texture packs), and what only changes
@@ -31,6 +33,13 @@
 #define XXH_INLINE_ALL
 #include "xxHash/xxhash.h"
 
+#if defined(CONKER_RT64)
+namespace RT64 {
+    // rt64.patch: renders nothing back into game memory while off.
+    void setRenderToRAMOff(bool off);
+}
+#endif
+
 namespace {
     bool on = false;
 
@@ -39,7 +48,8 @@ namespace {
         "mouse off; gyro off; mouse camera off; stick free camera off; swap sticks off\n"
         "camera tab defaults; conker detail always highest; cutscene aspect expand; volumes 100\n"
         "widescreen culls 16:9\n"
-        "save states off; mods off but texture packs\n";
+        "save states off; mods off but texture packs\n"
+        "renderer writes nothing to game memory\n";
 }
 
 bool conker::netplay_profile::active() {
@@ -48,6 +58,9 @@ bool conker::netplay_profile::active() {
 
 void conker::netplay_profile::set_active(bool active) {
     on = active;
+#if defined(CONKER_RT64)
+    RT64::setRenderToRAMOff(active);
+#endif
 }
 
 uint64_t conker::netplay_profile::hash() {
