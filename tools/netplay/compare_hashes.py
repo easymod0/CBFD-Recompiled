@@ -109,5 +109,8 @@ def main():
         if len(ranges) > args.max_ranges:
             print(f"  ... and {len(ranges) - args.max_ranges} more (--max-ranges)")
 
+    # As cmp does: 1 if the runs differ (or one is longer), for scripts (check.sh).
+    return 0 if first is None and len(a) == len(b) else 1
 
-main()
+
+sys.exit(main())

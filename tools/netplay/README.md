@@ -93,6 +93,15 @@ A recording (version 2) holds the ROM's XXH3-64 and the profile's hash: a replay
 another profile is refused before the game starts. `make_inputs.py` writes 0 for both, which isn't
 checked; version 1 recordings (before the profile) are replayed unchecked.
 
+### The determinism check
+
+After a change, run `tools/netplay/check.sh` (with the game built with `CONKER_NETPLAY=ON`). It makes a
+recording of 2,700 made-up reads (`make_inputs.py --seed 1`), replays it headless four ways (twice, with
+random sleeps in the host, and through a save state taken and loaded on the way) and compares each
+hash log with the first. A run is judged by what it prints, not its exit code, as quitting can hang
+or crash on Linux (upstream issue 127). The CI runs it on every push (`.github/workflows/netplay.yml`)
+where the ROM secrets are set, as for the other builds.
+
 A typical comparison, of two replays of the same recording:
 
     host/build/ConkerRecomp --headless --replay run.pads --hash-log a.log
@@ -108,7 +117,8 @@ and, at the read where they first differ, the memory itself:
 
 | Script | |
 |---|---|
-| `compare_hashes.py` | the first read two hash logs differ at; with dumps, the ranges that differ, by data symbol |
+| `check.sh` | the determinism check: replays a made-up recording headless twice, with `--jitter` and with `--state-test`, and fails unless all four give the same hashes (about 30 s; the CI runs it, `.github/workflows/netplay.yml`) |
+| `compare_hashes.py` | the first read two hash logs differ at (it exits 1 if they differ); with dumps, the ranges that differ, by data symbol |
 | `make_inputs.py` | a recording of made-up inputs from a seed, to replay without anyone playing |
 | `scan_clock.py` | every read of the game's clock in its code, and whether it's in a loop (needs your ROM, unpacked with `recomp/unpack_rom.py`) |
 | `dis_around.py` | the instructions around a function's clock reads |

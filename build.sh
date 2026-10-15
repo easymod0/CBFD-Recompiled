@@ -287,9 +287,11 @@ else
     HOST_CC=clang
     HOST_CXX=clang++
 fi
+# CONKER_CMAKE_ARGS: more options for that first configure, e.g. -DCONKER_NETPLAY=ON
+# (the CI's determinism check, netplay.yml). Later runs keep what host/build was configured with.
 if [ ! -f host/build/build.ninja ]; then
     cmake -S host -B host/build -G Ninja -DCMAKE_C_COMPILER="$HOST_CC" -DCMAKE_CXX_COMPILER="$HOST_CXX" \
-        -DCMAKE_BUILD_TYPE=RelWithDebInfo
+        -DCMAKE_BUILD_TYPE=RelWithDebInfo ${CONKER_CMAKE_ARGS:-}
 fi
 cmake --build host/build
 
