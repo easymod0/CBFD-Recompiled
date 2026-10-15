@@ -90,10 +90,10 @@ index f79adbf..e40a61d 100644
          int32_t uly;
 diff --git a/src/common/rt64_conker_view_focus.h b/src/common/rt64_conker_view_focus.h
 new file mode 100644
-index 0000000..e551ac7
+index 0000000..c5cdc4c
 --- /dev/null
 +++ b/src/common/rt64_conker_view_focus.h
-@@ -0,0 +1,97 @@
+@@ -0,0 +1,110 @@
 +//
 +// RT64
 +//
@@ -109,6 +109,7 @@ index 0000000..e551ac7
 +
 +#pragma once
 +
++#include <algorithm>
 +#include <cmath>
 +
 +#include "common/rt64_common.h"
@@ -141,46 +142,58 @@ index 0000000..e551ac7
 +        return ConkerViewPart::Other;
 +    }
 +
-+    // A rectangle of the frame's 2D (quarter pixels), moved with the focused view: false if it isn't drawn.
-+    // - Not touching the view: another's, left out.
++    // A rectangle of the frame's 2D (quarter pixels), moved with the focused view: false if it isn't drawn. Only moved,
++    // never scaled: the game draws a split screen's 2D at full size.
++    // - At the line between the top and bottom views (within 3 pixels of it): shared by the views, moved down to the
++    //   bottom of the frame, all of it by as much so it keeps together: the match timer in the middle of the frame,
++    //   War's and Beach's team scores beside it, Heist's row of every player's $$$.
++    // - Its middle outside the view: another's, left out (a piece on the line between views belongs to the one
++    //   its middle is in, as Heist's $$$ rows).
 +    // - Covering most of the view in fill mode (its clears, color and depth): the whole frame.
-+    // - Inside the view: moved as far as the view's nearest edges move (its left, middle or right third across, and
-+    //   top, middle or bottom third down), so what's drawn in pieces (text, numbers) keeps together and its size.
-+    // - Across the view's edge: shared by the views (Conker's match timer, on the line between them), put at the
-+    //   bottom of the frame.
++    // - Otherwise the view's: moved as far as the view's nearest edges move, across and down. Its middle in the
++    //   first 30% of the view's width goes with the left edge, past 70% with the right, otherwise with the middle
++    //   (wide, so centered text such as "0 (1st)" moves whole); the same down.
 +    inline bool conkerMoveRect(const ConkerViewFocus &f, bool fillMode, FixedRect &rect) {
 +        const float left = rect.ulx / 4.0f, top = rect.uly / 4.0f, right = rect.lrx / 4.0f, bottom = rect.lry / 4.0f;
 +        if ((right - left >= 0.9f * f.frameWidth) && (bottom - top >= 0.9f * f.frameHeight)) {
 +            return true;
 +        }
-+        if ((right <= f.left) || (left >= f.right) || (bottom <= f.top) || (top >= f.bottom)) {
-+            return false;
-+        }
 +        const float viewWidth = f.right - f.left;
 +        const float viewHeight = f.bottom - f.top;
-+        if (fillMode && (right - left >= 0.8f * viewWidth) && (bottom - top >= 0.8f * viewHeight)) {
++        const float splitLine = f.frameHeight / 2.0f;
++        const bool split = viewHeight < 0.75f * f.frameHeight;
++        float moveX = 0.0f, moveY = 0.0f;
++        const float middleX = (left + right) / 2.0f;
++        const float middleY = (top + bottom) / 2.0f;
++        const float nearLine = 3.0f;
++        if (split && (top < splitLine + nearLine) && (bottom > splitLine - nearLine)) {
++            const float margin = 6.0f;
++            const float sharedHalfHeight = 6.0f;
++            moveY = (f.frameHeight - margin) - (splitLine + sharedHalfHeight);
++        }
++        else if ((middleX < f.left - 1.0f) || (middleX > f.right + 1.0f) || (middleY < f.top - 1.0f) || (middleY > f.bottom + 1.0f)) {
++            return false;
++        }
++        else if (fillMode && (right - left >= 0.8f * viewWidth) && (bottom - top >= 0.8f * viewHeight)) {
 +            rect.ulx = 0;
 +            rect.uly = 0;
 +            rect.lrx = int32_t(f.frameWidth * 4.0f);
 +            rect.lry = int32_t(f.frameHeight * 4.0f);
 +            return true;
 +        }
-+        float moveX = 0.0f, moveY = 0.0f;
-+        const float slack = 1.0f;
-+        const bool inside = (left >= f.left - slack) && (right <= f.right + slack) && (top >= f.top - slack) && (bottom <= f.bottom + slack);
-+        if (inside) {
++        else {
 +            auto edgeMove = [](float middle, float viewStart, float viewEnd, float frameSize) {
 +                const float share = (middle - viewStart) / (viewEnd - viewStart);
-+                if (share < 1.0f / 3.0f) return -viewStart;
-+                if (share > 2.0f / 3.0f) return frameSize - viewEnd;
++                if (share < 0.3f) return -viewStart;
++                if (share > 0.7f) return frameSize - viewEnd;
 +                return frameSize / 2.0f - (viewStart + viewEnd) / 2.0f;
 +            };
 +            moveX = edgeMove((left + right) / 2.0f, f.left, f.right, f.frameWidth);
 +            moveY = edgeMove((top + bottom) / 2.0f, f.top, f.bottom, f.frameHeight);
-+        }
-+        else {
-+            const float margin = 6.0f;
-+            moveY = (f.frameHeight - margin) - bottom;
++            // Kept inside the frame (a piece hanging over the view's edge would go past the frame's).
++            const float inset = 2.0f;
++            moveX = std::clamp(moveX, inset - left, (f.frameWidth - inset) - right);
++            moveY = std::clamp(moveY, inset - top, (f.frameHeight - inset) - bottom);
 +        }
 +        const int32_t dx = int32_t(std::lround(moveX * 4.0f));
 +        const int32_t dy = int32_t(std::lround(moveY * 4.0f));
@@ -1122,19 +1135,21 @@ index e08b02c..084ccfd 100644
          struct External {
              ApplicationWindow *appWindow = nullptr;
 diff --git a/src/hle/rt64_rdp.cpp b/src/hle/rt64_rdp.cpp
-index a10c11a..b7ae5a3 100644
+index a10c11a..27552f1 100644
 --- a/src/hle/rt64_rdp.cpp
 +++ b/src/hle/rt64_rdp.cpp
-@@ -4,6 +4,8 @@
+@@ -4,7 +4,10 @@
  
  #include "rt64_rdp.h"
  
 +#include "common/rt64_conker_view_focus.h"
 +
  #include <cassert>
++#include <cmath>
  
  #include "../include/rt64_extended_gbi.h"
-@@ -977,6 +979,23 @@ namespace RT64 {
+ 
+@@ -977,6 +980,23 @@ namespace RT64 {
          scissorRect.uly = std::clamp(uly + extAlignment.topOffset, extAlignment.topBound, extAlignment.bottomBound);
          scissorRect.lrx = std::clamp(movedFromOrigin(lrx + extAlignment.rightOffset, extAlignment.rightOrigin), extAlignment.leftBound, extAlignment.rightBound);
          scissorRect.lry = std::clamp(lry + extAlignment.bottomOffset, extAlignment.topBound, extAlignment.bottomBound);
@@ -1158,7 +1173,7 @@ index a10c11a..b7ae5a3 100644
          scissorModeStack[scissorStackSize - 1] = mode;
          extended.scissorLeftOriginStack[scissorStackSize - 1] = extAlignment.leftOrigin;
          extended.scissorRightOriginStack[scissorStackSize - 1] = extAlignment.rightOrigin;
-@@ -1192,11 +1211,17 @@ namespace RT64 {
+@@ -1192,11 +1212,17 @@ namespace RT64 {
              }
          }
  

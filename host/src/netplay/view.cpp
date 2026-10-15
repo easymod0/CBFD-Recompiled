@@ -5,6 +5,9 @@
 // the other views out (rt64.patch, RT64::setViewFocusRedraw; widescreen then widens it as any full-frame view).
 // Only the renderer changes, not game memory, so it can't desync.
 //
+// While the game is paused its menu is drawn over the whole split screen, so the picture is left as the game
+// draws it (the pause counter D_80082F90, widescreen.cpp).
+//
 // Each frame, the game's cameras (D_800BE628, 0x180 bytes each, the same as reticle.cpp's and
 // widescreen.cpp's) say where each player's view is on the N64's screen: + 0x24 top, + 0x28 bottom,
 // + 0x2C left, + 0x30 right, floats, on the frame (D_800BE620 wide, 216 high). While player 1's camera
@@ -14,7 +17,6 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
-#include <cstdlib>
 
 #include "recomp.h"
 
@@ -30,6 +32,7 @@ namespace RT64 {
 namespace {
     constexpr gpr cameras_pointer = (gpr)(int32_t)0x800BE628;
     constexpr gpr frame_width_address = (gpr)(int32_t)0x800BE620;
+    constexpr gpr pause_counter_address = (gpr)(int32_t)0x80082F90;
     constexpr uint32_t camera_size = 0x180;
     constexpr int32_t camera_top = 0x24, camera_bottom = 0x28, camera_left = 0x2C, camera_right = 0x30;
     constexpr float frame_height = 216.0f;
@@ -68,7 +71,7 @@ bool conker::netplay_view::is_mine_only() {
 void conker::netplay_view::game_frame(uint8_t* rdram) {
     // In a match, this machine's port; replaying a recording (to try it), player 1's.
     const bool in_match = conker::lockstep::connected();
-    const int port = in_match ? conker::lockstep::port() : (std::getenv("TMP_VIEW_PORT") ? std::atoi(std::getenv("TMP_VIEW_PORT")) : 0);
+    const int port = in_match ? conker::lockstep::port() : 0;
     const uint32_t cameras = (uint32_t)MEM_W(0, cameras_pointer);
     const int32_t frame_width = MEM_W(0, frame_width_address);
     if (!mine_only || !(in_match || conker::harness::replaying()) || port < 0 || cameras < 0x80000000u || cameras >= 0x80800000u ||
@@ -86,6 +89,13 @@ void conker::netplay_view::game_frame(uint8_t* rdram) {
             if (!std::isfinite(out[i])) out[i] = 0;
         }
     };
+    // Paused: the pause menu is drawn over the whole split screen, so it's shown as the game draws it.
+    // (D_80082F90 counts the frames since the pause, widescreen.cpp; 0 while not paused.)
+    const uint32_t pause_counter = (uint32_t)MEM_W(0, pause_counter_address);
+    if (pause_counter != 0) {
+        show(0, 0, 1, 1, frame_width);
+        return;
+    }
     float first[4];
     rect(0, first);
     // Player 1's view reaches every side (to within the 2-pixel border): not split.

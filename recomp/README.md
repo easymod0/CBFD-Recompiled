@@ -396,13 +396,23 @@ renderer zooms the picture about its middle by as much both ways, so it isn't
 stretched and as much comes off its top and bottom. Widening the 3D scissor to
 the full frame instead pillarboxed the picture.
 
-Netplay's "my view only" (`host/src/netplay/view.cpp`, fork issue #9) is
-done the same way, as the picture is shown: the game's host sets a part of
-the picture to show alone (`RT64::setPresentationFocus`, as shares of it: this
-player's camera rectangle while the split screen is on), and the VI renderer
-scales the picture by as much both ways for that part to fill as much of the
-window as it can, with a scissor keeping only that part. Nothing in game
-memory changes, so every machine's game stays the same.
+Netplay's "my view only" (`host/src/netplay/view.cpp`, fork issue #9) draws one
+player's view of the split screen across the whole frame
+(`src/common/rt64_conker_view_focus.h`, set with `RT64::setViewFocusRedraw` from
+that player's camera rectangle while the split is on and the game isn't
+paused). `RSP::setViewport` moves that view's viewport to the whole frame and
+records how much taller the frame is than the view; the projection processor
+scales the projection's height by as much, so nothing is stretched and more of
+the scene shows, and the widescreen widening then widens it as any full-frame
+view. The other views' viewports collapse to nothing. `RDP::setScissor` moves
+the view's scissor to the whole frame and empties the others'. `RDP::drawRect`
+moves the 2D: the view's own with its nearest edges (never scaled: the game
+draws a split's 2D at full size), its clears to the whole frame, what's at the
+line between the top and bottom views (the match timer, War's and Beach's team
+scores, Heist's $$$ row) to the bottom, and leaves the other views' out. Game
+memory is untouched (Render to RAM is off in netplay), so it can't desync.
+`setPresentationFocus` (the picture's part zoomed as it's shown) is kept for a
+fit instead of a redraw.
 
 The patch also changes frame interpolation (a frame rate above the game's 30).
 RT64 draws frames between the game's by pairing each transform with last
