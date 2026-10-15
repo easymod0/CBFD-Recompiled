@@ -1,5 +1,6 @@
 // Save states (issue #94): F5 saves the game as it is right now to the current slot, F7 loads it back,
-// F6 picks the next slot (1 to 9). A state is a file in the savestates folder beside the settings.
+// F6 picks the next slot (1 to 9). Those are the keys by default: they're the Controls tab's Hotkeys, bound
+// to any key, mouse button or controller button (frontend.cpp, update_hotkeys). A state is a file in the savestates folder beside the settings.
 //
 // How a recompiled game can be saved at all is told in the runtime (ultramodern/save_states.hpp): a
 // state is taken at a safe point, when every game thread but the running one waits (and the running
@@ -150,14 +151,14 @@ namespace {
                 file.write(reinterpret_cast<const char*>(out.data()), (std::streamsize)out.size());
                 if (!file.good()) {
                     log_line("[save] slot %d: couldn't write %s", slot, temporary.string().c_str());
-                    conker::notices::show("Couldn't write the state to slot " + std::to_string(slot));
+                    conker::notices::show_failure("Couldn't write the state to slot " + std::to_string(slot));
                     return;
                 }
             }
             std::filesystem::rename(temporary, path, ec);
             if (ec) {
                 log_line("[save] slot %d: couldn't replace %s (%s)", slot, path.string().c_str(), ec.message().c_str());
-                conker::notices::show("Couldn't write the state to slot " + std::to_string(slot));
+                conker::notices::show_failure("Couldn't write the state to slot " + std::to_string(slot));
                 return;
             }
             log_line("[save] slot %d written (%zu bytes)", slot, out.size());
@@ -234,7 +235,7 @@ namespace {
         if (!ultramodern::save_states::is_quiet()) {
             last_failure = "the game was busy";
             if (gave_up(pending == Request::Save ? "save" : "load")) {
-                conker::notices::show("Couldn't save now: the game stayed busy. Try again");
+                conker::notices::show_failure("Couldn't save now: the game stayed busy. Try again");
                 finish();
             }
             return;
@@ -246,7 +247,7 @@ namespace {
             if (!recomp::save_states::capture(rdram, state, error)) {
                 last_failure = error;
                 if (gave_up("save")) {
-                    conker::notices::show("Couldn't save now (" + error + "). Try again");
+                    conker::notices::show_failure("Couldn't save now (" + error + "). Try again");
                     finish();
                 }
                 return;
@@ -283,11 +284,11 @@ namespace {
                     // is the same; one that never fits most likely comes from a version that changed it.
                     // One from this build was most likely asked for in the middle of something.
                     if (!load_same_build) {
-                        conker::notices::show("Couldn't load slot " + std::to_string(request_slot) +
+                        conker::notices::show_failure("Couldn't load slot " + std::to_string(request_slot) +
                             ": it was saved by another version of the program (" + load_version + "), which changed the game's code");
                     }
                     else {
-                        conker::notices::show("Couldn't load slot " + std::to_string(request_slot) +
+                        conker::notices::show_failure("Couldn't load slot " + std::to_string(request_slot) +
                             " right now. Try again in a moment");
                     }
                     finish();
@@ -295,7 +296,7 @@ namespace {
                 break;
             case recomp::save_states::LoadResult::Invalid:
                 log_line("[load] slot %d: %s", request_slot, error.c_str());
-                conker::notices::show("Couldn't load slot " + std::to_string(request_slot) + ": " + error);
+                conker::notices::show_failure("Couldn't load slot " + std::to_string(request_slot) + ": " + error);
                 finish();
                 break;
         }
@@ -329,7 +330,7 @@ namespace {
         const int slot = current_slot;
         std::string error;
         if (!read_state(slot, load_state, load_progress, load_version, error)) {
-            conker::notices::show(error);
+            conker::notices::show_failure(error);
             return;
         }
         load_same_build = recomp::save_states::same_build(load_state);
@@ -338,26 +339,21 @@ namespace {
         start(Request::Load);
     }
 
-    int SDLCALL watch_keys(void*, SDL_Event* event) {
-        if (event->type != SDL_KEYDOWN || event->key.repeat != 0 || !ultramodern::is_game_started()) {
-            return 0;
-        }
-        switch (event->key.keysym.sym) {
-            case SDLK_F5:
-                ask_to_save();
-                break;
-            case SDLK_F7:
-                ask_to_load();
-                break;
-            case SDLK_F6:
-                current_slot = current_slot % slot_count + 1;
-                notify_done("Save state slot " + std::to_string(current_slot.load()), true);
-                break;
-            default:
-                break;
-        }
-        return 0;
-    }
+}
+
+// The Controls tab's Hotkeys (frontend.cpp's update_hotkeys): Save State (F5), Load State (F7) and Next Save
+// State Slot (F6) by default.
+void conker::save_states::save() {
+    ask_to_save();
+}
+
+void conker::save_states::load() {
+    ask_to_load();
+}
+
+void conker::save_states::next_slot() {
+    current_slot = current_slot % slot_count + 1;
+    notify_done("Save state slot " + std::to_string(current_slot.load()), true);
 }
 
 void conker::save_states::add_options(recomp::config::Config& config) {
@@ -368,11 +364,10 @@ void conker::save_states::add_options(recomp::config::Config& config) {
     config.add_enum_option(notifications_option, "Save State Notifications",
         "Shows a line in the corner when a save state is saved or loaded (F5, F7) and when another slot is picked (F6). "
         "With <recomp-color primary>Off</recomp-color> they aren't shown; a line saying one couldn't be saved or loaded "
-        "still is.",
+        "still is. The keys are the Controls tab's Hotkeys, to bind them to others or to buttons.",
         choices, Notifications::On);
 }
 
 void conker::save_states::init() {
     ultramodern::save_states::set_safe_point_callback(on_safe_point);
-    SDL_AddEventWatch(watch_keys, nullptr);
 }

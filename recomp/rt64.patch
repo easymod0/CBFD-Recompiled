@@ -2299,7 +2299,7 @@ index 5a331aa..c2c5f25 100644
                      const bool resetTicks = !generateInterpolatedFrames || (originalRateForTicks != workload.viOriginalRate) || (displayRateForTicks != workloadConfig.targetRate) || !displayRateAboveOriginal;
                      if (resetTicks) {
 diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
-index 9fae0d4..cf6687f 100644
+index 9fae0d4..6cdf058 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
 @@ -7,6 +7,7 @@
@@ -2310,6 +2310,15 @@ index 9fae0d4..cf6687f 100644
  #include "common/rt64_math.h"
  #include "hle/rt64_color_converter.h"
  #include "gbi/rt64_f3d.h"
+@@ -218,7 +219,7 @@ namespace RT64 {
+         textureCacheFreeSpaces = textureCache->textureMap.freeSpaces;
+         textureCacheSize = static_cast<uint32_t>(textureCacheTextures.size());
+         textureCacheGlobalVersion = textureCache->textureMap.globalVersion;
+-        textureCacheReplacementMapEnabled = textureCache->textureMap.replacementMapEnabled;
++        textureCacheReplacementMapEnabled = textureCache->textureMap.replacementMapEnabled && !replacementsHidden(); // Conker
+         dynamicTextureViewVector.clear();
+         dynamicTextureBarrierVector.clear();
+     }
 @@ -599,8 +600,27 @@ namespace RT64 {
              case InstanceDrawCall::Type::FillRect: {
                  const auto &clearRect = drawCall.clearRect;
@@ -2975,10 +2984,37 @@ index 641f3ec..28b37fb 100644
          ShaderRecord debug;
          ShaderRecord fbChangesClear;
 diff --git a/src/render/rt64_texture_cache.cpp b/src/render/rt64_texture_cache.cpp
-index 0848f3e..a153536 100644
+index 0848f3e..b99178d 100644
 --- a/src/render/rt64_texture_cache.cpp
 +++ b/src/render/rt64_texture_cache.cpp
-@@ -1298,6 +1298,7 @@ namespace RT64 {
+@@ -23,6 +23,17 @@
+ #define ONLY_USE_LOW_MIP_CACHE 0
+ 
+ namespace RT64 {
++    // Conker: see rt64_texture_cache.h.
++    static std::atomic<bool> replacementsHiddenFlag{ false };
++
++    void setReplacementsHidden(bool hidden) {
++        replacementsHiddenFlag = hidden;
++    }
++
++    bool replacementsHidden() {
++        return replacementsHiddenFlag;
++    }
++
+     // ReplacementMap
+     
+     static const interop::float2 IdentityScale = { 1.0f, 1.0f };
+@@ -301,7 +312,7 @@ namespace RT64 {
+         }
+ 
+         textureIndex = it->second;
+-        textureReplaced = replacementMapEnabled && (textureReplacements[textureIndex] != nullptr);
++        textureReplaced = replacementMapEnabled && !replacementsHidden() && (textureReplacements[textureIndex] != nullptr);
+ 
+         if (textureReplaced) {
+             textureScale = textureScales[textureIndex];
+@@ -1298,6 +1309,7 @@ namespace RT64 {
              }
          }
  
@@ -2986,7 +3022,7 @@ index 0848f3e..a153536 100644
          for (int32_t i = int32_t(textureMap.replacementMap.fileSystemResolvedPaths.size()) - 1; i >= 0; i--) {
              const auto &fsResolvedPaths = textureMap.replacementMap.fileSystemResolvedPaths[i];
              uint32_t hashVersion = textureMap.replacementMap.fileSystemHashVersions[i];
-@@ -1306,10 +1307,20 @@ namespace RT64 {
+@@ -1306,10 +1318,20 @@ namespace RT64 {
                  if (it != fsResolvedPaths.end()) {
                      // Stop searching for replacements as soon as we find one.
                      resolvedPaths.emplace_back(it->second);
@@ -3007,7 +3043,7 @@ index 0848f3e..a153536 100644
      }
  
      bool TextureCache::useTexture(uint64_t hash, uint64_t submissionFrame, uint32_t &textureIndex, interop::float2 &textureScale, interop::float3 &textureDimensions, bool &textureReplaced, bool &hasMipmaps, bool &shiftedByHalf) {
-@@ -1394,6 +1405,56 @@ namespace RT64 {
+@@ -1394,6 +1416,56 @@ namespace RT64 {
          return true;
      }
  
@@ -3064,7 +3100,7 @@ index 0848f3e..a153536 100644
      bool TextureCache::hasReplacement(uint64_t hash) {
          std::unique_lock lock(textureMapMutex);
          const auto &resolvedPaths = textureMap.replacementMap.fileSystemResolvedPaths;
-@@ -1426,6 +1487,15 @@ namespace RT64 {
+@@ -1426,6 +1498,15 @@ namespace RT64 {
          // Clear the current set of textures that were sent to streaming threads.
          textureMap.replacementMap.fileSystemStreamSets.clear();
  
@@ -3080,7 +3116,7 @@ index 0848f3e..a153536 100644
          // Clear the pending replacement checks for streamed textures.
          textureMap.replacementMap.fileSystemStreamResolvedPaths.clear();
  
-@@ -1502,6 +1572,9 @@ namespace RT64 {
+@@ -1502,6 +1583,9 @@ namespace RT64 {
              }
          }
  
@@ -3090,7 +3126,7 @@ index 0848f3e..a153536 100644
          // Load databases and low mipmap caches from the filesystems in reverse order.
          {
              loaderCommandList->begin();
-@@ -1518,7 +1591,7 @@ namespace RT64 {
+@@ -1518,7 +1602,7 @@ namespace RT64 {
                          db = json::parse(databaseBytes.begin(), databaseBytes.end(), nullptr, true);
  
                          if (db.config.hashVersion <= TMEMHasher::CurrentHashVersion) {
@@ -3099,7 +3135,7 @@ index 0848f3e..a153536 100644
                              fileSystemHashVersions[i] = db.config.hashVersion;
                              knownHashVersions.insert(db.config.hashVersion);
  
-@@ -1564,6 +1637,19 @@ namespace RT64 {
+@@ -1564,6 +1648,19 @@ namespace RT64 {
          textureMap.replacementMap.fileSystemStreamSets = std::move(fileSystemStreamSets);
          textureMap.replacementMap.fileSystemStreamResolvedPaths.resize(fileSystemCount);
  
@@ -3120,10 +3156,23 @@ index 0848f3e..a153536 100644
          bool texturesPreloaded = false;
          {
 diff --git a/src/render/rt64_texture_cache.h b/src/render/rt64_texture_cache.h
-index 9131697..488e5be 100644
+index 9131697..9c74131 100644
 --- a/src/render/rt64_texture_cache.h
 +++ b/src/render/rt64_texture_cache.h
-@@ -220,6 +220,14 @@ namespace RT64 {
+@@ -35,6 +35,12 @@ namespace interop {
+ };
+ 
+ namespace RT64 {
++    // Conker: the replacements (texture packs) hidden, the game's own textures shown, as the host asks (its
++    // Show Original Textures key): where the replacement map is used (the texture cache and the framebuffer
++    // renderer), as if it were turned off, without unloading the packs, so they come back at once.
++    void setReplacementsHidden(bool hidden);
++    bool replacementsHidden();
++
+     struct TextureUpload {
+         uint64_t hash;
+         uint64_t creationFrame;
+@@ -220,6 +226,14 @@ namespace RT64 {
          uint64_t streamLoadCount = 0;
          TextureMap textureMap;
          std::mutex textureMapMutex;
@@ -3138,7 +3187,7 @@ index 9131697..488e5be 100644
          RenderWorker *directWorker;
          RenderWorker *copyWorker;
          std::unique_ptr<RenderCommandList> loaderCommandList;
-@@ -240,6 +248,14 @@ namespace RT64 {
+@@ -240,6 +254,14 @@ namespace RT64 {
          bool useTexture(uint64_t hash, uint64_t submissionFrame, uint32_t &textureIndex);
          bool addReplacement(uint64_t hash, const std::string &relativePath, ReplacementShift shift);
          bool hasReplacement(uint64_t hash);

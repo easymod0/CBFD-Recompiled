@@ -108,6 +108,11 @@ namespace conker {
         void update_unpacking();
         // gliden64_packs.cpp: the mod id of the pack a .htc unpacks into.
         std::string gliden64_pack_id(const std::filesystem::path& htc);
+        // The Hotkeys (frontend.cpp): Texture Pack On/Off, switching between the texture packs and the game's own
+        // textures (F8 by default).
+        void toggle_originals();
+        // On the General tab (conker_config.cpp): Texture Pack Notifications, the F8 line.
+        void add_notification_options(recomp::config::Config& config);
         // The Texture Pack setting, at the end of the Graphics tab, listing the packs in the mods
         // folder (a .htc as the pack it unpacks into).
         void add_options(recomp::config::Config& config);
@@ -199,10 +204,14 @@ namespace conker {
         void game_frame();
     }
 
-    // reticle.cpp: Aiming: Reticle, a ring in the middle of the screen while aiming (issue #74).
+    // reticle.cpp: Aiming: Reticle, a ring, crosshair or dot in the middle of the screen while aiming (issues #74, #124).
     namespace reticle {
-        // look_aim.cpp: whether the setting is on.
-        bool enabled();
+        // Aiming: Reticle (Ring has the key and value the setting's On had) and Aiming: Reticle Size.
+        enum class Style : uint32_t { Ring, Off, Crosshair, Dot };
+        enum class Size : uint32_t { Small, Medium, Large };
+        // look_aim.cpp: the settings.
+        Style style();
+        Size size();
         // From the game thread, each frame a camera aims in the second aiming mode (conker_aim_stick,
         // $s0 the camera state): player 1's shows the reticle, unless zoomed in or in split screen.
         void aim_frame(uint8_t* rdram, gpr camera);
@@ -236,6 +245,10 @@ namespace conker {
         // From any thread. With replace, it's shown at once in place of what's shown (and of an earlier one to
         // replace), as a save state's slot is as F6 is pressed again and again.
         void show(const std::string& text, bool replace = false);
+        // A line saying something couldn't be done: shown whatever the notification settings are.
+        void show_failure(const std::string& text);
+        // On the General tab (conker_config.cpp): Notifications, all of them on or off.
+        void add_options(recomp::config::Config& config);
         // From the launcher's init (frontend.cpp): recompui's UI exists now, so the line's context can be made.
         void on_ui_ready();
         // On the main thread (update_gfx): shows the waiting lines, one at a time, once the game has started.
@@ -244,8 +257,12 @@ namespace conker {
 
     // save_states.cpp: save states (issue #94), F5 to save, F7 to load, F6 for the next slot.
     namespace save_states {
-        // At start (frontend.cpp): the keys, and the runtime's idle moment that states are taken at.
+        // At start (frontend.cpp): the runtime's idle moment that states are taken at.
         void init();
+        // The Hotkeys (frontend.cpp): Save State, Load State and Next Save State Slot.
+        void save();
+        void load();
+        void next_slot();
         // On the General tab (conker_config.cpp): Save State Notifications (issue #133).
         void add_options(recomp::config::Config& config);
     }

@@ -247,13 +247,16 @@ playing to get the launcher back).
   Achievements tab lists them. Only what you do in play counts: scenes a save
   had already reached unlock when a new game reaches them. **Achievement
   Notifications** on the General tab turns off the line in the corner as one
-  unlocks; they still unlock and are listed.
+  unlocks; they still unlock and are listed. **Notifications** above it turns off
+  every line the program shows in the corner (achievements, save states, the
+  texture pack's F8), and each kind has its own setting too.
 - Saves, settings and the stored ROM live in `~/.config/ConkerRecompiled` on
   Linux, `~/Library/Application Support/ConkerRecompiled` on macOS and
   `%LOCALAPPDATA%\ConkerRecompiled` on Windows. Put an empty `portable.txt` next
   to the executable to keep them there instead.
 - **Save states**: F5 saves the game exactly as it is, F7 loads it back, F6
-  picks the next of the nine slots. They never touch the game's own saves. See
+  picks the next of the nine slots (rebind them, to keys, mouse or controller
+  buttons, in the Controls tab's **Hotkeys**). They never touch the game's own saves. See
   [docs/save-states.md](docs/save-states.md). **Save State Notifications** on the
   General tab turns off the line in the corner saying a state was saved or loaded,
   or another slot picked (one saying it couldn't be still shows).
@@ -335,7 +338,9 @@ Mods menu), then pick it in **Settings > Graphics > Texture Pack**, which turns 
 the other packs off. Packs installed while the game runs are listed there from
 the next start. Its default, **Set in the Mods Menu**, leaves them to the
 **Mods** menu instead, where several can be on at once (later ones in the list
-take precedence).
+take precedence). While playing, **F8** switches between the texture pack and
+the game's own textures, to compare them (**Texture Pack On/Off** in the
+Controls tab's **Hotkeys** binds it to another key or a button).
 
 GLideN64 texture packs (for Project64 and RetroArch) work too. Install the
 pack's `.htc` or `.hts` file the same way (**Install Mods** or dropped onto the Mods menu),
