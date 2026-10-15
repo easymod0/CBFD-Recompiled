@@ -1,10 +1,11 @@
 # H3: events at fixed points (design)
 
-Netplay phase H3 (fork issue #2, upstream issue 126). This is the design, to agree before any code
-is written. Nothing here changes the game when the harness (and later netplay) isn't used.
+Netplay phase H3 (fork issue #2, upstream issue 126). The design, to agree with the owner before it's
+built for real; a prototype checks the core of it (below). Nothing here changes the game when the
+harness (and later netplay) isn't used.
 
-**Goal:** the host's speed can't change what the game does. A replay on one busy core matches a
-normal one read for read.
+**Goal:** the host's speed can't change what the game does. A slow host slows the game, never changes
+it: a replay on one busy core matches a normal one read for read.
 
 ## What makes a run differ today
 
@@ -18,35 +19,40 @@ comes from outside:
 | Controller input | `osContGetReadData` | H1 (recorded, replayed) |
 | The clock | `osGetCount`, `osGetTime`, timer deadlines | H2 (virtual clock) |
 | **When events arrive** | host threads post messages to one shared queue, which game threads empty at *every* OS call | **H3** |
-| What the RSP audio task writes | the SP task thread, in parallel with game threads | **H3** |
-| Which framebuffer the VI shows | `osViGetCurrentFramebuffer`, swapped by the VI thread; the scheduler (`func_10004DB0`) reads it | **H3** |
+| **The VI phase at startup** | the VI thread counts retraces and swaps VI state as soon as the game is marked started, before the ROM is even loaded | **H3** |
+| **Host threads writing game memory** | the SP task thread (the audio microcode's output), the timer thread (a repeating timer's next deadline) | **H3** |
+| Which framebuffer the VI shows | `osViGetCurrentFramebuffer`, swapped by the VI thread (without the lock the game's VI calls take); the scheduler (`func_10004DB0`) reads it | **H3** |
 | Two host patches that wait on real time | `conker_spin_wait_pass` (1 ms yield), the 500 ms "song just started" mark (`ultra_extras.cpp`) | **H3** |
 | The audio device's buffer | `osAiGetLength`, MP3 player pace | H4 |
-| The renderer reading back | framebuffer reads, if any | H5 |
+| The renderer | RT64 writing framebuffers back into game memory, if it does | H5 |
+| Settings that change game memory | mouse and stick camera (reads SDL and the time on a game thread), field of view (cull scales), model detail (which models load), widescreen (the window's size) | netplay settings profile (#5) |
 
 The events, and the threads they come from:
 
 | Event | Sent by | When |
 |---|---|---|
-| VI (retrace) and AI | VI thread | every 1/60 s of real time; a late VI thread *skips* VIs (`new_total_vis` comes from the time) |
+| VI (retrace) | VI thread | every 1/60 s of real time; a late VI thread *skips* VIs (`new_total_vis` comes from the time) |
 | Timers | timer thread | at the deadline, in real time |
 | SP done, audio task | SP task thread | when the task finishes |
 | SP done, graphics task | graphics thread | when it takes the task from its queue |
 | DP done | graphics thread | when the renderer has taken the display list |
-| PI (DMA, flash) | the game thread itself (the copy is synchronous) | at once, but through the shared queue |
-| SI (controller read done) | the game thread itself | at once, but through the shared queue |
+| PI (DMA, flash), SI (controller read) | the game thread itself (the work is synchronous) | at once, through the shared queue |
+
+Conker never registers the AI event (only SI, SP, DP, PRE-NMI and VI), and `osAiGetStatus` always says
+the AI is free, so the scheduler's audio timer is always 20,000 ticks after the VI.
+
+The game's frame delta, `D_800BE9E4` (VIs per frame), is used all through game logic, so VIs have to
+be virtual: fixing only the races in the scheduler wouldn't be enough.
 
 ### Measured
 
 A temporary probe over a 2,700-read headless replay (not committed):
 
-- The game goes idle (every game thread waits, and the idle thread runs `pause_self`) about **4
-  times per controller read**, so about once per VI.
+- The game goes idle (every game thread waits, and the idle thread runs `pause_self`) about 4 times
+  per controller read: about twice per VI (after the VI's work, and after the audio timer's).
 - **45%** of host events reached the game while it was busy, at whatever OS call came next. Which call
-  that is depends on how far the game got before the host thread posted, which is the difference
-  H1 saw (`D_8002AC54`, the scheduler's task message, and the queues at `D_8003B200`/`D_8003B218`).
-- No game thread polled for long: at most 3 non-blocking receives failed between two idle points.
-  `conker_spin_wait_pass` (the 1 ms yield) didn't run at all.
+  that is depends on how far the game got before the host thread posted. Today `pause_self` takes one
+  message per wake, too.
 
 ## The design: a virtual timeline, events delivered when the game is idle
 
@@ -55,99 +61,153 @@ While the harness is used, the runtime runs the game as a discrete-event simulat
 1. **Game code takes no time.** Virtual time only moves when the game is idle. Then the runtime moves
    it straight to the next event. This is how the game already behaves on a fast host: its work for
    a frame takes a fraction of a VI, then it waits.
-2. **Host events are delivered only at delivery points.** The idle thread (`pause_self`) is the main
-   one: by then every game thread waits, so game memory is the same in every run. There the runtime:
-   1. finds the next event time `T`: the next VI (`k` × 1/60 s), the earliest timer deadline, or a
-      task completion that is due;
-   2. waits in real time for anything those events need (the renderer finishing a display list);
-   3. paces: waits until real time reaches `T` (skipped with `--fast`, for headless replays);
-   4. sets virtual time to `T` and delivers every event due at `T`, in a fixed order: SP, DP, timers
-      (by deadline, then address), VI (with the VI register swap), AI;
-   5. lets the woken threads run (`check_running_queue`) until the game is idle again.
-3. **Messages the game sends itself** (PI, SI, flash) keep arriving at the next OS call, as today, but
-   in a queue of their own, so host events can't get in between them.
+2. **No host thread posts to the game.** The VI and timer threads stop once the mode is on, the audio
+   task runs on the game thread, and the graphics thread only reports that it's done. The shared queue
+   then only holds the game's own messages (PI, SI, SP done), posted from game threads, so they arrive
+   in the same order every run, and no new queue is needed.
+3. **Delivery points.** When the game is idle (the running queue is empty in `pause_self`) the runtime:
+   1. hands over the game's own messages still queued;
+   2. finds the next event time `T`: the next VI (VI `k` at `k` × 781,250 ticks, exactly 60 Hz), or the
+      earliest timer deadline, whichever is sooner, but never before the last `T`;
+   3. paces: waits until real time reaches `T` (skipped with `--fast`). After a stall (a slow host, or
+      waiting for a peer) it carries on from there instead of catching up;
+   4. sets the clock to at least `T` and delivers every event due at `T`, in a fixed order: DP done
+      (after waiting in real time for the renderer to finish the lists), then timers (by deadline,
+      then address; a repeating one's next deadline is the last plus its interval), then the VI (the VI
+      register swap, the screen update, the retrace count and message);
+   5. lets the woken threads run until the game is idle again. If nothing woke, it goes on to the next
+      event. Each VI gets a delivery point of its own.
 
 ### Each event
 
-- **VI and AI.** They come from the timeline, not the VI thread. The VI register swap (`update_vi`)
-  and the screen update happen at the virtual VI too, so `osViGetCurrentFramebuffer` gives the same
-  answer in every run. No VI is ever skipped: a slow host makes the game run slower, not different.
-  (The VI thread keeps doing the dummy VIs before the game starts.)
-- **Timers.** They run out on the timeline. The timer thread isn't used, and H2's table of
-  real-time deadlines goes away.
-- **The clock (H2).** A frame's base becomes the timeline's time, not the controller read count, so
-  the clock and the timers are on one timeline. Each read of the clock still moves it a step.
-- **The audio task.** It runs on the game thread, inside `osSpTaskStartGo`, and its SP done is due at
-  once (delivered at the next delivery point). Its writes to game memory then land at the same point
-  in every run, and nothing runs alongside them. The N64 runs it in parallel, so a game that read the
-  results before SP done would already go wrong there.
-- **Graphics tasks.** SP done is due at once, as today ("the RSP completed instantly"). DP done is due
-  at the next VI, and the delivery point waits for the renderer to finish the list first. That keeps
-  a frame of overlap between the game and the renderer. Headless, it never waits.
+- **VI.** The timeline's. Turning the mode on stops the VI thread (it acknowledges, so it's never
+  partway through a VI) and resets the VI state: virtual time 0, the first VI state, one retrace to
+  go. The game's own `osViSetMode`/`osViSetEvent` then land at the same point every run. No VI is ever
+  skipped.
+- **Timers.** On the timeline; the timer thread waits for good. H2's real-time deadlines go away.
+- **The clock (H2).** Its base is the timeline's `T`, not the controller read count, so the clock and
+  the timers are on one timeline. Each read of the clock still moves it a step (47 ticks).
+- **The audio task.** It runs on the game thread, inside `osSpTaskStartGo`, and posts its SP done
+  from there. Its writes land at the same point every run, and nothing runs alongside them. With SP
+  done at once, the scheduler's yield path (`osSpTaskYield`) is never taken.
+- **Graphics tasks.** SP done is posted at once by the submitting thread (as today: "the RSP completed
+  instantly"). DP done is due at the next VI, delivered just before it. That adds no latency: Conker's
+  scheduler already waits for a VI after DP done before it swaps buffers (`func_10004FE0`), so the
+  frame delta stays the same. **DP before VI at the same `T` is a rule**, checked by comparing
+  `D_800BE9E4` with normal mode. Waiting for the renderer at the VI also means whatever RT64 writes
+  into game memory lands at fixed points (H5).
 - **The two host patches.** `conker_spin_wait_pass` becomes a delivery point that moves virtual time
-  1 ms on, or to the next event if that's sooner: what "yield for up to 1 ms" means. The 500 ms song
-  mark is timed on virtual time.
+  at most 1 ms on: what "yield for up to 1 ms" means. The 500 ms song mark is timed on virtual time.
+- **Display-list events** (`osExQueueDisplaylistEvent`, posted from the graphics thread) go to the
+  timeline too, or are refused in this mode. Conker doesn't use them.
 
-### A game that never goes idle
+### A game that doesn't go idle
 
-If game threads run for a long time without the game going idle (a long load, or a loop polling a
-queue without blocking), events would wait too long. So a deterministic limit applies: after a fixed
-number of OS calls without going idle (say 100,000), the next non-blocking `osRecvMesg` is a delivery
-point too. The probe never came near this, so a run that hits it logs it.
+During a long load the game may not go idle for a long time. Then no VIs arrive, the scheduler stops
+sending its per-VI messages, and audio starves. So the runtime counts the OS calls that empty the
+queue (send, jam, receive) since the last delivery point. At a fixed count it treats the next one as
+a delivery point that moves virtual time on a fixed amount: in effect a fixed CPU speed. The count
+and the amount have to come from measuring a level load (the most OS calls and the longest real time
+between two idle points).
+
+`pause_self` is also called by three loops that hang the game when an allocation fails
+(`func_151AE0E4`, `func_1501878C`, `func_1509B950`). A delivery point checks that nothing else is
+ready to run, rather than assuming it's the idle thread.
 
 ### What changes for the game
 
-In deterministic mode, events no longer interrupt the game partway through a frame. They wait until
-the game is idle (or until a yield, or the limit). The N64 interrupts at any instruction, and the
+In deterministic mode, events no longer interrupt the game partway through a burst of work. They wait
+until the game is idle (or yields, or hits the limit). The N64 interrupts at any instruction, and the
 runtime today interrupts at any OS call, so this is a third behaviour. The game already copes with
-the runtime's: it can't rely on being interrupted in game code. The probe shows the game reaches
-idle every VI, so a frame's events reach it at most one burst of work late. Normal mode keeps
-today's behaviour.
+the runtime's: it can't rely on being interrupted in game code. Normal mode keeps today's.
+
+## Alternatives
+
+- **Record the events' points and replay them:** works for replays, not for lockstep, where peers
+  would have to send each other the schedule.
+- **Deliver at counted OS calls:** deterministic too, but any change to the runtime, a mod or a hook
+  that adds an OS call would change the game, so peers would need identical builds down to that.
+- **Make the VI thread wait for idle:** the timer and graphics threads would need the same handshake.
+  One timeline is simpler.
 
 ## Netplay
 
-Every peer runs the same timeline from the same inputs, so the same events arrive at the same
-points. The lockstep wait (H8) happens at a controller read: a real-time wait inside a game thread.
-That doesn't move virtual time, so it can't change the game either. A peer that falls behind runs
-slower, with the same game.
+Every peer runs the same timeline from the same inputs, so the same events arrive at the same points.
+The lockstep wait (H8) happens at a controller read: a real-time wait inside a game thread, which
+doesn't move virtual time, so it can't change the game. Deterministic mode is required on every peer.
+Recordings and hash logs from normal mode can't be compared with it.
 
 ## Save states
 
-Save states are already taken and loaded at the idle point (`pause_self`), which is now a delivery
-point. The timeline (virtual time, the next VI, events due) is saved with the timers, so a state
-taken in deterministic mode goes on the same way after loading. States taken in normal mode still
-load. In deterministic mode the timeline starts again from the state's clock.
+In deterministic mode, save states are taken and loaded only at delivery points (not also in
+`osRecvMesg`, as in normal mode). The timeline (virtual time, the next VI, DP done due) is saved with
+the timers, and loading clears the game's own queued messages and restores the timeline, so a state
+goes on the same way after loading. The song mark is saved too. States taken in normal mode still
+load: the timeline starts again from the state's clock.
 
 ## The runtime patch
 
-- A new file, `ultramodern/src/timeline.cpp`, holds the timeline: the virtual time, events due, the
-  delivery point, pacing and the OS-call limit.
-- Small hooks elsewhere, each behind one `if (deterministic)`: the VI thread (no VI or AI messages),
-  the timer thread (idle), `pause_self` and `yield_self_1ms` (delivery points), `enqueue_external_message_src`
-  (host events go to the timeline, the game's own messages to their own queue), `submit_rsp_task`
-  (the audio task runs inline), and the graphics thread (DP done to the timeline).
-- About 300 lines in all, most in the new file. With the harness off, every hook takes today's path.
-- The API: `ultramodern::set_deterministic(bool fast)` before the game starts, like
-  `set_virtual_clock` (which it replaces).
+- A new file, `ultramodern/src/timeline.cpp`, holds the timeline: the delivery point, pacing, the
+  limit.
+- Small hooks, each behind one check: the VI thread (stops), the timer thread (waits), `pause_self` and
+  `yield_self_1ms` (delivery points), `submit_rsp_task` (the audio task inline, SP done posted), and the
+  graphics thread (reports DP done to the timeline).
+- A few hundred lines, most in the new file. With the harness off, every hook takes today's path.
+- The API: `ultramodern::timeline::enable(fast)` before the game starts. It replaces H2's
+  `set_virtual_clock`.
 
 ## To agree with the owner
 
 1. In deterministic mode only, events are delivered when the game is idle (or yields, or hits the
-   limit), not at any OS call.
+   limit), not at any OS call. A slow host slows the game, never changes it.
 2. The audio RSP task runs on the game thread in deterministic mode.
-3. Graphics DP done is due at the next VI (a frame of overlap with the renderer), not at once.
-4. VIs come at exactly 60 Hz of virtual time (as today's VI thread), not 59.94.
-5. All of it is in `recomp/n64modernruntime.patch`, like H1 and H2, rather than going to
+3. Graphics DP done is due at the next VI. No added latency: the scheduler already waits for that VI,
+   and the frame delta is unchanged.
+4. VIs come at exactly 60 Hz of virtual time (as today's VI thread), which is a whole 781,250 ticks
+   per VI; not 59.94.
+5. The limit for a game that doesn't go idle: a fixed number of OS calls is a fixed amount of virtual
+   time (a fixed CPU speed), with the numbers measured on a level load.
+6. Save states, in deterministic mode, only at delivery points.
+7. Deterministic mode is required on every netplay peer; settings that change game memory are forced
+   or synced between peers.
+8. All of it is in `recomp/n64modernruntime.patch`, like H1 and H2, rather than going to
    N64ModernRuntime.
 
-## The steps, once agreed
+## The prototype
 
-1. The timeline, with VI, AI and timers delivered at idle points, and the clock from the timeline.
-   Two normal replays should match with no one-off reads.
-2. The game's own messages (PI, SI) in their own queue.
-3. The audio task inline; graphics SP and DP done on the timeline.
-4. The two host patches on virtual time; the OS-call limit; save states; `--fast`.
-5. **Done when:** a replay on one busy core (`taskset -c 3` next to a busy loop) matches a normal
-   one read for read. A `--fast` replay should match a paced one too.
+Built (step 1 below), behind the harness: `ultramodern/src/timeline.cpp` and hooks in `events.cpp`,
+`timer.cpp`, `scheduling.cpp` and `mesgqueue.cpp`, in `recomp/n64modernruntime.patch`. The harness's
+`--fast`, `--jitter <us>` and `--real-time` options drive it. Results, headless, on a made-up
+2,700-read recording (90 s of game):
+
+| Test | Result |
+|---|---|
+| 20 `--fast` replays | all identical, every read (about 1.8 s each) |
+| `--jitter 500` (up to 0.5 ms at every OS call and graphics task) | identical to them |
+| `--jitter 3000`, 300 reads | identical |
+| One busy core (`taskset -c 3` next to a busy loop), `--fast` | identical |
+| One busy core, paced to real time, 300 reads | identical |
+| Paced vs `--fast` | identical |
+| Frame delta `D_800BE9E4` | 2 VIs at every read, the same as normal mode |
+| Bursts between idle points | at most 260 OS calls, at most 8.6 ms of real time |
+
+Normal mode (no harness) runs as before. With `--real-time`, runs still differ as they did before H3.
+
+Not done yet: the OS-call limit (the recording doesn't reach a level load: one recorded by playing
+is needed to measure it), save states, the two host patches, display-list events, windowed runs
+(they need H4 and H5).
+
+## The steps
+
+1. **Prototype** (headless; done, above): the VI and timer threads stop, the audio task inline, delivery points
+   with VI, timers and DP done, the clock from the timeline, pacing and `--fast`, and a jitter test
+   mode (random sleeps at OS calls and in the graphics thread, which finds races better than a busy
+   core). Check: 20 or more replays identical; jitter and busy-core replays identical to them;
+   `D_800BE9E4` the same as normal mode; OS calls and time between idle points on a level load.
+2. The limit, from those numbers.
+3. Save states: a state loaded at read N gives the same reads from N on.
+4. The two host patches on virtual time; display-list events.
+5. **Done when:** a replay on one busy core (`taskset -c 3` next to a busy loop) matches a normal one
+   read for read, and `--fast` matches paced.
 
 H4 (the audio device) and H5 (the renderer) come after: windowed replays need both.

@@ -17,15 +17,18 @@
 //   --stop-after <n>    quits after read <n>
 //   --ports <n>         the controllers the game sees: ports 1 to <n> connected, no paks (1 by default; a
 //                       replay uses its recording's)
-//   --real-clock        keeps the game's clock on the time, not the virtual clock (below), to compare
+//   --real-time         runs the game on the time, as normally, not the virtual timeline (below), to compare
+//   --fast              doesn't wait for real time on the timeline: as fast as the host can
+//   --jitter <us>       sleeps at random, up to <us> microseconds, at the game's OS calls and in the
+//                       graphics thread: a test that the host's speed doesn't change the game
 //
 // Controller reads are counted from the first, so read <n> of one run is read <n> of another. The pads
 // are the N64's own values (after the sticks are converted), as osContGetReadData gives them to the
 // game: what netplay will send.
 //
-// While the harness is used, the game's clock is a virtual one (ultramodern::set_virtual_clock): each
-// controller read is a frame, 1/30 of a second on the clock (the game reads the controllers 30 times a
-// second), so the same inputs give the same clock, and the timers' deadlines in game memory with it.
+// While the harness is used, the game runs on the runtime's virtual timeline (deterministic mode,
+// ultramodern/timeline.hpp): its clock, VIs, timers and task completions come at fixed points in its
+// progress, not when the host gets to them, so the same inputs give the same game.
 //
 // The recording: "CBFDPADS", then a little-endian u32 version (1) and u32 port count, then for each
 // read the number of controllers the game reads (u8) and four pads of 5 bytes each (u16 buttons, s8
@@ -47,6 +50,7 @@
 #include "librecomp/save_states.hpp"
 #include "ultramodern/save_states.hpp"
 #include "ultramodern/input.hpp"
+#include "ultramodern/timeline.hpp"
 #include "ultramodern/ultramodern.hpp"
 
 #define XXH_INLINE_ALL
@@ -60,11 +64,6 @@ namespace {
     constexpr size_t pad_size = 5;
     constexpr size_t read_size = 1 + max_pads * pad_size;
     constexpr uint64_t no_limit = UINT64_MAX;
-    // The virtual clock (ultramodern::set_virtual_clock), whose frames are controller reads: the game
-    // reads the controllers 30 times a second (the N64's clock is 46,875,000 ticks a second), and a
-    // read of the clock takes about a microsecond.
-    constexpr uint64_t ticks_per_frame = 46'875'000 / 30;
-    constexpr uint64_t ticks_per_clock_read = 47;
 
     std::string record_path;
     std::string replay_path;
@@ -72,7 +71,9 @@ namespace {
     std::vector<uint64_t> dump_at;
     uint64_t stop_after = no_limit;
     int ports = 1;
-    bool real_clock = false;
+    bool real_time = false;
+    bool fast = false;
+    uint64_t jitter_us = 0;
     bool options_valid = true;
 
     uint8_t* rdram = nullptr;
@@ -234,7 +235,6 @@ namespace {
     // On the game thread, at each controller read, with the pads the game is about to get.
     void on_read_data(ultramodern::input::Pad* pads, int count) {
         const uint64_t read = reads++;
-        ultramodern::virtual_clock_frame(read + 1);
         if (read > last_read) {
             // Waiting for the quit: the game gets no input.
             for (int i = 0; i < max_pads; i++) {
@@ -354,8 +354,16 @@ bool conker::harness::parse_option(int argc, char** argv, int& i) {
         count_option(stop_after);
         return true;
     }
-    if (std::strcmp(option, "--real-clock") == 0) {
-        real_clock = true;
+    if (std::strcmp(option, "--real-time") == 0) {
+        real_time = true;
+        return true;
+    }
+    if (std::strcmp(option, "--fast") == 0) {
+        fast = true;
+        return true;
+    }
+    if (std::strcmp(option, "--jitter") == 0) {
+        count_option(jitter_us);
         return true;
     }
     if (std::strcmp(option, "--ports") == 0) {
@@ -470,9 +478,10 @@ void conker::harness::start(uint8_t* game_rdram) {
         return;
     }
     rdram = game_rdram;
-    if (!real_clock) {
-        ultramodern::set_virtual_clock(ticks_per_frame, ticks_per_clock_read);
+    if (!real_time) {
+        ultramodern::timeline::enable(fast);
     }
+    ultramodern::timeline::set_jitter((uint32_t)std::min<uint64_t>(jitter_us, 1'000'000));
     ultramodern::input::set_read_data_callback(on_read_data);
 }
 
