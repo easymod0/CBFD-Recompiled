@@ -20,7 +20,11 @@ if (NOT _conker_vcpkg)
         "component (in the Visual Studio Installer), or set VCPKG_ROOT to a vcpkg of your own.")
 endif()
 file(TO_CMAKE_PATH "${_conker_vcpkg}" _conker_vcpkg)
-set(CMAKE_TOOLCHAIN_FILE "${_conker_vcpkg}/scripts/buildsystems/vcpkg.cmake")
-set(VCPKG_MANIFEST_DIR "${CMAKE_CURRENT_LIST_DIR}")
-set(VCPKG_TARGET_TRIPLET "x64-windows-static-md")
-message(STATUS "Netplay: protobuf from vcpkg (${_conker_vcpkg})")
+# In the cache, where vcpkg's toolchain reads them (a plain variable's triplet was ignored: it installed
+# x64-windows, the DLLs).
+set(CMAKE_TOOLCHAIN_FILE "${_conker_vcpkg}/scripts/buildsystems/vcpkg.cmake" CACHE FILEPATH "")
+set(VCPKG_MANIFEST_DIR "${CMAKE_CURRENT_LIST_DIR}" CACHE PATH "")
+set(VCPKG_TARGET_TRIPLET "x64-windows-static-md" CACHE STRING "")
+# Static protobuf, for GameNetworkingSockets' FindProtobuf fallback too.
+set(Protobuf_USE_STATIC_LIBS ON CACHE BOOL "")
+message(STATUS "Netplay: protobuf from vcpkg (${_conker_vcpkg}), ${VCPKG_TARGET_TRIPLET}")
