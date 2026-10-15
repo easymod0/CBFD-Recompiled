@@ -267,6 +267,7 @@ namespace conker::netplay {
                 if (theirs->build != hello.build) refusal = Reason::build;
                 else if (theirs->rom != hello.rom) refusal = Reason::rom;
                 else if (theirs->profile != hello.profile) refusal = Reason::profile;
+                else if (theirs->mods != hello.mods) refusal = Reason::mods;
                 else if (!entry_open) refusal = Reason::started;
                 int port = -1;
                 if (!refusal) {

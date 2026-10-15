@@ -2,7 +2,7 @@
 // code that parses what arrives from the network; fuzz_packets.cpp fuzzes it.
 //
 // Each packet: "CN", u16 protocol version, u8 kind, then (all little-endian):
-//   1 Hello    u64 build, u64 rom, u64 profile                                        29 bytes
+//   1 Hello    u64 build, u64 rom, u64 profile, u64 mods                              37 bytes
 //   2 Welcome  u8 port (< players), u8 players (2 to 4)                                7 bytes
 //   3 Refuse   u8 reason                                                               6 bytes
 //   4 Inputs   u8 port (< 4), u32 first read, u8 count (1 to 8), 8 pads of 5 bytes   51 bytes
@@ -25,7 +25,7 @@ namespace conker::netplay {
 
         constexpr size_t size_of(uint8_t kind) {
             switch (kind) {
-                case hello: return header_size + 24;
+                case hello: return header_size + 32;
                 case welcome: return header_size + 2;
                 case refuse: return header_size + 1;
                 case inputs: return header_size + 6 + input_window * pad_size;
@@ -112,6 +112,7 @@ namespace conker::netplay {
             case Reason::protocol: return "an unexpected or broken packet";
             case Reason::desync: return "the games went out of sync";
             case Reason::timeout: return "the connection timed out";
+            case Reason::mods: return "different mods";
         }
         return "an unknown reason";
     }
@@ -133,6 +134,7 @@ namespace conker::netplay {
                 w.u64(p.build);
                 w.u64(p.rom);
                 w.u64(p.profile);
+                w.u64(p.mods);
             }
             else if constexpr (std::is_same_v<T, Welcome>) {
                 w.u8(p.port);
@@ -180,6 +182,7 @@ namespace conker::netplay {
                 p.build = r.u64();
                 p.rom = r.u64();
                 p.profile = r.u64();
+                p.mods = r.u64();
                 packet = p;
                 break;
             }

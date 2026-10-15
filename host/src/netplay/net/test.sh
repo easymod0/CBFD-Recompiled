@@ -1,8 +1,8 @@
 #!/bin/sh
 # Tests the netplay transport from a build of this folder (CMakeLists.txt): the packets' and join codes'
 # tests, then matches between copies of netplay_probe over loopback (2 players, joining by code; 3 with
-# 20% of packets lost, which also tests the host passing inputs on), a joiner with another ROM, which
-# must be refused, and one that never says Hello, which must be dropped.
+# 20% of packets lost, which also tests the host passing inputs on), joiners with another ROM or other
+# mods, which must be refused, and one that never says Hello, which must be dropped.
 #   sh host/src/netplay/net/test.sh <build folder>
 set -u
 bin=$1
@@ -42,19 +42,24 @@ match() {
 by_code=1 match two 27200 2 --reads 150
 match three-lossy 27201 3 --reads 150 --loss 20
 
-# Another ROM: refused, with the reason.
-"$probe" host 27202 --reads 30 > refused.host.txt 2>&1 &
-host=$!
-sleep 1
-"$probe" join 127.0.0.1:27202 --reads 30 --rom 2 > refused.join.txt 2>&1
-if grep -q "ended: a different ROM" refused.join.txt; then
-    echo "refused: passed"
-else
-    echo "refused: FAILED"
-    cat refused.join.txt
-    failed=1
-fi
-kill $host 2>/dev/null
+# Another ROM, or other mods: refused, with the reason.
+refused() {
+    name=$1; port=$2; option=$3; reason=$4
+    "$probe" host "$port" --reads 30 > "$name.host.txt" 2>&1 &
+    host=$!
+    sleep 1
+    "$probe" join "127.0.0.1:$port" --reads 30 $option 2 > "$name.join.txt" 2>&1
+    if grep -q "ended: $reason" "$name.join.txt"; then
+        echo "$name: passed"
+    else
+        echo "$name: FAILED"
+        cat "$name.join.txt"
+        failed=1
+    fi
+    kill $host 2>/dev/null
+}
+refused refused-rom 27202 --rom "a different ROM"
+refused refused-mods 27204 --mods "different mods"
 
 # A joiner that never says Hello: dropped after the handshake time (10 s).
 "$probe" host 27203 --reads 30 > silent.host.txt 2>&1 &

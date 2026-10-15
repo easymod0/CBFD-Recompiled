@@ -8,7 +8,7 @@
 //   netplay_probe code <address:port>
 //     --reads <n>        how many reads each peer sends (300: 10 s)
 //     --loss <percent>   the library drops this share of the packets sent (they're resent)
-//     --build/--rom/--profile <hex>   the handshake's hashes (all 1 by default), to test refusals
+//     --build/--rom/--profile/--mods <hex>   the handshake's hashes (all 1 by default), to test refusals
 //     --silent           connect but never say Hello: the host must drop it after its handshake time
 //
 // It exits 0 once it has every other port's pads for every read and they're all right, 1 otherwise;
@@ -55,7 +55,7 @@ namespace {
 
     int usage() {
         std::fprintf(stderr, "usage: netplay_probe host <port> [--players 2] | join <address:port or code> [--silent]\n"
-                             "       [--reads 300] [--loss <percent>] [--build <hex>] [--rom <hex>] [--profile <hex>]\n"
+                             "       [--reads 300] [--loss <percent>] [--build <hex>] [--rom <hex>] [--profile <hex>] [--mods <hex>]\n"
                              "       netplay_probe code <address:port>\n");
         return 2;
     }
@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
     int players = 2;
     uint32_t reads = 300;
     float loss = 0;
-    Hello me{ 1, 1, 1 };
+    Hello me{ 1, 1, 1, 1 };
     for (int i = 3; i + 1 < argc; i += 2) {
         const std::string option = argv[i];
         const char* value = argv[i + 1];
@@ -130,6 +130,7 @@ int main(int argc, char** argv) {
         else if (option == "--build") me.build = std::strtoull(value, nullptr, 16);
         else if (option == "--rom") me.rom = std::strtoull(value, nullptr, 16);
         else if (option == "--profile") me.profile = std::strtoull(value, nullptr, 16);
+        else if (option == "--mods") me.mods = std::strtoull(value, nullptr, 16);
         else return usage();
     }
     const bool silent = !hosting && argc == 4 && std::strcmp(argv[3], "--silent") == 0;

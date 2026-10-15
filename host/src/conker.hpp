@@ -79,8 +79,11 @@ namespace conker {
         void set_active(bool active);
         // XXH3-64 of the profile's description, for recordings.
         uint64_t hash();
-        // Whether no mods but texture packs are on (false: each was printed).
+        // Whether no mods but texture packs are on, for recordings and replays (false: each was printed).
         bool check_mods();
+        // A hash of the mods on but texture packs, in load order: each one's id, version, file and saved
+        // settings (0 for none), for netplay's handshake: everyone in a match needs the same.
+        uint64_t mods_hash();
 #else
         inline bool active() { return false; }
 #endif

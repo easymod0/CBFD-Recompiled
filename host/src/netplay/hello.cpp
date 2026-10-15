@@ -21,5 +21,6 @@ conker::netplay::Hello conker::netplay::hello_for_rom(std::span<const uint8_t> r
     hello.build = XXH3_64bits(build_id(), std::strlen(build_id()));
     hello.rom = XXH3_64bits(rom.data(), rom.size());
     hello.profile = conker::netplay_profile::hash();
+    hello.mods = conker::netplay_profile::mods_hash();
     return hello;
 }

@@ -138,10 +138,6 @@ namespace {
 
         // Hosting or joining: the Hello from the stored ROM, then lockstep's begin.
         void begin() {
-            if (!conker::netplay_profile::check_mods()) {
-                set_state(State::idle, "Turn off your mods first: in a match only texture packs can be on.");
-                return;
-            }
             std::ifstream file(stored_rom, std::ios::binary);
             const std::vector<uint8_t> rom((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
             if (rom.empty()) {
@@ -230,8 +226,9 @@ namespace {
             recompui::Element* intro = column(this, 8.0f);
             text(intro, "Netplay", Typography::Header3);
             text(intro, "Play multiplayer over the internet: everyone runs the game, and every player's controller "
-                "is passed to the others. Everyone needs this same build, the same ROM, and no mods but texture "
-                "packs. You play with your first controller; the game starts from the beginning, with an empty save.",
+                "is passed to the others. Everyone needs this same build, the same ROM, and the same mods on, set the "
+                "same (texture packs can differ). You play with your first controller; the game starts from the "
+                "beginning, with an empty save.",
                 Typography::Body, color::TextDim);
 
             // Hosting.

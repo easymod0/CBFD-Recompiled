@@ -49,7 +49,7 @@ namespace {
 
 int main() {
     // Each kind, at its documented size.
-    CHECK(round_trips(Hello{ 0x0123456789ABCDEFull, 2, 3 }, 29));
+    CHECK(round_trips(Hello{ 0x0123456789ABCDEFull, 2, 3, 4 }, 37));
     CHECK(round_trips(Welcome{ 1, 2 }, 7));
     CHECK(round_trips(Welcome{ 3, 4 }, 7));
     CHECK(round_trips(Refuse{ Reason::rom }, 6));
@@ -59,9 +59,9 @@ int main() {
     CHECK(round_trips(Start{ 3 }, 6));
 
     // The layout: header, then little-endian fields.
-    const std::vector<uint8_t> hello = bytes_of(Hello{ 0x0807060504030201ull, 0, 0 });
+    const std::vector<uint8_t> hello = bytes_of(Hello{ 0x0807060504030201ull, 0, 0, 0x1112131415161718ull });
     CHECK(hello[0] == 'C' && hello[1] == 'N' && hello[2] == protocol_version && hello[3] == 0 && hello[4] == 1);
-    CHECK(hello[5] == 1 && hello[12] == 8);
+    CHECK(hello[5] == 1 && hello[12] == 8 && hello[29] == 0x18 && hello[36] == 0x11);
     const std::vector<uint8_t> inputs = bytes_of(some_inputs());
     CHECK(inputs[4] == 4 && inputs[5] == 2);                                    // kind, port
     CHECK(inputs[6] == 0xE8 && inputs[7] == 0x03 && inputs[8] == 0 && inputs[9] == 0);  // first read 1000

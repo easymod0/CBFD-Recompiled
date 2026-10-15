@@ -34,8 +34,8 @@
 // While the harness is used, the game runs on the runtime's virtual timeline (deterministic mode,
 // ultramodern/timeline.hpp): its clock, VIs, timers and task completions come at fixed points in its
 // progress, not when the host gets to them, so the same inputs give the same game. And the netplay
-// settings profile (profile.cpp) fixes the settings that change the game: no mods but texture packs
-// can be on.
+// settings profile (profile.cpp) fixes the settings that change the game. A recording or replay can't
+// have mods on but texture packs; a netplay match can, the same for everyone (the handshake checks).
 //
 // The recording: "CBFDPADS", then a little-endian u32 version (2) and u32 port count, u64 XXH3-64 of the
 // ROM and u64 hash of the settings profile, then for each read the number of controllers the game reads
@@ -692,7 +692,8 @@ void conker::harness::start(uint8_t* game_rdram) {
     const uint64_t profile_hash = hello.profile;
     std::printf("[harness] build %s: build %016llx, ROM %016llx, profile %016llx\n", conker::netplay::build_id(),
         (unsigned long long)hello.build, (unsigned long long)rom_hash, (unsigned long long)profile_hash);
-    bool can_go_on = conker::netplay_profile::check_mods();
+    // A match can have mods (everyone's the same: the handshake's mods hash); a recording or replay can't.
+    bool can_go_on = conker::lockstep::active() || conker::netplay_profile::check_mods();
     if (replay_rom_hash != 0 && replay_rom_hash != rom_hash) {
         std::fprintf(stderr, "[harness] %s was recorded with another ROM (%016llx; this one is %016llx)\n",
             replay_path.c_str(), (unsigned long long)replay_rom_hash, (unsigned long long)rom_hash);
