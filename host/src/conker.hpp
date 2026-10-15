@@ -67,6 +67,27 @@ namespace conker {
     std::unique_ptr<ultramodern::renderer::RendererContext> create_null_renderer(
         uint8_t* rdram, ultramodern::renderer::WindowHandle window_handle, bool developer_mode);
 
+#if defined(CONKER_NETPLAY)
+    // The determinism harness (netplay/harness.cpp): records and replays the game's inputs, and logs a
+    // hash of its memory at each controller read.
+    namespace harness {
+        // A command line option of the harness's, taking its value too (true if it was one).
+        bool parse_option(int argc, char** argv, int& i);
+        // Checks the options and opens the files, before the game starts (false: a message was printed).
+        bool prepare();
+        // Recording, replaying or hashing.
+        bool active();
+        // The game's entrypoint while active: it starts from an empty save.
+        void entrypoint(uint8_t* rdram, recomp_context* ctx);
+        void start(uint8_t* rdram);
+        void finish();
+        bool replaying();
+        // While recording, replaying or hashing, the game sees fixed controllers (--ports, no paks).
+        bool fixes_ports();
+        ultramodern::input::connected_device_info_t connected_device_info(int controller_num);
+    }
+#endif
+
 #if defined(CONKER_RT64)
     inline constexpr const char* program_name = "Conker's Bad Fur Day: Recompiled";
     // The data folder's name (%LOCALAPPDATA%\<id>). CONKER_TEST_PROFILE=1 gives test

@@ -809,6 +809,31 @@ index 5593172..a5c8c38 100644
  
  if (WIN32)
      add_compile_definitions(NOMINMAX)
+diff --git a/ultramodern/include/ultramodern/input.hpp b/ultramodern/include/ultramodern/input.hpp
+index 1dab1b8..22f09df 100644
+--- a/ultramodern/include/ultramodern/input.hpp
++++ b/ultramodern/include/ultramodern/input.hpp
+@@ -57,6 +57,20 @@ namespace ultramodern {
+         };
+ 
+         void set_callbacks(const callbacks_t& callbacks);
++
++        // Called by osContGetReadData once it has filled in every controller's pad, as the game will read
++        // them (the N64's own values, after the analog sticks are converted), on the game thread that
++        // reads them. The host can see or replace what the game gets, e.g. to record and replay a game's
++        // inputs. `pads` points to MAXCONTROLLERS pads: those past what the game reads (osContSetCh) and
++        // controllers that didn't respond have a nonzero err_no.
++        struct Pad {
++            uint16_t button;
++            int8_t stick_x;
++            int8_t stick_y;
++            uint8_t err_no;
++        };
++        using read_data_callback_t = void(Pad* pads, int count);
++        void set_read_data_callback(read_data_callback_t* callback);
+     }
+ }
+ 
 diff --git a/ultramodern/include/ultramodern/save_states.hpp b/ultramodern/include/ultramodern/save_states.hpp
 new file mode 100644
 index 0000000..0c9078a
@@ -1144,6 +1169,63 @@ index 17d7a47..d4fb0de 100644
  void ultramodern::send_si_message() {
      ultramodern::enqueue_external_message_src(events_context.si.mq, events_context.si.msg, false, ultramodern::EventMessageSource::Si);
  }
+diff --git a/ultramodern/src/input.cpp b/ultramodern/src/input.cpp
+index 23228c7..97ed936 100644
+--- a/ultramodern/src/input.cpp
++++ b/ultramodern/src/input.cpp
+@@ -1,3 +1,4 @@
++#include <atomic>
+ #include <cassert>
+ #include <cmath>
+ 
+@@ -22,6 +23,12 @@ void ultramodern::input::set_callbacks(const callbacks_t& callbacks) {
+     input_callbacks = callbacks;
+ }
+ 
++static std::atomic<ultramodern::input::read_data_callback_t*> read_data_callback = nullptr;
++
++void ultramodern::input::set_read_data_callback(read_data_callback_t* callback) {
++    read_data_callback = callback;
++}
++
+ static std::chrono::high_resolution_clock::time_point input_poll_time;
+ 
+ static void update_poll_time() {
+@@ -162,6 +169,12 @@ void convert_to_n64_range(float x, float y, int8_t& stick_x, int8_t& stick_y) {
+ }
+ 
+ extern "C" void osContGetReadData(OSContPad *data) {
++    // The pads past what the game reads don't respond (the caller's buffer isn't cleared, and copies
++    // every pad that responded).
++    for (int controller = max_controllers; controller < MAXCONTROLLERS; controller++) {
++        data[controller] = {};
++        data[controller].err_no = CONT_NO_RESPONSE_ERROR; // CHNL_ERR_NORESP >> 4
++    }
+     for (int controller = 0; controller < max_controllers; controller++) {
+         uint16_t buttons = 0;
+         float x = 0.0f;
+@@ -181,6 +194,21 @@ extern "C" void osContGetReadData(OSContPad *data) {
+             data[controller].err_no =  CONT_NO_RESPONSE_ERROR; // CHNL_ERR_NORESP >> 4
+         }
+     }
++
++    ultramodern::input::read_data_callback_t* callback = read_data_callback.load();
++    if (callback != nullptr) {
++        ultramodern::input::Pad pads[MAXCONTROLLERS];
++        for (int controller = 0; controller < MAXCONTROLLERS; controller++) {
++            pads[controller] = { data[controller].button, data[controller].stick_x, data[controller].stick_y, data[controller].err_no };
++        }
++        callback(pads, max_controllers);
++        for (int controller = 0; controller < MAXCONTROLLERS; controller++) {
++            data[controller].button = pads[controller].button;
++            data[controller].stick_x = pads[controller].stick_x;
++            data[controller].stick_y = pads[controller].stick_y;
++            data[controller].err_no = pads[controller].err_no;
++        }
++    }
+ }
+ 
+ /* Rumble */
 diff --git a/ultramodern/src/mesgqueue.cpp b/ultramodern/src/mesgqueue.cpp
 index 9944a02..dc03182 100644
 --- a/ultramodern/src/mesgqueue.cpp

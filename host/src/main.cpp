@@ -275,6 +275,10 @@ namespace {
         // reads its id); have the runtime keep it pointing at the running thread.
         constexpr int32_t osRunningThread = 0x8002BE00;
         ultramodern::set_running_thread_variable(osRunningThread);
+
+#if defined(CONKER_NETPLAY)
+        conker::harness::start(rdram);
+#endif
     }
 
     RspUcodeFunc* get_rsp_microcode(const OSTask* task) {
@@ -314,6 +318,11 @@ namespace {
 }
 
 ultramodern::input::connected_device_info_t conker::get_connected_device_info(int controller_num) {
+#if defined(CONKER_NETPLAY)
+    if (conker::harness::fixes_ports()) {
+        return conker::harness::connected_device_info(controller_num);
+    }
+#endif
 #if defined(CONKER_RT64)
     if (!headless) {
         return conker::frontend::get_connected_device_info(controller_num);
@@ -438,6 +447,10 @@ int main(int argc, char** argv) {
         else if (std::strcmp(argv[i], "--headless") == 0) {
             headless = true;
         }
+#if defined(CONKER_NETPLAY)
+        else if (conker::harness::parse_option(argc, argv, i)) {
+        }
+#endif
 #if defined(CONKER_RT64)
         else if (std::strcmp(argv[i], "--window") == 0 && i + 1 < argc) {
             int width = 0, height = 0;
@@ -471,6 +484,13 @@ int main(int argc, char** argv) {
     std::filesystem::create_directories(recomp::get_config_path());
     // --seconds (test runs) starts the game directly instead of opening the launcher.
     bool start_directly = headless || seconds > 0;
+#if defined(CONKER_NETPLAY)
+    if (!conker::harness::prepare()) {
+        return EXIT_FAILURE;
+    }
+    // A replay starts the game directly too, from boot.
+    start_directly = start_directly || conker::harness::replaying();
+#endif
 
     recomp::GameEntry game{};
     game.rom_hash = conker::roms::us_rom_hash;
@@ -489,6 +509,11 @@ int main(int argc, char** argv) {
     game.decompression_routine = conker::decompress_rom;
     game.entrypoint_address = (gpr)(int32_t)0x80001000u;
     game.entrypoint = recomp_entrypoint;
+#if defined(CONKER_NETPLAY)
+    if (conker::harness::active()) {
+        game.entrypoint = conker::harness::entrypoint;
+    }
+#endif
     game.on_init_callback = on_init;
     game.thread_create_callback = on_thread_create;
 #if defined(CONKER_RT64)
@@ -554,6 +579,10 @@ int main(int argc, char** argv) {
     }
 
     recomp::start(cfg);
+
+#if defined(CONKER_NETPLAY)
+    conker::harness::finish();
+#endif
 
 #if defined(CONKER_RT64)
     if (!headless) {

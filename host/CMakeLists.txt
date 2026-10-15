@@ -24,6 +24,9 @@ set(CMAKE_C_STANDARD 11)
 
 # OFF builds a headless host (null renderer, no input or sound), for tests.
 option(CONKER_RT64 "Render with RT64 in an SDL window" ON)
+# Netplay (issue #126), off until it has been reviewed and tested. So far: the determinism harness
+# (--record, --replay, --hash-log: src/netplay/harness.cpp).
+option(CONKER_NETPLAY "Build the netplay work in progress" OFF)
 
 set(REPO_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/..")
 set(RT64_DIR "${REPO_ROOT}/tools/rt64")
@@ -105,6 +108,11 @@ target_include_directories(ConkerRecomp PRIVATE
     "${REPO_ROOT}/RecompiledFuncs"
 )
 target_link_libraries(ConkerRecomp PRIVATE RecompiledFuncs librecomp ultramodern)
+
+if (CONKER_NETPLAY)
+    target_sources(ConkerRecomp PRIVATE src/netplay/harness.cpp)
+    target_compile_definitions(ConkerRecomp PRIVATE CONKER_NETPLAY)
+endif()
 
 if (CONKER_RT64)
     set(RT64_STATIC ON CACHE BOOL "" FORCE)
