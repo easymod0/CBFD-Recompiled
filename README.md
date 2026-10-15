@@ -51,8 +51,9 @@ yourself instead, read on.
 - **Conker's Detail** keeps Conker on his most detailed model, and **Show FPS**
   puts a frame rate counter in the corner.
 - Achievements, the program's own, for reaching the game's scenes.
-- ROM hacks that only change the game's assets, such as the uncensored and the
-  Russian translation ROMs, with the launcher switching between them.
+- ROM hacks that only change the game's assets, such as the uncensored ROM and the
+  Russian, German and Brazilian Portuguese translations, with the launcher switching
+  between them.
 - Mod support (`.nrm` mods: function patches and hooks). Three mods are
   included: **Skip Intro**, **Skip Any Cutscene** and **Cheats**.
 - Texture packs (RT64's `.rtz`, and GLideN64's `.htc` and `.hts`), for HD textures and
@@ -273,6 +274,19 @@ US ROM. The recompiled code only comes from the ROM's code, which has to be the 
 ROM's, so hacks that change the game's code are refused. A hack that repacks the
 game's compressed code without changing it, as the Russian fan translation does, is
 checked unpacked and plays too (**Version: US Russian**).
+
+The translations known by name, each a patch you apply to your own US ROM (none is
+included here):
+
+- **US Russian**, the Russian fan translation.
+- **US German**, [ConkerDeutschMod](https://github.com/niehoff90/ConkerDeutschMod) 0.2.0,
+  German voices and text.
+- **US Brazilian Portuguese** and **US Brazilian Portuguese Uncensored**, the
+  translation by João13, Mumm-Ra and By FTR (1.0.1). Its own boot screen isn't shown:
+  the recompiled game doesn't run the ROM's boot code, and the rest plays as it is.
+
+Other versions of these, or other hacks of the US ROM's assets, play too, listed as
+**US ROM hack** with the start of their hash.
 
 The launcher's **Version** option says which ROM is in play, with its region (for
 example **Version: US Original** or **Version: US Uncensored**), and so does the
