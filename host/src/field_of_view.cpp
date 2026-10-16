@@ -26,7 +26,7 @@
 // player's own setting instead, sent with their input for each read (their Controls, netplay/motion.cpp):
 // it changes the game's memory (its culls, the aiming's zoom), so every machine applies every player's
 // the same way. The settings menus' own value isn't read then (the netplay profile, look_aim.cpp).
-// How far each camera has eased is kept in save states (host_state.cpp).
+// How far each camera has eased, and what its last update widened, are kept in save states (host_state.cpp).
 
 #include <algorithm>
 #include <cmath>
@@ -149,16 +149,30 @@ void conker::field_of_view::adjust_cull_scales(uint8_t* rdram, uint64_t camera_a
     }
 }
 
+// Each camera's easing, and its fields of view and widening as its last update left them: the cull scales are
+// worked out from those when the camera is drawn (adjust_cull_scales), which a state can fall between.
+namespace {
+    constexpr size_t fov_state_words = (sizeof(widening) + sizeof(game_fov) + sizeof(widened)) / 4;
+}
+
 std::vector<uint32_t> conker::field_of_view::state() {
-    std::vector<uint32_t> words(fov_cameras);
-    std::memcpy(words.data(), widening, sizeof(widening));
+    std::vector<uint32_t> words(fov_state_words);
+    uint8_t* at = (uint8_t*)words.data();
+    std::memcpy(at, widening, sizeof(widening));
+    std::memcpy(at + sizeof(widening), game_fov, sizeof(game_fov));
+    std::memcpy(at + sizeof(widening) + sizeof(game_fov), widened, sizeof(widened));
     return words;
 }
 
 void conker::field_of_view::set_state(const std::vector<uint32_t>& words) {
-    if (words.size() != fov_cameras) {
+    if (words.size() != fov_state_words) {
         std::fill(std::begin(widening), std::end(widening), 1.0f);
+        for (auto& fov : game_fov) fov[0] = fov[1] = 0.0f;
+        for (auto& w : widened) w[0] = w[1] = 1.0f;
         return;
     }
-    std::memcpy(widening, words.data(), sizeof(widening));
+    const uint8_t* at = (const uint8_t*)words.data();
+    std::memcpy(widening, at, sizeof(widening));
+    std::memcpy(game_fov, at + sizeof(widening), sizeof(game_fov));
+    std::memcpy(widened, at + sizeof(widening) + sizeof(game_fov), sizeof(widened));
 }

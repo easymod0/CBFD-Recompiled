@@ -739,20 +739,27 @@ int conker::mouse_camera::take_wheel_notches() {
 }
 
 // Each orbit's bytes, as words (the orbits are plain data).
+// The orbits' layout, first in their words: a change that keeps their size (a flag in the padding) would
+// otherwise load an older state's orbits shifted. 2: was_normal.
+namespace {
+    constexpr uint32_t orbit_layout = 2;
+}
+
 std::vector<uint32_t> conker::mouse_camera::state() {
     static_assert(std::is_trivially_copyable_v<Orbit>);
-    std::vector<uint32_t> words((sizeof(orbits) + 3) / 4);
-    std::memcpy(words.data(), orbits, sizeof(orbits));
+    std::vector<uint32_t> words(1 + (sizeof(orbits) + 3) / 4);
+    words[0] = orbit_layout;
+    std::memcpy(words.data() + 1, orbits, sizeof(orbits));
     return words;
 }
 
 void conker::mouse_camera::set_state(const std::vector<uint32_t>& words) {
     // Not this build's orbits (missing from an older state, or laid out otherwise): they start afresh.
-    if (words.size() != (sizeof(orbits) + 3) / 4) {
+    if (words.size() != 1 + (sizeof(orbits) + 3) / 4 || words[0] != orbit_layout) {
         for (Orbit& o : orbits) o = Orbit{};
         return;
     }
-    std::memcpy(orbits, words.data(), sizeof(orbits));
+    std::memcpy(orbits, words.data() + 1, sizeof(orbits));
 }
 
 // frontend.cpp, once SDL is up: listen for the scroll wheel.
