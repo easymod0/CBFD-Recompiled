@@ -55,9 +55,10 @@ extern "C" void conker_camera_depth_row(uint8_t* rdram, recomp_context* ctx) {
     if (((uint32_t)row & 0xFF800000u) != 0x80000000u) {
         return;
     }
-    // The frame's width (D_800BE620), within the row's room (the cameras' rows are 0x260 bytes apart).
-    constexpr int32_t row_pixels = 0x260 / 2;
-    const int32_t width = std::clamp((int32_t)MEM_W(0, (gpr)(int32_t)0x800BE620), (int32_t)0, row_pixels);
+    // As many pixels as the game made the row: func_15005290 allocates each camera's (D_800BE2B0, copied to
+    // +0x8BC as the camera starts) as the frame's width (D_800BE620, 292, set once) times 2 bytes, and the RDP's
+    // copy fills that much. (The 640 only keeps a broken width from writing far.)
+    const int32_t width = std::clamp((int32_t)MEM_W(0, (gpr)(int32_t)0x800BE620), (int32_t)0, (int32_t)640);
     for (int32_t x = 0; x < width; x++) {
         MEM_H(x * 2, row) = (int16_t)0xFFFC;
     }
