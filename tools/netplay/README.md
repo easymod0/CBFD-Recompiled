@@ -157,7 +157,8 @@ and, at the read where they first differ, the memory itself:
   told nothing else, so a stranger who finds the port can't take a place, or learn whether their build
   or ROM would have done. With the right key, the handshake refuses another build, ROM, settings
   profile or mods, a full or started match. A joiner has 3 s to say Hello, and the host takes at most 8
-  connections at once. Then each peer sends only its own port's pads and memory hashes, reliably (lost
+  connections at once. A joiner's Hello says how many players are on its machine, and it's given that many
+  of the lowest free ports (the host's players have the first). Then each peer sends only its own ports' pads and memory hashes, reliably (lost
   packets are resent: lockstep needs every input); Inputs and hashes before the start, beyond the reads
   a peer could have reached, or a hash repeated, drop the peer. The library closes a connection that
   sends a message bigger than the largest packet, and buffers little from each peer.
@@ -191,8 +192,16 @@ Each peer starts from boot with an empty save, on the timeline and with the sett
     ConkerRecomp --netplay-host 27015 --netplay-address 203.0.113.7 --players 2   (prints the join code)
     ConkerRecomp --netplay-join SC07-21V9-GW0J-6HB7-H6NW-VVTT                    (the host's code)
 
-The game waits at its start for every player. Each plays with their first controller, and the host
-has to forward its UDP port if it's behind a router.
+The game waits at its start for every player. The host has to forward its UDP port if it's behind a
+router.
+
+**More than one player on a machine.** `--local-players <n>` (1 to 3, hosting or joining; the menu's
+Players on this computer) puts n players on this machine, each with a port of their own: the lowest free
+ones, the host's from port 1 (so `--players 3 --local-players 2` on the host gives it players 1 and 2,
+and the one who joins is player 3). Each plays with this machine's controller of the same number: the
+frontend numbers the controllers in the order they first press a button, and the first has the keyboard,
+mouse and gyro too. A machine with more than one player shows the whole split screen, whatever the
+Screens rule (each of its players needs their view), while a machine with one still follows it.
 
 In a window, the launcher's **Netplay** menu (`host/src/netplay/menu.cpp`, #9) does the same: host
 (players, port, input delay, and the host's own address, from which it shows the join code to send once hosting) or
@@ -212,14 +221,15 @@ copies against each other on this machine (`--data` gives each its own folder) a
 gets exactly the game a replay alone does (each copy's recording has the other's port scrambled, so it
 only does if the pads came over the network), with input delay 0 and `--jitter` on one side too; a
 3-player Deathmatch where everyone moves their mouse and aims, at the automatic delay (through the
-host's relay); and that a desync (`--netplay-desync-at <read>`) is caught. About 40 s.
+host's relay); the same match with two players on one copy (the host's, then a joiner's); and that a
+desync (`--netplay-desync-at <read>`) is caught. About 50 s.
 
 ## The scripts
 
 | Script | |
 |---|---|
 | `check.sh` | the determinism check: replays a made-up recording headless twice, with `--jitter` and with `--state-test`, and fails unless all four give the same hashes (about 30 s; the CI runs it, `.github/workflows/netplay.yml`) |
-| `lockstep.sh` | the lockstep check: copies in a match over loopback give the same game as a replay alone (2 players, and 3 with the mouse), and a desync is caught (about 40 s) |
+| `lockstep.sh` | the lockstep check: copies in a match over loopback give the same game as a replay alone (2 players, 3 with the mouse, and 3 with two on one copy), and a desync is caught (about 50 s) |
 | `compare_hashes.py` | the first read two hash logs differ at (it exits 1 if they differ); with dumps, the ranges that differ, by data symbol |
 | `make_match.py` | a recording that plays from boot into a multiplayer match (`--mode`, `--players`, `--variant`, `--pause`; `--mouse` has everyone move, aim and use their mouse and gyro), the same every time: for looking at multiplayer (split screen, "my view only") without the menus |
 | `shot.sh` | replays a recording in a window as fast as it goes and saves a screenshot of its end (X11; `SDL_VIDEODRIVER=x11` under Wayland), e.g. `make_match.py heist.pads --mode heist && shot.sh heist.pads heist.png --my-view-only` |

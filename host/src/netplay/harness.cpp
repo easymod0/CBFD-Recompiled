@@ -369,23 +369,28 @@ namespace {
                  (int16_t)(m[6] | (m[7] << 8)), (int8_t)m[8], (uint16_t)(m[9] | (m[10] << 8)) };
     }
 
-    // Lockstep's source of this peer's own input (lockstep.hpp): a replay's for this port, or the first
-    // controller's and this machine's mouse and gyro; nobody's playing before the first read, or past a
-    // replay's end.
-    conker::lockstep::Input local_input(uint64_t for_read, const ultramodern::input::Pad* live) {
+    // Lockstep's source of the input of this machine's player `local` (lockstep.hpp): a replay's for their
+    // port, or this machine's controller of the same number (the frontend gives the controllers ports 1 to 4
+    // here in the order they first press a button); the first player has the mouse and gyro too. Nobody's
+    // playing before the first read, or past a replay's end.
+    conker::lockstep::Input local_input(uint64_t for_read, const ultramodern::input::Pad* live, int local) {
         if (!replay.empty()) {
             if (for_read >= replay_reads) {
                 return { {}, still() };
             }
-            conker::netplay::Pad pad = replay_pad(for_read, conker::lockstep::port());
+            const int port = conker::lockstep::port_of_local(local);
+            conker::netplay::Pad pad = replay_pad(for_read, port);
             pad.err_no = 0;
-            return { pad, replay_motion_of(for_read, conker::lockstep::port()) };
+            return { pad, replay_motion_of(for_read, port) };
         }
         if (live == nullptr) {
             return { {}, still(conker::motion::local_controls()) };
         }
-        conker::lockstep::Input input{ { live[0].button, live[0].stick_x, live[0].stick_y, 0 }, {} };
-        conker::motion::capture(input.motion);
+        conker::lockstep::Input input{ { live[local].button, live[local].stick_x, live[local].stick_y, 0 },
+            still(conker::motion::local_controls()) };
+        if (local == 0) {
+            conker::motion::capture(input.motion);
+        }
         return input;
     }
 

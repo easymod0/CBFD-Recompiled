@@ -4,6 +4,7 @@
 #include "join_code.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cstdio>
 
@@ -154,9 +155,13 @@ namespace conker::netplay {
         current = nullptr;
     }
 
-    bool Session::host(uint16_t port, int players, const Hello& me, std::string& error) {
+    bool Session::host(uint16_t port, int players, const Hello& me, std::string& error, int local) {
         if (players < 2 || players > max_players) {
             error = "a match is 2 to 4 players";
+            return false;
+        }
+        if (local < 1 || local >= players) {
+            error = "a match needs a player on another machine";
             return false;
         }
         hello = me;
@@ -175,7 +180,7 @@ namespace conker::netplay {
         }
         poll_group = SteamNetworkingSockets()->CreatePollGroup();
         is_host = true;
-        own_port = 0;
+        own_ports = (uint8_t)((1u << local) - 1);
         match_players = players;
         return true;
     }
@@ -205,13 +210,16 @@ namespace conker::netplay {
         is_host = false;
         hello = me;
         hello.key = endpoint->key;
-        peers.push_back({ connection, 0, now() });  // the host, on port 0
+        peers.push_back({ connection, 0, 0, now() });  // the host, from port 0
         return true;
     }
 
     bool Session::start(bool own_view, int delay) {
-        const int joined = (int)std::count_if(peers.begin(), peers.end(), [](const Peer& p) { return p.port >= 0; });
-        if (!is_host || !entry_open || joined + 1 != match_players || delay < 0 || delay > max_delay) {
+        int taken = std::popcount(own_ports);
+        for (const Peer& peer : peers) {
+            taken += std::popcount(peer.ports);
+        }
+        if (!is_host || !entry_open || taken != match_players || delay < 0 || delay > max_delay) {
             return false;
         }
         entry_open = false;
@@ -264,7 +272,7 @@ namespace conker::netplay {
                         return;
                     }
                     sockets->SetConnectionPollGroup(info->m_hConn, poll_group);
-                    peers.push_back({ info->m_hConn, -1, now() });
+                    peers.push_back({ info->m_hConn, -1, 0, now() });
                 }
                 break;
             case k_ESteamNetworkingConnectionState_Connected:
@@ -281,6 +289,7 @@ namespace conker::netplay {
                 }
                 Event event{ is_host ? Event::Type::left : Event::Type::ended };
                 event.port = peer->port;
+                event.ports = peer->ports;
                 event.reason = reason_of(info->m_info);
                 // The peer's own words, for the log: printable characters only.
                 for (const char* c = info->m_info.m_szEndDebug; *c != '\0'; c++) {
@@ -365,14 +374,20 @@ namespace conker::netplay {
                 else if (theirs->profile != hello.profile) refusal = Reason::profile;
                 else if (theirs->mods != hello.mods) refusal = Reason::mods;
                 else if (!entry_open) refusal = Reason::started;
-                int port = -1;
+                // The lowest free ports, one for each of its players.
+                uint8_t ports = 0;
                 if (!refusal) {
-                    for (int p = 1; p < match_players && port < 0; p++) {
-                        if (std::none_of(peers.begin(), peers.end(), [p](const Peer& o) { return o.port == p; })) {
-                            port = p;
+                    uint8_t taken = own_ports;
+                    for (const Peer& other : peers) {
+                        taken |= other.ports;
+                    }
+                    for (int p = 0, wanted = theirs->players; p < match_players && wanted > 0; p++) {
+                        if ((taken & (1u << p)) == 0) {
+                            ports |= (uint8_t)(1u << p);
+                            wanted--;
                         }
                     }
-                    if (port < 0) refusal = Reason::full;
+                    if (std::popcount(ports) != theirs->players) refusal = Reason::full;
                 }
                 if (refusal) {
                     send_to(peer.connection, Refuse{ *refusal });
@@ -381,10 +396,12 @@ namespace conker::netplay {
                     peers.erase(peers.begin() + (&peer - peers.data()));
                     return;
                 }
-                peer.port = port;
-                send_to(peer.connection, Welcome{ (uint8_t)port, (uint8_t)match_players });
+                peer.port = std::countr_zero(ports);
+                peer.ports = ports;
+                send_to(peer.connection, Welcome{ ports, (uint8_t)match_players });
                 Event event{ Event::Type::joined };
-                event.port = port;
+                event.port = peer.port;
+                event.ports = ports;
                 event.players = match_players;
                 events.push_back(std::move(event));
                 return;
@@ -407,7 +424,7 @@ namespace conker::netplay {
                 }
                 peer.last_hash = hash->read;
             }
-            if (inputs != nullptr && inputs->port == peer.port) {
+            if (inputs != nullptr && (peer.ports & (1u << inputs->port)) != 0) {
                 // Passed on to the others, as they only connect to the host.
                 for (const Peer& other : peers) {
                     if (other.port >= 0 && other.connection != peer.connection) {
@@ -418,6 +435,7 @@ namespace conker::netplay {
             else if (const Bye* bye = std::get_if<Bye>(&packet)) {
                 Event event{ Event::Type::left };
                 event.port = peer.port;
+                event.ports = peer.ports;
                 event.reason = bye->reason;
                 SteamNetworkingSockets()->CloseConnection(peer.connection, 0, nullptr, false);
                 peers.erase(peers.begin() + (&peer - peers.data()));
@@ -436,12 +454,14 @@ namespace conker::netplay {
         }
 
         // A joiner, from the host.
-        if (own_port < 0) {
-            if (const Welcome* welcome = std::get_if<Welcome>(&packet)) {
-                own_port = welcome->port;
+        if (own_ports == 0) {
+            const Welcome* welcome = std::get_if<Welcome>(&packet);
+            if (welcome != nullptr && std::popcount(welcome->ports) == hello.players) {
+                own_ports = welcome->ports;
                 match_players = welcome->players;
                 Event event{ Event::Type::welcomed };
-                event.port = own_port;
+                event.port = std::countr_zero(own_ports);
+                event.ports = own_ports;
                 event.players = match_players;
                 events.push_back(std::move(event));
             }
@@ -470,7 +490,7 @@ namespace conker::netplay {
             events.push_back(std::move(event));
         }
         else if (const Inputs* inputs = std::get_if<Inputs>(&packet); inputs != nullptr) {
-            if (!started || inputs->port == own_port || inputs->port >= match_players ||
+            if (!started || (own_ports & (1u << inputs->port)) != 0 || inputs->port >= match_players ||
                 (uint64_t)inputs->first_read + inputs->count > horizon) {
                 drop(peer, Reason::protocol, &events);
                 return;
@@ -511,6 +531,7 @@ namespace conker::netplay {
         if (events != nullptr && (!is_host || peer.port >= 0)) {
             Event event{ is_host ? Event::Type::left : Event::Type::ended };
             event.port = peer.port;
+            event.ports = peer.ports;
             event.reason = reason;
             events->push_back(std::move(event));
         }

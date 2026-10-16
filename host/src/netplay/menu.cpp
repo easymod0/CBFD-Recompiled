@@ -62,6 +62,7 @@ namespace {
         recompui::Button* join_button = nullptr;
         recompui::Button* cancel_button = nullptr;
         int players = 2;
+        int local_players = 1;              // the players on this computer, hosting or joining
         bool hosting = false;               // a match is hosted (connecting, as the host)
         bool own_view_for_everyone = true;  // hosting: the match's screens rule
         int input_delay = -1;               // hosting: reads, or -1 for auto
@@ -168,7 +169,12 @@ namespace {
                 set_state(State::idle, "Give your address first: the join code is made from it.");
                 return;
             }
-            conker::lockstep::set_host(port, players, own_view_for_everyone, input_delay);
+            if (local_players >= players) {
+                set_state(State::idle, "With " + std::to_string(local_players) + " players on this computer, the match needs " +
+                    std::to_string(local_players + 1) + " or more players: someone has to join.");
+                return;
+            }
+            conker::lockstep::set_host(port, players, own_view_for_everyone, input_delay, local_players);
             hosting = true;
             begin();
             show_code();
@@ -179,7 +185,7 @@ namespace {
                 set_state(State::idle, "Type the host's join code first.");
                 return;
             }
-            conker::lockstep::set_join(join_text);
+            conker::lockstep::set_join(join_text, local_players);
             begin();
         }
 
@@ -240,9 +246,22 @@ namespace {
             text(intro, "Netplay", Typography::Header3);
             text(intro, "Play multiplayer over the internet: everyone runs the game, and every player's controller "
                 "is passed to the others. Everyone needs this same build and the same ROM, with no mods on (texture "
-                "packs are fine). You play with your first controller; the game starts from the "
-                "beginning, with an empty save.",
+                "packs are fine). The game starts from the beginning, with an empty save.",
                 Typography::Body, color::TextDim);
+
+            // Who plays on this computer, hosting or joining.
+            recompui::Element* here = column(this, 12.0f);
+            recompui::Element* here_row = row(here);
+            text(here_row, "Players on this computer", Typography::LabelMD);
+            recompui::Radio* here_radio = context.create_element<recompui::Radio>(here_row);
+            for (int n = 1; n < conker::netplay::max_players; n++) {
+                here_radio->add_option(std::to_string(n));
+            }
+            here_radio->set_index(0);
+            here_radio->add_index_changed_callback([this](uint32_t index) { local_players = 1 + (int)index; });
+            text(here, "Each player here plays with their own controller, in the order the controllers first press a "
+                "button (the first has the keyboard and mouse too), and gets the next player number in the match. With "
+                "more than one, this computer shows the whole split screen.", Typography::Body, color::TextDim);
 
             // Hosting.
             recompui::Element* host = column(this, 12.0f);

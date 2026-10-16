@@ -8,6 +8,9 @@
 // rule can't be enforced against a modified build (every machine draws every view); it keeps honest players
 // on the same footing.
 //
+// A machine with more than one player on it (lockstep.hpp's --local-players) shows the whole split screen,
+// whatever the choice or the rule: each of its players needs their own view.
+//
 // While the game is paused its menu is drawn over the whole split screen, so the picture is left as the game
 // draws it (the pause counter D_80082F90, widescreen.cpp).
 //
@@ -79,7 +82,8 @@ void conker::netplay_view::game_frame(uint8_t* rdram) {
     const int32_t frame_width = MEM_W(0, frame_width_address);
     // The player's choice, or the match's rule (the host's) that everyone sees only their own view.
     const bool wanted = mine_only || conker::lockstep::own_view_for_everyone();
-    if (!wanted || !(in_match || conker::harness::replaying()) || port < 0 || cameras < 0x80000000u || cameras >= 0x80800000u ||
+    const bool shared_screen = in_match && conker::lockstep::local_players() > 1;
+    if (!wanted || shared_screen || !(in_match || conker::harness::replaying()) || port < 0 || cameras < 0x80000000u || cameras >= 0x80800000u ||
         frame_width < 16 || frame_width > 640) {
         show(0, 0, 1, 1, frame_width);
         return;

@@ -2,8 +2,10 @@
 // code that parses what arrives from the network; fuzz_packets.cpp fuzzes it.
 //
 // Each packet: "CN", u16 protocol version, u8 kind, then (all little-endian):
-//   1 Hello    u64 build, u64 rom, u64 profile, u64 mods, u64 key                     45 bytes
-//   2 Welcome  u8 port (< players), u8 players (2 to 4)                                7 bytes
+//   1 Hello    u64 build, u64 rom, u64 profile, u64 mods, u64 key,                    46 bytes
+//              u8 players (1 to 3)
+//   2 Welcome  u8 ports (bits: some, none at or past players, not port 0),             7 bytes
+//              u8 players (2 to 4)
 //   3 Refuse   u8 reason                                                               6 bytes
 //   4 Inputs   u8 port (< 4), u32 first read, u8 count (1 to 8), 8 pads of 5 bytes  139 bytes
 //              (u16 buttons, s8 stick x, s8 stick y, u8 err_no), then 8 motions of 11
@@ -28,7 +30,7 @@ namespace conker::netplay {
 
         constexpr size_t size_of(uint8_t kind) {
             switch (kind) {
-                case hello: return header_size + 40;
+                case hello: return header_size + 41;
                 case welcome: return header_size + 2;
                 case refuse: return header_size + 1;
                 case inputs: return header_size + 6 + input_window * (pad_size + motion_size);
@@ -46,11 +48,12 @@ namespace conker::netplay {
 
         // Each kind's fields (plain overloads: MSVC misreads `p.count < 1 || p.count > n` in a generic
         // lambda as a template's arguments).
-        bool valid_fields(const Hello&) {
-            return true;
+        bool valid_fields(const Hello& p) {
+            return p.players >= 1 && p.players < max_players;
         }
         bool valid_fields(const Welcome& p) {
-            return p.players >= 2 && p.players <= max_players && p.port < p.players;
+            return p.players >= 2 && p.players <= max_players && p.ports != 0 && (p.ports & 1) == 0 &&
+                (p.ports >> p.players) == 0;
         }
         bool valid_fields(const Refuse& p) {
             return valid_reason(p.reason);
@@ -141,9 +144,10 @@ namespace conker::netplay {
                 w.u64(p.profile);
                 w.u64(p.mods);
                 w.u64(p.key);
+                w.u8(p.players);
             }
             else if constexpr (std::is_same_v<T, Welcome>) {
-                w.u8(p.port);
+                w.u8(p.ports);
                 w.u8(p.players);
             }
             else if constexpr (std::is_same_v<T, Refuse> || std::is_same_v<T, Bye>) {
@@ -200,12 +204,13 @@ namespace conker::netplay {
                 p.profile = r.u64();
                 p.mods = r.u64();
                 p.key = r.u64();
+                p.players = r.u8();
                 packet = p;
                 break;
             }
             case welcome: {
                 Welcome p;
-                p.port = r.u8();
+                p.ports = r.u8();
                 p.players = r.u8();
                 packet = p;
                 break;

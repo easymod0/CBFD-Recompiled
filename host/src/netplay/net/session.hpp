@@ -8,11 +8,12 @@
 // The handshake: a joiner sends Hello (the match's key, then build, ROM, settings profile and mods
 // hashes) within 3 s. The host closes a wrong key at once, telling it nothing
 // else; then it refuses any other difference, or a full or started match, and otherwise gives it the
-// lowest free port (the host is port 0) with Welcome. Once every port is taken, the host starts the match
-// (Start: with the input delay). Then each peer sends its own port's pads and
+// lowest free ports, one for each player on its machine (the Hello says how many; the host's players have
+// the first ports, from 0), with Welcome. Once every port is taken, the host starts the match
+// (Start: with the input delay). Then each peer sends its own ports' pads and
 // movement (Inputs) and memory hashes (Hash) to the host, which passes Inputs on to the others: the host is
-// the hub, so joiners only ever connect to it. A peer that sends anything else (another port's inputs, a
-// second Hello) is dropped.
+// the hub, so joiners only ever connect to it. A peer that sends anything else (another peer's port's
+// inputs, a second Hello) is dropped.
 //
 // Single-threaded: call poll() often (each controller read, or in a loop) from one thread; it runs the
 // library's callbacks and returns what happened.
@@ -29,15 +30,16 @@
 namespace conker::netplay {
     struct Event {
         enum class Type {
-            joined,     // host: a joiner passed the handshake, on `port`
-            welcomed,   // joiner: accepted, on `port`, in a match of `players`
+            joined,     // host: a joiner passed the handshake, on `ports`
+            welcomed,   // joiner: accepted, on `ports`, in a match of `players`
             started,    // joiner: every port is taken and the match starts
             packet,     // `packet` arrived (Inputs or Hash), from `port`'s peer (via the host for a joiner)
-            left,       // host: `port`'s peer left or was dropped, for `reason`
+            left,       // host: the peer on `ports` left or was dropped, for `reason`
             ended,      // joiner: refused, or the connection to the host ended, for `reason`
         };
         Type type;
-        int port = -1;
+        int port = -1;          // the peer's first port (packet: the Inputs' port, for a joiner)
+        uint8_t ports = 0;      // joined, welcomed, left: the peer's ports (bit n: port n)
         int players = 0;
         bool own_view = false;  // started: the host's rule that every player sees only their own view
         int delay = 0;          // started: the match's input delay
@@ -61,12 +63,13 @@ namespace conker::netplay {
         Session(const Session&) = delete;
         Session& operator=(const Session&) = delete;
 
-        // Hosts a match of `players` (2 to 4) on UDP `port`, on every local address, with a new random key.
-        bool host(uint16_t port, int players, const Hello& me, std::string& error);
+        // Hosts a match of `players` (2 to 4) on UDP `port`, on every local address, with a new random key;
+        // `local` of them (fewer than `players`) play on this machine, on the first ports.
+        bool host(uint16_t port, int players, const Hello& me, std::string& error, int local = 1);
         // Host: the join code for this match at `address` (the host's, as the others reach it), or empty
         // if it isn't an address and port.
         std::string join_code(const std::string& address) const;
-        // Joins the host by its join code (`me`'s key is the code's).
+        // Joins the host by its join code (`me`'s key is the code's; its players, this machine's).
         bool join(const std::string& code, const Hello& me, std::string& error);
         // Host: once every port is taken (false until then), starts the match: tells the joiners, and
         // refuses any more. `own_view`: every player sees only their own view (the match's rule); `delay`:
@@ -79,7 +82,7 @@ namespace conker::netplay {
         // What has happened since the last poll.
         std::vector<Event> poll();
 
-        // This peer's own port's pads (a joiner's go to the host, the host's to everyone).
+        // One of this peer's own ports' pads (a joiner's go to the host, the host's to everyone).
         void send(const Inputs& inputs);
         // This peer's memory hash (a joiner's go to the host, the host's to everyone).
         void send(const Hash& hash);
@@ -92,13 +95,14 @@ namespace conker::netplay {
         void set_horizon(uint64_t reads) { horizon = reads; }
 
         bool hosting() const { return is_host; }
-        int port() const { return own_port; }
+        uint8_t ports() const { return own_ports; }
         int players() const { return match_players; }
 
     private:
         struct Peer {
             uint32_t connection = 0;
-            int port = -1;          // -1 until the handshake is done
+            int port = -1;          // its first port; -1 until the handshake is done
+            uint8_t ports = 0;      // all of them (bit n: port n)
             double connected_at = 0;
             int64_t last_hash = -1; // the read of the last Hash from it (one per read, in order)
         };
@@ -113,7 +117,7 @@ namespace conker::netplay {
         bool is_host = false;
         bool entry_open = true;
         bool started = false;       // joiner: Start has arrived
-        int own_port = -1;
+        uint8_t own_ports = 0;      // joiner: 0 until welcomed
         int match_players = 0;
         uint64_t horizon = 64;
         Hello hello;

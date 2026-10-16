@@ -51,9 +51,11 @@ namespace {
 
 int main() {
     // Each kind, at its documented size.
-    CHECK(round_trips(Hello{ 0x0123456789ABCDEFull, 2, 3, 4, 5 }, 45));
-    CHECK(round_trips(Welcome{ 1, 2 }, 7));
-    CHECK(round_trips(Welcome{ 3, 4 }, 7));
+    CHECK(round_trips(Hello{ 0x0123456789ABCDEFull, 2, 3, 4, 5 }, 46));
+    CHECK(round_trips(Hello{ 1, 2, 3, 4, 5, 3 }, 46));
+    CHECK(round_trips(Welcome{ 0x02, 2 }, 7));
+    CHECK(round_trips(Welcome{ 0x08, 4 }, 7));
+    CHECK(round_trips(Welcome{ 0x0E, 4 }, 7));      // three players on one machine
     CHECK(round_trips(Refuse{ Reason::rom }, 6));
     CHECK(round_trips(some_inputs(), 139));
     CHECK(round_trips(Hash{ 4000000000u, 0xFEDCBA9876543210ull }, 17));
@@ -62,9 +64,9 @@ int main() {
     CHECK(round_trips(Start{ 4, 1, max_delay }, 8));
 
     // The layout: header, then little-endian fields.
-    const std::vector<uint8_t> hello = bytes_of(Hello{ 0x0807060504030201ull, 0, 0, 0x1112131415161718ull, 0x2122232425262728ull });
+    const std::vector<uint8_t> hello = bytes_of(Hello{ 0x0807060504030201ull, 0, 0, 0x1112131415161718ull, 0x2122232425262728ull, 2 });
     CHECK(hello[0] == 'C' && hello[1] == 'N' && hello[2] == protocol_version && hello[3] == 0 && hello[4] == 1);
-    CHECK(hello[5] == 1 && hello[12] == 8 && hello[29] == 0x18 && hello[36] == 0x11 && hello[37] == 0x28 && hello[44] == 0x21);
+    CHECK(hello[5] == 1 && hello[12] == 8 && hello[29] == 0x18 && hello[36] == 0x11 && hello[37] == 0x28 && hello[44] == 0x21 && hello[45] == 2);
     const std::vector<uint8_t> inputs = bytes_of(some_inputs());
     CHECK(inputs[4] == 4 && inputs[5] == 2);                                    // kind, port
     CHECK(inputs[6] == 0xE8 && inputs[7] == 0x03 && inputs[8] == 0 && inputs[9] == 0);  // first read 1000
@@ -77,9 +79,13 @@ int main() {
     CHECK(start.size() == 8 && start[5] == 2 && start[6] == 1 && start[7] == 3);
 
     // Out-of-range fields are neither sent nor accepted.
-    CHECK(bytes_of(Welcome{ 2, 2 }).empty());       // port not below players
-    CHECK(bytes_of(Welcome{ 0, 1 }).empty());       // players below 2
-    CHECK(bytes_of(Welcome{ 0, 5 }).empty());       // players above 4
+    CHECK(bytes_of(Welcome{ 0x04, 2 }).empty());    // a port not below players
+    CHECK(bytes_of(Welcome{ 0x03, 3 }).empty());    // the host's port 0
+    CHECK(bytes_of(Welcome{ 0, 3 }).empty());       // no port
+    CHECK(bytes_of(Welcome{ 0x02, 1 }).empty());    // players below 2
+    CHECK(bytes_of(Welcome{ 0x02, 5 }).empty());    // players above 4
+    CHECK(bytes_of(Hello{ 1, 2, 3, 4, 5, 0 }).empty());  // nobody playing on the joiner
+    CHECK(bytes_of(Hello{ 1, 2, 3, 4, 5, 4 }).empty());  // nobody left for the host
     CHECK(bytes_of(Start{ 1 }).empty());
     CHECK(bytes_of(Start{ 5 }).empty());
     CHECK(bytes_of(Start{ 2, 2 }).empty());          // own view is 0 or 1
@@ -119,8 +125,11 @@ int main() {
     CHECK(!bytes_of(bad).empty());
 
     // The same, arriving as bytes.
-    std::vector<uint8_t> data = bytes_of(Welcome{ 1, 2 });
-    data[5] = 2;
+    std::vector<uint8_t> data = bytes_of(Welcome{ 0x02, 2 });
+    data[5] = 0x03;
+    CHECK(!decodes(data));
+    data = hello;
+    data[45] = 4;
     CHECK(!decodes(data));
     data = bytes_of(Bye{ Reason::quit });
     data[5] = 0;
