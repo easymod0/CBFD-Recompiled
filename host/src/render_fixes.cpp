@@ -135,9 +135,13 @@ extern "C" void conker_depth_copy_probes(uint8_t* rdram, recomp_context* ctx) {
 // put them side by side. At the title it hadn't (another block between them): the limit was 11830 for
 // lists of 6400 commands, so a list could run past its end with nothing to stop it.
 //
-// So each list gets half the budget again (at least 1000 commands: 32-64KB of the heap, which has
-// some 850KB free in a level), and the limit is the list's own size less 800 (twice the game's room
-// for what's drawn unchecked, for the interpolation's groups among it).
+// So each list gets half the budget again, at least 1000 commands and at most 4000 (8-32KB each of the
+// heap, which has some 850KB free in a story level), and the limit is the list's own size less 800
+// (twice the game's room for what's drawn unchecked, for the interpolation's groups among it). The
+// multiplayer arenas' budgets are far larger (14400 to 26400 commands, against 6400 to 8400 in the
+// story), and their heap is tighter: half again of those, some 200KB for the two lists, ran the heap
+// out in Tank and Heist, which stopped the game (its allocator's fatal error, 0x0C000042, a syscall at
+// 0x150AD770), hence the cap.
 
 namespace {
     constexpr uint32_t scene_data = 0x800B0DF0;      // D_800B0DF0: the scene's data
@@ -153,7 +157,7 @@ namespace {
     uint32_t list_commands(uint8_t* rdram) {
         const uint32_t game = game_list_commands(rdram);
         const uint32_t budget = game > display_list_room ? game - display_list_room : 0;
-        return game + std::max<uint32_t>(budget / 2, 1000);
+        return game + std::clamp<uint32_t>(budget / 2, 1000, 4000);
     }
 }
 
