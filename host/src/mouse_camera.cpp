@@ -181,6 +181,7 @@ namespace {
         bool c_turning = false;         // C-left or C-right held when func_1512D390 ran
         bool turned = false;            // the mouse and wheel were read since the last view
         bool moved = false;             // and they moved
+        bool was_normal = false;        // last frame's update was the normal camera (field_of_view.cpp)
         bool has_target = false;        // target and next_target hold eyes the orbit wanted
         float target[3] = {};           // the eye the orbit wanted last frame
         float next_target[3] = {};      // this frame's, kept as target once the frame ends
@@ -338,6 +339,10 @@ bool conker::mouse_camera::stick_turns_camera() {
 
 bool conker::mouse_camera::normal_camera() {
     return was_normal_camera;
+}
+
+bool conker::mouse_camera::normal_camera_of(int player) {
+    return player >= 0 && player < orbit_count && orbits[player].was_normal;
 }
 
 namespace {
@@ -657,6 +662,7 @@ extern "C" void conker_mouse_camera(uint8_t* rdram, recomp_context* ctx) {
         was_normal_camera = orbit.follow_camera_ran && !orbit.look_mode_ran;
         stick_owns_camera = was_normal_camera && stick_turns_camera_setting();
     }
+    orbit.was_normal = orbit.follow_camera_ran && !orbit.look_mode_ran;
     // The eye wanted this frame, to tell next frame how far the orbit itself moved.
     orbit.has_target = orbit.engaged;
     std::memcpy(orbit.target, orbit.next_target, sizeof(orbit.target));

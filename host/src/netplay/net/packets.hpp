@@ -18,7 +18,7 @@
 
 namespace conker::netplay {
     // Changes whenever any packet's layout or meaning does: peers with another one are refused.
-    constexpr uint16_t protocol_version = 6;
+    constexpr uint16_t protocol_version = 7;
     // The game's controller ports.
     constexpr int max_players = 4;
     // The most reads an Inputs packet carries: a peer catching up can send several at once. (Inputs are
@@ -37,12 +37,16 @@ namespace conker::netplay {
         uint8_t err_no = 0;
         bool operator==(const Pad&) const = default;
     };
-    // A player's settings that change what their mouse, gyro and stick do in the game (motion.cpp): each
-    // machine applies every player's own. The bits: 0 mouse Direct, 1 gyro Direct, 2 stick Direct, 3 the
-    // mouse doesn't turn the camera, 4-5 mouse invert, 6-7 gyro invert, 8-9 stick invert (0 None, 1 X,
-    // 2 Y, 3 both); the rest zero, or the packet is refused.
+    // A player's settings that change what their mouse, gyro, stick and camera do in the game (motion.cpp,
+    // field_of_view.cpp): each machine applies every player's own. The bits: 0 mouse Direct, 1 gyro Direct,
+    // 2 stick Direct, 3 the mouse doesn't turn the camera, 4-5 mouse invert, 6-7 gyro invert, 8-9 stick
+    // invert (0 None, 1 X, 2 Y, 3 both), 10-15 their camera's field of view: 0 the game's own, 1 to
+    // fov_codes for 35 to 80 degrees (34 + the code); a code past that, and the packet is refused.
     using Controls = uint16_t;
-    constexpr Controls controls_mask = 0x03FF;
+    constexpr Controls controls_mask = 0x03FF;  // the bits besides the field of view
+    constexpr int fov_shift = 10;
+    constexpr int fov_codes = 46;
+    constexpr bool valid_controls(Controls c) { return (c >> fov_shift) <= fov_codes; }
     // One controller read's mouse and gyro movement for one player, beside their pad: what moved since their
     // previous read, already scaled by their sensitivity (motion.cpp), in fixed point so every machine
     // gives the game exactly the same. The mouse in 1/8 pixel, gyro in halves of recompinput's unit, the

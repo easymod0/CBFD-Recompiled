@@ -230,7 +230,7 @@ namespace {
             }
             for (int port = 0; replay_motion && port < max_pads; port++) {
                 const uint8_t* m = replay.data() + replay_header + i * replay_read_size + 1 + max_pads * pad_size + port * motion_size;
-                if ((((uint16_t)(m[9] | (m[10] << 8))) & ~conker::netplay::controls_mask) != 0) {
+                if (!conker::netplay::valid_controls((uint16_t)(m[9] | (m[10] << 8)))) {
                     std::fprintf(stderr, "[harness] %s: read %llu: port %d's controls aren't any\n", replay_path.c_str(),
                         (unsigned long long)i, port + 1);
                     return false;

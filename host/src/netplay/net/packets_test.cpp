@@ -110,8 +110,11 @@ int main() {
     bad.motions[3].wheel = 1;                       // an unused motion that isn't zero
     CHECK(bytes_of(bad).empty());
     bad = some_inputs();
-    bad.motions[1].controls = 0x0400;               // a bit past controls_mask
+    bad.motions[1].controls = (fov_codes + 1) << fov_shift;  // a field of view past the codes
     CHECK(bytes_of(bad).empty());
+    bad = some_inputs();
+    bad.motions[1].controls = (fov_codes << fov_shift) | controls_mask;  // the last code, every other bit: fine
+    CHECK(!bytes_of(bad).empty());
     bad = some_inputs();
     bad.first_read = UINT32_MAX - 1;                // its last read past 2^32 - 1
     CHECK(bytes_of(bad).empty());
@@ -137,7 +140,7 @@ int main() {
     data[51 + 11 * 7] = 1;                          // motion 7, unused
     CHECK(!decodes(data));
     data = inputs;
-    data[51 + 11 * 1 + 10] = 0x04;                  // motion 1's controls: a bit past controls_mask
+    data[51 + 11 * 1 + 10] = (uint8_t)(((fov_codes + 1) << fov_shift) >> 8);  // motion 1's field of view: past the codes
     CHECK(!decodes(data));
     data = start;
     data[7] = max_delay + 1;

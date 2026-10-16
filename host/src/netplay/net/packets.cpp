@@ -8,7 +8,7 @@
 //   4 Inputs   u8 port (< 4), u32 first read, u8 count (1 to 8), 8 pads of 5 bytes  139 bytes
 //              (u16 buttons, s8 stick x, s8 stick y, u8 err_no), then 8 motions of 11
 //              (s16 mouse x, y, s16 gyro x, y, s8 wheel, u16 controls: only
-//              controls_mask's bits); the unused ones zero, and the last read not past
+//              valid_controls: a field of view code up to fov_codes); the unused ones zero, and the last read not past
 //              2^32 - 1
 //   5 Hash     u32 read, u64 hash                                                     17 bytes
 //   6 Bye      u8 reason                                                               6 bytes
@@ -61,7 +61,7 @@ namespace conker::netplay {
                 return false;
             }
             for (int i = 0; i < input_window; i++) {
-                if (i < p.count ? !valid(p.pads[i]) || (p.motions[i].controls & ~controls_mask) != 0
+                if (i < p.count ? !valid(p.pads[i]) || !valid_controls(p.motions[i].controls)
                                 : !(p.pads[i] == Pad{} && p.motions[i] == Motion{})) {
                     return false;
                 }

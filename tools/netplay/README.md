@@ -81,7 +81,9 @@ same headless or on another machine:
 
 - **Each player's own:** the mouse and gyro (R-Look, the aiming modes, the orbit camera) and the
   settings that change what they and the stick do there: each response (Smooth or Direct), each
-  invert, and Mouse: Turn the Camera (`host/src/netplay/motion.cpp`). A player's movement is part of
+  invert, and Mouse: Turn the Camera (`host/src/netplay/motion.cpp`); and Camera: Field of View, which
+  widens or narrows that player's camera (`host/src/field_of_view.cpp`: it changes the game's culls and
+  aiming, so every machine applies every player's own). A player's movement is part of
   their input for each controller read, like their pad: every poll's movement (with their sensitivity)
   is added up and taken at the read on the game thread, in fixed point, so every machine gives the game
   the same, and each player's camera takes their own (in a match, every player's camera turns by its
@@ -90,8 +92,7 @@ same headless or on another machine:
   differ in the last bit.
 - **Off:** Right Stick: Free Camera, Aiming: Swap Sticks and the mouse in the bank's leaps: single
   player's, and the first two go by the time between frames.
-- **At their defaults:** the Camera tab's others (Field of View, Invert Turning, Turning Speed,
-  Lock-On), Conker's Detail, Cutscene Aspect Ratio (Expand) and the sound volumes (100%).
+- **At their defaults:** the Camera tab's others (Invert Turning, Turning Speed, Lock-On), Conker's Detail, Cutscene Aspect Ratio (Expand) and the sound volumes (100%).
 - **Widescreen:** the culls and sprites are widened for 16:9 whatever the window (a wider window can
   lose a little at its sides).
 - **Save states** (F5, F7) are off. **Mods:** none, in netplay matches, recordings and replays: a mod
