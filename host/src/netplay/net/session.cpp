@@ -245,6 +245,10 @@ namespace conker::netplay {
         return out;
     }
 
+    int Session::joiners() const {
+        return (int)std::count_if(peers.begin(), peers.end(), [](const Peer& p) { return p.port >= 0; });
+    }
+
     std::string Session::join_code(const std::string& address) const {
         return is_host ? join_code_for(address, hello.key) : std::string();
     }

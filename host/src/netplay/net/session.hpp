@@ -78,6 +78,8 @@ namespace conker::netplay {
         // Host: the round trip to each joiner, in milliseconds, as the library measures it (none it doesn't
         // know yet), for choosing the input delay.
         std::vector<int> round_trips_ms() const;
+        // Host: the joiners in (machines, not players: one may have several ports).
+        int joiners() const;
 
         // What has happened since the last poll.
         std::vector<Event> poll();

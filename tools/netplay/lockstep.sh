@@ -22,7 +22,9 @@
 #              are out of step and wait for each other all the time
 #   desync     the host changes a byte of its memory at read 300: both must stop for a desync
 # It exits 0 if all is as it should be, 1 if not. The logs are kept in --out; without it they're in a
-# temporary folder, deleted if all passed. The copies' data folders (about 1 GB in all) are always deleted. As in check.sh, a run is judged by what it prints and then stopped. It uses UDP ports 27310 to 27315 on 127.0.0.1.
+# temporary folder, deleted if all passed. The data folders it makes for the copies (about 1 GB in all) are
+# always deleted. As in check.sh, a run is judged by what it prints and then stopped. It uses UDP ports
+# 27310 to 27315 on 127.0.0.1.
 set -u
 
 cd "$(dirname "$0")/../.."
@@ -40,7 +42,7 @@ while [ $# -gt 0 ]; do
         --seed) SEED=$2; shift 2 ;;
         --timeout) TIMEOUT=$2; shift 2 ;;
         --out) OUT=$2; shift 2 ;;
-        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -53,8 +55,16 @@ KEEP=1
 [ -n "$OUT" ] || { OUT=$(mktemp -d "${TMPDIR:-/tmp}/netplay-lockstep.XXXXXX"); KEEP=0; }
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
-# The copies' data folders go however the check ends.
-trap 'rm -rf "$OUT"/data-*' EXIT
+# However the check ends (Ctrl-C too): the copies still running are stopped, and the data folders this
+# made deleted (only those: one already in an --out folder is left alone).
+made=
+pids=
+cleanup() {
+    for pid in $pids; do kill -9 "$pid" 2>/dev/null; done
+    for name in $made; do rm -rf "$OUT/data-$name"; done
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 # scramble <recording> <other> <ports> <prefix>: <prefix><n>.pads for each port n (from 1), the recording
 # with every other port's pads and movement taken from <other> (the same length, from another seed).
@@ -119,10 +129,10 @@ MOUSE_READS=$(( ($(wc -c < "$OUT/mouse.pads") - 32) / 65 ))
 # start <name> [options...]: one copy in the background, with its own data folder, its hash log in
 # $OUT/<name>.log and its output in $OUT/<name>.out; its PID is added to $pids.
 # The recording is $OUT/inputs.pads, or $OUT/$pads if that's set.
-pids=
 start() {
     name=$1; shift
     rm -f "$OUT/$name.log" "$OUT/$name.out"
+    [ -e "$OUT/data-$name" ] || made="$made $name"
     "$EXE" --headless --rom "$ROM" --data "$OUT/data-$name" --fast --replay "$OUT/${pads:-inputs.pads}" \
         --hash-log "$OUT/$name.log" "$@" > "$OUT/$name.out" 2>&1 &
     pids="$pids $!"
@@ -245,6 +255,8 @@ pads=couch-12.pads start couch-host2 --netplay-host 27314 --netplay-address 127.
 pads=couch-3.pads start couch-join1 --netplay-join "$(code_of couch-host2)"
 if finish "was the last: quitting" couch-host2 couch-join1; then
     grep -q "this is ports 1 and 2" "$OUT/couch-host2.out" || { echo "  couch-host2 isn't on ports 1 and 2"; failed=1; }
+    # The automatic delay counts the joining machine's round trip (one, on loopback: 0), not its players.
+    grep -q "this is ports 1 and 2, input delay 0" "$OUT/couch-host2.out" || { echo "  couch-host2's automatic input delay isn't 0"; failed=1; }
     for name in couch-host2 couch-join1; do
         same $name mouse-solo "$MOUSE_READS" || failed=1
     done

@@ -90,10 +90,10 @@ index f79adbf..e40a61d 100644
          int32_t uly;
 diff --git a/src/common/rt64_conker_view_focus.h b/src/common/rt64_conker_view_focus.h
 new file mode 100644
-index 0000000..57910b2
+index 0000000..c0697c9
 --- /dev/null
 +++ b/src/common/rt64_conker_view_focus.h
-@@ -0,0 +1,168 @@
+@@ -0,0 +1,169 @@
 +//
 +// RT64
 +//
@@ -151,16 +151,17 @@ index 0000000..57910b2
 +    inline float conkerMapY(const ConkerFocusView &v, float y) { return v.top + (y - v.srcTop) * (v.bottom - v.top) / (v.srcBottom - v.srcTop); }
 +
 +    // How much a focused view's projection is scaled across and down so what's drawn keeps its shape, from how much
-+    // more it's stretched across than down (k). Made relatively taller (k < 1: a 2-player half across the whole
-+    // frame, 1.26 / 2.04, about 0.62), it keeps its width of the scene and shows more up and down. Made relatively
-+    // wider (k > 1: a quarter across half the frame, 2.04 / 1.0), it's met halfway: by the square root of k across
-+    // and down, more of the scene across and less up and down, rather than a band cut from the middle of it or a
-+    // view twice as wide (which the widescreen widening would make wider again).
-+    inline void conkerFocusScale(const ConkerFocusView &v, float &xScale, float &yScale) {
++    // more it's stretched across than down (k). Alone across the frame it keeps its width of the scene and is made
++    // taller or shorter by k (a 2-player half, 1.26 / 2.04, about 0.62: more of the scene up and down; a quarter,
++    // about 1: unchanged). With two views, one made relatively wider (a quarter across half the frame, 2.04 / 1.0) is
++    // met halfway (`halfway`): by the square root of k across and down, more of the scene across and less up and
++    // down, rather than a band cut from the middle of it or a view twice as wide (which the widescreen widening
++    // would make wider again).
++    inline void conkerFocusScale(const ConkerFocusView &v, bool halfway, float &xScale, float &yScale) {
 +        const float stretchX = (v.right - v.left) / (v.srcRight - v.srcLeft);
 +        const float stretchY = (v.bottom - v.top) / (v.srcBottom - v.srcTop);
 +        const float k = stretchX / stretchY;
-+        if (!std::isfinite(k) || (k <= 0.0f) || (k <= 1.0f)) {
++        if (!std::isfinite(k) || (k <= 0.0f) || (k <= 1.0f) || !halfway) {
 +            xScale = 1.0f;
 +            yScale = std::isfinite(k) && (k > 0.0f) ? k : 1.0f;
 +            return;
@@ -1721,7 +1722,7 @@ index 778e08b..f53d597 100644
          void updatePerspective(const hlslpp::float4x4 &prevTransform, const hlslpp::float4x4 &curTransform, uint8_t perspInterpolation);
  
 diff --git a/src/hle/rt64_rsp.cpp b/src/hle/rt64_rsp.cpp
-index 1da2550..82a3dfd 100644
+index 1da2550..1d7bd6f 100644
 --- a/src/hle/rt64_rsp.cpp
 +++ b/src/hle/rt64_rsp.cpp
 @@ -4,7 +4,11 @@
@@ -2060,7 +2061,7 @@ index 1da2550..82a3dfd 100644
 +                const ConkerFocusView &view = focus.views[index];
 +                const float stretchX = (view.right - view.left) / (view.srcRight - view.srcLeft);
 +                const float stretchY = (view.bottom - view.top) / (view.srcBottom - view.srcTop);
-+                conkerFocusScale(view, focusXScale, focusYScale);
++                conkerFocusScale(view, focus.count > 1, focusXScale, focusYScale);
 +                viewport.translate.x = conkerMapX(view, viewport.translate.x);
 +                viewport.translate.y = conkerMapY(view, viewport.translate.y);
 +                viewport.scale.x *= stretchX;
@@ -3610,10 +3611,10 @@ index 9131697..9c74131 100644
          void reloadReplacements(bool clearQueue, uint64_t exclusiveDbHash = 0);
          bool loadReplacementDirectory(const ReplacementDirectory &replacementDirectory);
 diff --git a/src/render/rt64_vi_renderer.cpp b/src/render/rt64_vi_renderer.cpp
-index b4ff4e9..6cf0845 100644
+index b4ff4e9..24423a4 100644
 --- a/src/render/rt64_vi_renderer.cpp
 +++ b/src/render/rt64_vi_renderer.cpp
-@@ -4,10 +4,51 @@
+@@ -4,10 +4,58 @@
  
  #include "rt64_vi_renderer.h"
  
@@ -3650,6 +3651,13 @@ index b4ff4e9..6cf0845 100644
 +        for (int i = 0; i < focus.count; i++) {
 +            const float *r = rects + i * 8;
 +            focus.views[i] = { r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7] };
++            // A view with no size (or not a number) can't be mapped: nothing is focused then.
++            const ConkerFocusView &v = focus.views[i];
++            if (!((v.srcRight > v.srcLeft) && (v.srcBottom > v.srcTop) && (v.right > v.left) && (v.bottom > v.top))) {
++                focus.on = false;
++                focus.count = 0;
++                break;
++            }
 +        }
 +        focus.frameWidth = frameWidth;
 +        focus.frameHeight = frameHeight;
@@ -3665,7 +3673,7 @@ index b4ff4e9..6cf0845 100644
      // VIRenderer
  
      VIRenderer::VIRenderer() { }
-@@ -108,6 +149,18 @@ namespace RT64 {
+@@ -108,6 +156,18 @@ namespace RT64 {
          hlslpp::float4 viViewRect = vi.viewRectangle() * sdSize.xyxy;
          hlslpp::float4 viCropRect = vi.cropRectangle() * sdSize.xyxy;
  
