@@ -65,8 +65,10 @@ NO_MOTION = struct.pack("<hhhhbH", 0, 0, 0, 0, 0, DEFAULT_CONTROLS)
 
 
 def random_controls(rng):
-    """A player's Controls: each response, Mouse: Turn the Camera and each invert at random."""
-    return rng.getrandbits(4) | (rng.randrange(4) << 4) | (rng.randrange(4) << 6) | (rng.randrange(4) << 8)
+    """A player's Controls: each response, Mouse: Turn the Camera, each invert and the field of view (0, the
+    game's own, or 35 to 80 degrees) at random."""
+    return (rng.getrandbits(4) | (rng.randrange(4) << 4) | (rng.randrange(4) << 6) | (rng.randrange(4) << 8) |
+            (rng.randrange(47) << 10))
 
 
 class Movement:
