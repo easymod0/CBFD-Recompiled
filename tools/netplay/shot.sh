@@ -21,8 +21,17 @@ data=$(mktemp -d "${TMPDIR:-/tmp}/netplay-shot.XXXXXX")
 out=$data/out.txt
 
 # The game quits at the recording's last read, so the shot is taken a little before it: once the hash log
-# reaches 300 reads short of the end (the recording's reads: its size less a version 2 header, 21 bytes each).
-reads=$(( ($(wc -c < "$pads") - 32) / 21 ))
+# reaches 300 reads short of the end. The recording's reads, by its version (harness.cpp): version 1 has a
+# 16-byte header and 21-byte reads, 2 a 32-byte header and 21-byte reads, 3 a 32-byte header and 65-byte
+# reads (with everyone's mouse and gyro).
+version=$(od -An -tu4 -j8 -N4 "$pads" | tr -d ' ')
+case "$version" in
+    1) header=16; read_size=21 ;;
+    2) header=32; read_size=21 ;;
+    3) header=32; read_size=65 ;;
+    *) echo "$1 isn't a recording this knows (version $version)" >&2; exit 2 ;;
+esac
+reads=$(( ($(wc -c < "$pads") - header) / read_size ))
 log=$data/hashes.log
 SDL_VIDEODRIVER=x11 "$EXE" --rom "$ROM" --data "$data/data" --window "${WINDOW:-960x540}" --replay "$pads" --fast \
     --hash-log "$log" "$@" > "$out" 2>&1 &
