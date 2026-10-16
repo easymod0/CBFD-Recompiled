@@ -113,6 +113,17 @@ namespace conker {
         inline int mouse_invert(uint16_t c) { return (c >> 4) & 3; }
         inline int gyro_invert(uint16_t c) { return (c >> 6) & 3; }
         inline int stick_invert(uint16_t c) { return (c >> 8) & 3; }
+        // Their camera's field of view in degrees (vertical), or 0 for the game's own (packets.hpp's codes).
+        inline float field_of_view(uint16_t c) {
+            const int code = c >> 10;
+            return code == 0 ? 0.0f : (float)(34 + (code < 46 ? code : 46));
+        }
+        // The code for a setting in degrees (0 for none).
+        inline uint16_t field_of_view_code(double degrees) {
+            if (!(degrees > 0.0)) return 0;
+            const double clamped = degrees < 35.0 ? 35.0 : degrees > 80.0 ? 80.0 : degrees;
+            return (uint16_t)((int)(clamped + 0.5) - 34);
+        }
         // Every setting's default (the stick's Invert Y), for a port with no player and recordings from before.
         constexpr uint16_t default_controls = 0x0200;
         // This machine's player's (look_aim.cpp, from their settings).
@@ -442,6 +453,9 @@ namespace conker {
         // From updateCullScales_1510B958's return (widescreen.cpp): with the setting widening the
         // camera's view, works the cull scales out for the view it draws.
         void adjust_cull_scales(uint8_t* rdram, uint64_t camera);
+        // For save states (host_state.cpp): how much each camera's view is widened now.
+        std::vector<uint32_t> state();
+        void set_state(const std::vector<uint32_t>& words);
     }
 
     // mouse_camera.cpp: the free orbit camera, turned by the mouse and the right stick.
@@ -449,6 +463,8 @@ namespace conker {
         // Whether last frame's camera update was the normal camera (where the C-buttons turn it: not
         // R-Look, aiming, cutscenes or other special cameras).
         bool normal_camera();
+        // The same for a player's camera while the harness is used (each player's orbit).
+        bool normal_camera_of(int player);
         // Whether the right stick turned the orbit last frame's camera update could run (the setting
         // on, the normal camera, not R-Look or aiming): the controller's input then leaves the right
         // stick off the C-buttons (frontend.cpp). Safe from any thread.

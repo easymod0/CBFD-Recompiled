@@ -236,6 +236,10 @@ namespace {
         recomp::config::Config* config = recompui::config::find_option_config(id);
         return config ? static_cast<T>(std::get<uint32_t>(config->get_option_value(id))) : fallback;
     }
+    double own_number(const std::string& id, double fallback) {
+        recomp::config::Config* config = recompui::config::find_option_config(id);
+        return config ? std::get<double>(config->get_option_value(id)) : fallback;
+    }
 #endif
 }
 
@@ -301,7 +305,8 @@ void conker::look_aim::add_camera_options(recomp::config::Config& config) {
         "How wide the normal camera sees, as its vertical field of view (the same whatever the aspect ratio). "
         "<recomp-color primary>50\xC2\xB0</recomp-color> matches the original game (60.6\xC2\xB0 across at 4:3). More shows more "
         "around Conker, less brings the view in closer; the camera stays as far away. Only the normal camera: R-Look, "
-        "aiming (so the scope's zoom), cutscenes and other special cameras stay as the game has them.",
+        "aiming (so the scope's zoom), cutscenes and other special cameras stay as the game has them. In a netplay match "
+        "each player's own applies to their camera.",
         35.0, 80.0, 1.0, 0, false, 50.0);
     recompui::set_number_option_suffix(options::camera_fov, "\xC2\xB0");
 
@@ -394,9 +399,10 @@ uint16_t conker::motion::local_controls() {
     c |= (uint16_t)((uint32_t)own_option(options::mouse_invert, Invert::None) << 4);
     c |= (uint16_t)((uint32_t)own_option(options::gyro_invert, Invert::None) << 6);
     c |= (uint16_t)((uint32_t)own_option(options::stick_invert, Invert::Y) << 8);
+    c &= 0x03FF;    // only Controls' bits (a value out of range in the config would make the others refuse the packet)
+    c |= (uint16_t)(conker::motion::field_of_view_code(own_number(options::camera_fov, 0.0)) << 10);
 #endif
-    // Only Controls' bits (a value out of range in the config would make the others refuse the packet).
-    return c & 0x03FF;
+    return c;
 }
 
 void conker::look_aim::on_input_poll() {

@@ -72,6 +72,7 @@ std::vector<uint8_t> conker::host_state::save() {
 #else
     put_part(out, {});
 #endif
+    put_part(out, conker::field_of_view::state());
     return out;
 }
 
@@ -92,5 +93,8 @@ void conker::host_state::load(const std::vector<uint8_t>& bytes) {
     conker::mouse_camera::set_state(in.get_part());
 #if defined(CONKER_NETPLAY)
     conker::motion::set_state(in.get_part());
+#else
+    in.get_part();
 #endif
+    conker::field_of_view::set_state(in.get_part());
 }
