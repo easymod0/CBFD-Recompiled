@@ -686,7 +686,7 @@ index ee8bc1f..428208c 100644
                          // Wireframe artifacts have been reported when using a high-precision color format on RDNA3 GPUs in D3D12. The workaround is to switch to Vulkan if this is the case.
                          const bool isRX7 = deviceDescription.name.find("AMD Radeon RX 7") != std::string::npos;
 diff --git a/src/hle/rt64_framebuffer_manager.cpp b/src/hle/rt64_framebuffer_manager.cpp
-index d7caa12..60112aa 100644
+index d7caa12..2043064 100644
 --- a/src/hle/rt64_framebuffer_manager.cpp
 +++ b/src/hle/rt64_framebuffer_manager.cpp
 @@ -4,6 +4,8 @@
@@ -738,7 +738,29 @@ index d7caa12..60112aa 100644
          // Copy from depth target if the last write was a depth buffer.
          if (fbIt->second.lastWriteType == Framebuffer::Type::Depth) {
              RenderTargetKey depthTargetKey(fbIt->second.addressStart, fbIt->second.width, fbIt->second.siz, Framebuffer::Type::Depth);
-@@ -908,6 +929,11 @@ namespace RT64 {
+@@ -795,8 +816,10 @@ namespace RT64 {
+                 continue;
+             }
+ 
+-            // Only reuse exact matches.
+-            if ((tileCopy.textureWidth == textureWidth) && (tileCopy.textureHeight == textureHeight)) {
++            // Only reuse exact matches. Compared with the size asked for, unscaled: textureWidth and textureHeight are
++            // scaled by the resolution, so with any scale but 1 they never matched, and a new copy (a texture and a
++            // framebuffer, never freed) was made at every request.
++            if ((tileCopy.requestWidth == textureWidth) && (tileCopy.requestHeight == textureHeight)) {
+                 tileCopy.usedWidth = width;
+                 tileCopy.usedHeight = height;
+                 tileCopy.usedTimestamp = usedTimestamp;
+@@ -807,6 +830,8 @@ namespace RT64 {
+         // Make a new tile with a new Id.
+         TileCopy &tileCopy = tileCopies[++newId];
+         tileCopy.id = newId;
++        tileCopy.requestWidth = textureWidth;
++        tileCopy.requestHeight = textureHeight;
+         tileCopy.usedWidth = width;
+         tileCopy.usedHeight = height;
+         tileCopy.usedTimestamp = usedTimestamp;
+@@ -908,6 +933,11 @@ namespace RT64 {
          auto it = framebuffers.begin();
          while (it != framebuffers.end()) {
              if ((&it->second != changedFb) && (it->second.overlaps(addressStart, addressEnd))) {
@@ -750,6 +772,21 @@ index d7caa12..60112aa 100644
                  it->second.rdramChanged = true;
              }
  
+diff --git a/src/hle/rt64_framebuffer_manager.h b/src/hle/rt64_framebuffer_manager.h
+index 8d36b51..fd6cf90 100644
+--- a/src/hle/rt64_framebuffer_manager.h
++++ b/src/hle/rt64_framebuffer_manager.h
+@@ -85,6 +85,10 @@ namespace RT64 {
+             uint32_t usedWidth = 0;
+             uint32_t usedHeight = 0;
+             uint64_t usedTimestamp = 0;
++            // The size findTileCopyId was asked for, made a multiple as the texture is (unscaled: textureWidth and
++            // textureHeight are the scaled texture's, set when it's made), so a copy can be found again by it.
++            uint32_t requestWidth = 0;
++            uint32_t requestHeight = 0;
+             bool ulScaleS = true;
+             bool ulScaleT = true;
+             interop::uint2 texelShift = { 0, 0 };
 diff --git a/src/hle/rt64_framebuffer_pair.cpp b/src/hle/rt64_framebuffer_pair.cpp
 index c944393..f611522 100644
 --- a/src/hle/rt64_framebuffer_pair.cpp
