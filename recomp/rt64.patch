@@ -2010,7 +2010,7 @@ index 7a8c13b..373815a 100644
          void endSpriteCommand();
          uint8_t *fromRDRAM(uint32_t rdramAddress) const;
 diff --git a/src/hle/rt64_workload.cpp b/src/hle/rt64_workload.cpp
-index b4c85f5..61c515c 100644
+index b4c85f5..5980a7f 100644
 --- a/src/hle/rt64_workload.cpp
 +++ b/src/hle/rt64_workload.cpp
 @@ -4,7 +4,23 @@
@@ -2046,7 +2046,7 @@ index b4c85f5..61c515c 100644
  
          commandWarnings.clear();
          spriteCommands.clear();
-@@ -315,6 +333,55 @@ namespace RT64 {
+@@ -315,6 +333,82 @@ namespace RT64 {
          return addedPair;
      }
  
@@ -2069,8 +2069,35 @@ index b4c85f5..61c515c 100644
 +
 +        const FixedRect wideningScissor = fbPair.wideningScissor();
 +        const FixedRect &pairScissor = wideningScissor.isNull() ? proj.scissorRect : wideningScissor;
-+        return (viewRect.ulx <= pairScissor.ulx + CoversWidthViewportSlack) && (viewRect.lrx >= pairScissor.lrx - CoversWidthViewportSlack) &&
-+            (viewRect.width(true, true) > viewRect.height(true, true));
++        if (viewRect.width(true, true) <= viewRect.height(true, true)) {
++            return false;
++        }
++
++        if ((viewRect.ulx <= pairScissor.ulx + CoversWidthViewportSlack) && (viewRect.lrx >= pairScissor.lrx - CoversWidthViewportSlack)) {
++            return true;
++        }
++
++        // Conker: a split screen's row of views drawn in one pair (Beach's top two quarters in one, its bottom two in
++        // another): side by side they span the pair's width, and each is widened as if it had the pair to itself.
++        auto closeTo = [](int32_t a, int32_t b) { return std::abs(a - b) <= CoversWidthSlack; };
++        int32_t rowLeft = viewRect.ulx, rowRight = viewRect.lrx;
++        uint32_t rowViews = 0;
++        for (uint32_t p = 0; p < fbPair.projectionCount; p++) {
++            FixedRect otherRect;
++            if (!viewOfProjection(fbPair.projections[p], otherRect) || !closeTo(otherRect.uly, viewRect.uly) || !closeTo(otherRect.lry, viewRect.lry)) {
++                continue;
++            }
++
++            // Another view of the row, not one across it (its width is part of the row's).
++            if (!closeTo(otherRect.ulx, viewRect.ulx) || !closeTo(otherRect.lrx, viewRect.lrx)) {
++                rowViews++;
++            }
++
++            rowLeft = std::min(rowLeft, otherRect.ulx);
++            rowRight = std::max(rowRight, otherRect.lrx);
++        }
++
++        return (rowViews > 0) && (rowLeft <= pairScissor.ulx + CoversWidthViewportSlack) && (rowRight >= pairScissor.lrx - CoversWidthViewportSlack);
 +    }
 +
 +    bool Workload::widensView(uint32_t colorAddress, const FixedRect &viewRect) const {
@@ -2103,7 +2130,7 @@ index b4c85f5..61c515c 100644
          if (fbPairCount > 0) {
              return fbPairCount - 1;
 diff --git a/src/hle/rt64_workload.h b/src/hle/rt64_workload.h
-index 8ea27d5..5e7cbdc 100644
+index 8ea27d5..dc05e45 100644
 --- a/src/hle/rt64_workload.h
 +++ b/src/hle/rt64_workload.h
 @@ -23,6 +23,13 @@
@@ -2137,13 +2164,14 @@ index 8ea27d5..5e7cbdc 100644
          } extended;
  
          void reset();
-@@ -253,5 +265,16 @@ namespace RT64 {
+@@ -253,5 +265,17 @@ namespace RT64 {
          void begin(uint64_t submissionFrame);
          bool addFramebufferPair(uint32_t colorAddress, uint8_t colorFmt, uint8_t colorSiz, uint16_t colorWidth, uint32_t depthAddress);
          int currentFramebufferPairIndex() const;
 +
 +        // A 3D view's rect (its scissor and viewport's intersection) and whether a pair widens it: the view covers the
-+        // pair's widening scissor (FramebufferPair::wideningScissor), is wider than tall and has no custom origin.
++        // pair's widening scissor (FramebufferPair::wideningScissor), or its row of side-by-side views in the pair does
++        // together (a split screen's two views in one pair), is wider than tall and has no custom origin.
 +        bool viewOfProjection(const Projection &proj, FixedRect &viewRect) const;
 +        bool pairWidensView(const FramebufferPair &fbPair, const Projection &proj) const;
 +
@@ -2336,7 +2364,7 @@ index 5a331aa..c2c5f25 100644
                      const bool resetTicks = !generateInterpolatedFrames || (originalRateForTicks != workload.viOriginalRate) || (displayRateForTicks != workloadConfig.targetRate) || !displayRateAboveOriginal;
                      if (resetTicks) {
 diff --git a/src/render/rt64_framebuffer_renderer.cpp b/src/render/rt64_framebuffer_renderer.cpp
-index 9fae0d4..6cdf058 100644
+index 9fae0d4..ce26584 100644
 --- a/src/render/rt64_framebuffer_renderer.cpp
 +++ b/src/render/rt64_framebuffer_renderer.cpp
 @@ -7,6 +7,7 @@
@@ -2403,7 +2431,7 @@ index 9fae0d4..6cdf058 100644
          InstanceDrawCall instanceDrawCall;
          interop::RenderIndices renderIndices;
          uint32_t globalCallIndex = 0;
-@@ -1450,6 +1480,48 @@ namespace RT64 {
+@@ -1450,6 +1480,46 @@ namespace RT64 {
          uint32_t vertexTestZFaceIndicesStart = 0;
          int32_t vertexTestZCallIndex = -1;
          RenderViewport viewportClip;
@@ -2425,7 +2453,6 @@ index 9fae0d4..6cdf058 100644
 +                continue;
 +            }
 +
-+            const FixedRect viewPairScissor = viewPair.wideningScissor();
 +            for (uint32_t vp = 0; vp < viewPair.projectionCount; vp++) {
 +                const Projection &viewProj = viewPair.projections[vp];
 +                if ((viewProj.type != Projection::Type::Perspective) || viewProj.scissorRect.isNull()) {
@@ -2439,9 +2466,8 @@ index 9fae0d4..6cdf058 100644
 +                    continue;
 +                }
 +
-+                const FixedRect &comparedScissor = viewPairScissor.isNull() ? viewProj.scissorRect : viewPairScissor;
-+                const bool widened = (viewRect.ulx <= comparedScissor.ulx + CoversWidthViewportSlack) && (viewRect.lrx >= comparedScissor.lrx - CoversWidthViewportSlack) &&
-+                    (viewRect.width(true, true) > viewRect.height(true, true));
++                // The same test as the projections' (Workload::pairWidensView), rows of views in one pair included.
++                const bool widened = p.curWorkload->pairWidensView(viewPair, viewProj);
 +                const bool narrowerThanFrame = (viewRect.lrx - viewRect.ulx) < (frameWidthFixed - 2 * CoversWidthSlack);
 +                if (widened && narrowerThanFrame) {
 +                    widenedViews.push_back({ viewRect, (viewRect.ulx + viewRect.lrx) / 2 });
@@ -2452,7 +2478,7 @@ index 9fae0d4..6cdf058 100644
          for (uint32_t pr = 0; (pr < fbPair.projectionCount) && (globalCallIndex < p.maxGameCall); pr++) {
              const Projection &proj = fbPair.projections[pr];
              if (proj.scissorRect.isNull()) {
-@@ -1488,9 +1560,28 @@ namespace RT64 {
+@@ -1488,9 +1558,28 @@ namespace RT64 {
                  // The call's scissor spans the whole width of the framebuffer pair scissor. Custom origin must not be in use to be able to use the stretched viewport.
                  const auto &viewport = drawData.rspViewports[proj.transformsIndex];
                  FixedRect intersectionRect = proj.scissorRect.intersection(viewport.rect(viewportClipRatios));
@@ -2482,7 +2508,7 @@ index 9fae0d4..6cdf058 100644
                  if (useWideViewport) {
                      projInvRatioScale = 1.0f;
                  }
-@@ -1548,6 +1639,27 @@ namespace RT64 {
+@@ -1548,6 +1637,27 @@ namespace RT64 {
                      }
  
                      clearRect.rect = convertFixedRect(call.callDesc.rect, p.resolutionScale, p.fbWidth, invRatioScale, extOriginPercentage, horizontalMisalignment, call.callDesc.rectLeftOrigin, call.callDesc.rectRightOrigin);
@@ -2510,7 +2536,7 @@ index 9fae0d4..6cdf058 100644
                  }
                  else if (call.callDesc.extendedType != DrawExtendedType::None) {
                      switch (call.callDesc.extendedType) {
-@@ -1625,6 +1737,7 @@ namespace RT64 {
+@@ -1625,6 +1735,7 @@ namespace RT64 {
  
                          float invRatioScale = 1.0f / aspectRatioScale;
                          float horizontalMisalignment = 0.0f;
@@ -2518,7 +2544,7 @@ index 9fae0d4..6cdf058 100644
                          switch (proj.type) {
                          case Projection::Type::Perspective:
                          case Projection::Type::Orthographic: {
-@@ -1645,14 +1758,62 @@ namespace RT64 {
+@@ -1645,14 +1756,62 @@ namespace RT64 {
                              // The call's scissor spans the whole width of the framebuffer pair scissor. The rect must not be using extended origins.
                              const bool regularOrigins = (call.callDesc.rectLeftOrigin == G_EX_ORIGIN_NONE) && (call.callDesc.rectRightOrigin == G_EX_ORIGIN_NONE);
                              const bool coversScissorWidth = regularOrigins && (call.callDesc.rect.ulx <= fbPair.scissorRect.ulx) && (call.callDesc.rect.lrx >= fbPair.scissorRect.lrx);
@@ -2583,7 +2609,7 @@ index 9fae0d4..6cdf058 100644
                              triangles.screenScale = { viewportRect.width / framebuffer.viewport.width, viewportRect.height / framebuffer.viewport.height };
                              triangles.screenOffset.x = halfPixelOffset.x + ((viewportRect.x + viewportRect.width / 2.0f) - halfViewportSize.x) / halfViewportSize.x;
                              triangles.screenOffset.y = halfPixelOffset.y + (halfViewportSize.y - (viewportRect.y + viewportRect.height / 2.0f)) / halfViewportSize.y;
-@@ -1676,7 +1837,12 @@ namespace RT64 {
+@@ -1676,7 +1835,12 @@ namespace RT64 {
                              break;
                          }
  
