@@ -14,8 +14,8 @@
 # --mouse gives the made-up recording mouse and gyro movement and settings of its own; --recording replays
 # that recording instead of a made-up one (e.g. a match from make_match.py --mouse), and --reads is then
 # its length.
-# b, jitter and state must each match a. The logs are kept in --out (a temporary folder otherwise,
-# printed at the end). It exits 0 if everything matches, 1 if not.
+# b, jitter and state must each match a. The logs are kept in --out; without it they're in a temporary
+# folder, printed at the end and deleted if everything matched. It exits 0 if everything matches, 1 if not.
 #
 # A run is judged by what it prints, not by its exit code: once it says its last read was made (its hash
 # log is written out by then) it's stopped, rather than waiting for it to quit. The runs share the game's data folder, so they're made one at a time, and nothing else may
@@ -49,7 +49,8 @@ done
 [ -f "$ROM" ] || { echo "no ROM at $ROM" >&2; exit 2; }
 # Absolute: the game changes its working folder.
 ROM=$(cd "$(dirname "$ROM")" && pwd)/$(basename "$ROM")
-[ -n "$OUT" ] || OUT=$(mktemp -d "${TMPDIR:-/tmp}/netplay-check.XXXXXX")
+KEEP=1
+[ -n "$OUT" ] || { OUT=$(mktemp -d "${TMPDIR:-/tmp}/netplay-check.XXXXXX"); KEEP=0; }
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
 
@@ -114,9 +115,10 @@ run b && same b || failed=1
 run jitter --jitter 500 && same jitter || failed=1
 run state --state-test $((READS / 3)):$((READS * 2 / 3)) && same state || failed=1
 
-echo "logs: $OUT"
 if [ $failed -ne 0 ]; then
+    echo "logs: $OUT"
     echo "FAILED: the same inputs didn't give the same game"
     exit 1
 fi
+if [ $KEEP -eq 1 ]; then echo "logs: $OUT"; else rm -rf "$OUT"; fi
 echo "passed: the same inputs gave the same game every time"

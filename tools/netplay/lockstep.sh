@@ -21,8 +21,8 @@
 #   jittery    the same with input delay 0 and random sleeps (--jitter 500) on the joiner, so the two
 #              are out of step and wait for each other all the time
 #   desync     the host changes a byte of its memory at read 300: both must stop for a desync
-# It exits 0 if all is as it should be, 1 if not. The logs are kept in --out (a temporary folder
-# otherwise). As in check.sh, a run is judged by what it prints and then stopped. It uses UDP ports 27310 to 27315 on 127.0.0.1.
+# It exits 0 if all is as it should be, 1 if not. The logs are kept in --out; without it they're in a
+# temporary folder, deleted if all passed. The copies' data folders (about 1 GB in all) are always deleted. As in check.sh, a run is judged by what it prints and then stopped. It uses UDP ports 27310 to 27315 on 127.0.0.1.
 set -u
 
 cd "$(dirname "$0")/../.."
@@ -49,9 +49,12 @@ done
 # Absolute: the game changes its working folder.
 EXE=$(cd "$(dirname "$EXE")" && pwd)/$(basename "$EXE")
 ROM=$(cd "$(dirname "$ROM")" && pwd)/$(basename "$ROM")
-[ -n "$OUT" ] || OUT=$(mktemp -d "${TMPDIR:-/tmp}/netplay-lockstep.XXXXXX")
+KEEP=1
+[ -n "$OUT" ] || { OUT=$(mktemp -d "${TMPDIR:-/tmp}/netplay-lockstep.XXXXXX"); KEEP=0; }
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
+# The copies' data folders go however the check ends.
+trap 'rm -rf "$OUT"/data-*' EXIT
 
 # scramble <recording> <other> <ports> <prefix>: <prefix><n>.pads for each port n (from 1), the recording
 # with every other port's pads and movement taken from <other> (the same length, from another seed).
@@ -277,9 +280,10 @@ else
     failed=1
 fi
 
-echo "logs: $OUT"
 if [ $failed -ne 0 ]; then
+    echo "logs: $OUT"
     echo "FAILED"
     exit 1
 fi
+if [ $KEEP -eq 1 ]; then echo "logs: $OUT"; else rm -rf "$OUT"; fi
 echo "passed: the match gave each copy the same game as the replay alone, and a desync was caught"
