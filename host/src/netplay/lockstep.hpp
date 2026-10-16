@@ -17,7 +17,8 @@
 //   --local-players <n>          (hosting or joining) players on this machine, 1 to 3 (1 by default): each
 //                                has a port of their own (the lowest free ones), and plays with this
 //                                machine's controller of the same number (the first has the keyboard, mouse
-//                                and gyro). A machine with more than one sees the whole split screen
+//                                and gyro). "My view only" (view.cpp) shows two players' views across
+//                                the top and bottom halves of the window; three see the whole split screen
 //   --input-delay <reads|auto>   (hosting) how many reads ahead each peer's own pads are sent, 0 to 8, or
 //                                auto (the default): chosen from the round trips to the players as the
 //                                match starts. The host tells everyone (Start)

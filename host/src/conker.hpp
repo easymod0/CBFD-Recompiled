@@ -362,6 +362,9 @@ namespace conker {
     namespace netplay_view {
         void set_mine_only(bool on);
         bool is_mine_only();
+        // Replaying a recording (to try "my view only"): the players whose views are shown (bit n: port n), as on
+        // a machine with them (player 1 by default).
+        void set_replay_ports(uint8_t ports);
         // At the start of each game frame's display list (widescreen.cpp's conker_frame_dl_begin).
         void game_frame(uint8_t* rdram);
     }

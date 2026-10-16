@@ -261,7 +261,8 @@ namespace {
             here_radio->add_index_changed_callback([this](uint32_t index) { local_players = 1 + (int)index; });
             text(here, "Each player here plays with their own controller, in the order the controllers first press a "
                 "button (the first has the keyboard and mouse too), and gets the next player number in the match. With "
-                "more than one, this computer shows the whole split screen.", Typography::Body, color::TextDim);
+                "two, \"My view only\" shows both of your views, one above the other; with three, the whole split "
+                "screen.", Typography::Body, color::TextDim);
 
             // Hosting.
             recompui::Element* host = column(this, 12.0f);
@@ -354,7 +355,7 @@ namespace {
             display_radio->set_index(conker::netplay_view::is_mine_only() ? 1 : 0);
             display_radio->add_index_changed_callback([](uint32_t index) { conker::netplay_view::set_mine_only(index == 1); });
             text(display, "Every player's view is still drawn on every machine (that's what keeps the games the same): "
-                "\"My view only\" shows just yours, across the whole window. When the host's rule for the match is "
+                "\"My view only\" shows just yours, across the whole window (two players here: both, one above the other). When the host's rule for the match is "
                 "that everyone sees only their own view (Screens), that's what you get, whatever you pick here.",
                 Typography::Body, color::TextDim);
 

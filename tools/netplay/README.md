@@ -200,8 +200,9 @@ Players on this computer) puts n players on this machine, each with a port of th
 ones, the host's from port 1 (so `--players 3 --local-players 2` on the host gives it players 1 and 2,
 and the one who joins is player 3). Each plays with this machine's controller of the same number: the
 frontend numbers the controllers in the order they first press a button, and the first has the keyboard,
-mouse and gyro too. A machine with more than one player shows the whole split screen, whatever the
-Screens rule (each of its players needs their view), while a machine with one still follows it.
+mouse and gyro too. With two players on a machine, "my view only" (below) shows both of their views,
+one across the top half of the window and one across the bottom, like the game's own 2-player split;
+with three, the whole split screen is shown.
 
 In a window, the launcher's **Netplay** menu (`host/src/netplay/menu.cpp`, #9) does the same: host
 (players, port, input delay, and the host's own address, from which it shows the join code to send once hosting) or
@@ -210,7 +211,11 @@ machine once all are in. When a match started there ends (a desync, a player gon
 instead of the game quitting.
 
 **Screens.** Every machine draws the whole split screen (that keeps the games the same), but a window can
-show only its player's view, drawn across the whole window ("my view only", `host/src/netplay/view.cpp`).
+show only its player's view, drawn across the whole window ("my view only", `host/src/netplay/view.cpp`),
+or its two players' views, across the top and bottom halves (in a 3- or 4-player match the game draws them as
+quarters: each is drawn anew in its half, its projection scaled so it isn't stretched, and its HUD moved with
+it; the timer and scores the views share stay on the line between them). Replaying a recording,
+`--my-view-only --my-view-ports 12` shows it as a machine with players 1 and 2 would (for `shot.sh`).
 The host sets the match's rule: by default everyone sees only their own view, so no one can look at the
 others' (the Netplay menu's Screens, or `--split-screen` to let each player choose with their menu's Your
 screen or `--my-view-only`). The rule reaches every peer with Start. It can't be enforced against a
