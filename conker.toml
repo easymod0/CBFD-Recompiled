@@ -698,6 +698,13 @@ func = "func_151408A4"
 before_vram = 0x151409A0
 text = "{ extern void conker_widen_light_glow_right(uint8_t*, recomp_context*); conker_widen_light_glow_right(rdram, ctx); }"
 
+# The follow camera's depth row (host/src/render_fixes.cpp): on the harness (netplay), func_1512AD54 reads a row
+# of the depth buffer the renderer doesn't write back; it's made the farthest depth first, for every player's camera.
+[[patches.hook]]
+func = "func_1512AD54"
+before_vram = 0x1512AD58
+text = "{ extern void conker_camera_depth_row(uint8_t*, recomp_context*); conker_camera_depth_row(rdram, ctx); }"
+
 # TEMP-DEBUG: switches for the game's mid-frame depth-buffer copies (host/src/render_fixes.cpp).
 [[patches.hook]]
 func = "func_1510B9D0"
