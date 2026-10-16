@@ -4,7 +4,7 @@
 # lost, which also tests the host passing inputs on; 3 and 4 with two players on the host or on a joiner,
 # also lossy; a joiner with more players than ports left, which must be refused), joiners with another match's key, another ROM or
 # other mods, which must be refused, joiners sending Inputs early or far ahead or a Hash twice, which
-# must be dropped, one that never says Hello, which must be dropped too, and one sending a message bigger
+# must be dropped, as must one sending Inputs for a port that isn't its own, one that never says Hello, which must be dropped too, and one sending a message bigger
 # than any packet, which the library must close.
 #   sh host/src/netplay/net/test.sh <build folder>
 set -u
@@ -135,6 +135,7 @@ hostile() {
 hostile hostile-early 27205 3 early
 hostile hostile-far 27206 2 far
 hostile hostile-hash 27208 2 hash
+hostile hostile-port 27213 2 port
 
 # A joiner that never says Hello: dropped after the handshake time (3 s). One that sends a message bigger
 # than any packet: closed by the library at once.

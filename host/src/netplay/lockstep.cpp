@@ -498,7 +498,7 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
                 joined += std::popcount(event.ports);
                 std::printf("[netplay] %s joined (%d of %d)\n", ports_text(event.ports).c_str(), joined, match_players);
                 if (joined == match_players) {
-                    const int chosen = delay_option == auto_delay ? delay_for(session->round_trips_ms(), (size_t)(match_players - 1)) : delay_option;
+                    const int chosen = delay_option == auto_delay ? delay_for(session->round_trips_ms(), (size_t)session->joiners()) : delay_option;
                     if (session->start(host_own_view, chosen)) {
                         match_started = true;
                         match_own_view = host_own_view;
@@ -530,6 +530,10 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
             case Event::Type::ended:
                 std::printf("[netplay] couldn't join: %s (%s)\n", netplay::describe(event.reason), event.detail.c_str());
                 status = std::string("Couldn't join: ") + netplay::describe(event.reason) + ".";
+                // Full for this machine's players, not for one: fewer may fit.
+                if (event.reason == Reason::full && local_option > 1) {
+                    status += " Fewer players on this computer may fit.";
+                }
                 left = true;
                 cancel();
                 return Progress::failed;

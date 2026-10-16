@@ -15,6 +15,7 @@
 //     --own-view 1       (hosting) the match's rule that every player sees only their own view
 //     --hostile early    (joining) send Inputs before the match starts: the host must drop it
 //     --hostile far      (joining) send Inputs far beyond the reads it could have got to: dropped too
+//     --hostile port     (joining) send Inputs for the host's port 0 once the match starts: dropped too
 //     --hostile hash     (joining) send the same Hash twice once the match starts: dropped too
 //
 // It exits 0 once it has every other port's pads for every read and they're all right, 1 otherwise;
@@ -224,6 +225,10 @@ int main(int argc, char** argv) {
                             if (hostile == "far") {
                                 session.send(inputs_for(std::countr_zero(session.ports()), 100000));
                                 std::printf("sent Inputs far ahead\n");
+                            }
+                            if (hostile == "port") {
+                                session.send(inputs_for(0, 0));
+                                std::printf("sent Inputs for another's port\n");
                             }
                             if (hostile == "hash") {
                                 session.send(Hash{ 30, 1 });

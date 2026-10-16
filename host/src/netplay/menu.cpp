@@ -27,6 +27,8 @@
 #include "elements/ui_label.h"
 #include "elements/ui_modal.h"
 #include "elements/ui_radio.h"
+#include "elements/ui_scroll_container.h"
+#include "elements/ui_tab_set.h"
 #include "elements/ui_text_input.h"
 #include "librecomp/game.hpp"
 #include "ultramodern/ultramodern.hpp"
@@ -57,7 +59,10 @@ namespace {
         recompui::Label* code_label = nullptr;
         recompui::Button* copy_button = nullptr;
         std::string shown_code;             // the join code on show, for Copy
+        recompui::Element* status_row = nullptr;   // hidden while there's nothing to say
         recompui::Label* status_label = nullptr;
+        recompui::Element* host_section = nullptr; // one at a time, by the Host and Join tabs
+        recompui::Element* join_section = nullptr;
         recompui::Button* host_button = nullptr;
         recompui::Button* join_button = nullptr;
         recompui::Button* cancel_button = nullptr;
@@ -85,6 +90,7 @@ namespace {
             box->set_gap(gap);
             box->set_width(100.0f, recompui::Unit::Percent);
             box->set_align_items(recompui::AlignItems::FlexStart);
+            box->set_flex_shrink(0.0f);
             return box;
         }
 
@@ -94,6 +100,7 @@ namespace {
             box->set_flex_direction(recompui::FlexDirection::Row);
             box->set_align_items(recompui::AlignItems::Center);
             box->set_gap(16.0f);
+            box->set_flex_shrink(0.0f);
             return box;
         }
 
@@ -116,10 +123,10 @@ namespace {
             shown_code = code;
             copy_button->set_display(code.empty() ? recompui::Display::None : recompui::Display::Flex);
             if (blank) {
-                code_label->set_text("Give your address: the join code is made from it when you host.");
+                code_label->set_text("Enter your address to get a join code.");
             }
             else if (!hosting) {
-                code_label->set_text("Host, and the join code to send the others appears here.");
+                code_label->set_text("Press Host: the join code to send the others appears here.");
             }
             else if (code.empty()) {
                 code_label->set_text("That isn't an address: four numbers such as 203.0.113.7, or an IPv6 one.");
@@ -136,6 +143,7 @@ namespace {
             }
             show_code();
             status_label->set_text(status);
+            status_row->set_display(status.empty() && state != State::connecting ? recompui::Display::None : recompui::Display::Flex);
             host_button->set_enabled(state == State::idle);
             join_button->set_enabled(state == State::idle);
             cancel_button->set_display(state == State::connecting ? recompui::Display::Flex : recompui::Display::None);
@@ -244,10 +252,15 @@ namespace {
 
             recompui::Element* intro = column(this, 8.0f);
             text(intro, "Netplay", Typography::Header3);
-            text(intro, "Play multiplayer over the internet: everyone runs the game, and every player's controller "
-                "is passed to the others. Everyone needs this same build and the same ROM, with no mods on (texture "
-                "packs are fine). The game starts from the beginning, with an empty save.",
+            text(intro, "Play multiplayer online. Everyone needs this same build and the same ROM, with no mods on "
+                "(texture packs are fine). The game starts from the beginning.",
                 Typography::Body, color::TextDim);
+
+            // How it goes: at the top, where it's seen whatever part of the page is scrolled to.
+            status_row = row(this);
+            status_label = text(status_row, "", Typography::LabelLG);
+            cancel_button = context.create_element<recompui::Button>(status_row, "Cancel", recompui::ButtonStyle::Tertiary);
+            cancel_button->add_pressed_callback([this]() { on_cancel(); });
 
             // Who plays on this computer, hosting or joining.
             recompui::Element* here = column(this, 12.0f);
@@ -259,14 +272,18 @@ namespace {
             }
             here_radio->set_index(0);
             here_radio->add_index_changed_callback([this](uint32_t index) { local_players = 1 + (int)index; });
-            text(here, "Each player here plays with their own controller, in the order the controllers first press a "
-                "button (the first has the keyboard and mouse too), and gets the next player number in the match. With "
-                "two, \"My view only\" shows both of your views, one above the other; with three, the whole split "
-                "screen.", Typography::Body, color::TextDim);
+            text(here, "One controller each, in the order they first press a button. The first player also has the "
+                "keyboard, mouse and gyro.", Typography::Body, color::TextDim);
+
+            // Hosting or joining: a tab each, so only the one chosen's settings show.
+            recompui::TabSet* tabs = context.create_element<recompui::TabSet>(this);
+            tabs->set_flex_shrink(0.0f);
+            tabs->add_tab("Host a match");
+            tabs->add_tab("Join a match");
 
             // Hosting.
             recompui::Element* host = column(this, 12.0f);
-            text(host, "Host a match", Typography::LabelLG);
+            host_section = host;
             recompui::Element* host_row = row(host);
             text(host_row, "Players", Typography::LabelMD);
             recompui::Radio* count_radio = context.create_element<recompui::Radio>(host_row);
@@ -300,9 +317,8 @@ namespace {
             }
             delay_radio->set_index(0);
             delay_radio->add_index_changed_callback([this](uint32_t index) { input_delay = (int)index - 1; });
-            text(host, "Input delay: how many frames late everyone's input (the mouse too) reaches the game, so it "
-                "arrives in time. Auto picks it from how far away the players are as the match starts: 0 on a "
-                "local network. Raise it if the game stutters waiting for a player.", Typography::Body, color::TextDim);
+            text(host, "Auto suits most matches (0 at home). Raise it if the game stutters waiting for a player.",
+                Typography::Body, color::TextDim);
             recompui::Element* code_row = row(host);
             code_label = text(code_row, "", Typography::LabelMD);
             copy_button = context.create_element<recompui::Button>(code_row, "Copy", recompui::ButtonStyle::Tertiary);
@@ -313,17 +329,15 @@ namespace {
                     queue_update();
                 }
             });
-            text(host, "The others connect to that port on your computer: if you're behind a router, forward it "
-                "(UDP) to this computer. Look up your public address on any \"what is my IP\" site; at home, "
-                "your local one works too.", Typography::Body, color::TextDim);
-            text(host, "The join code is your IP address (with a key for this match): only share it with people you "
-                "trust. Joining a match shows the host your IP address too.", Typography::Body, color::TextDim);
+            text(host, "For players outside your home, forward the UDP port on your router and use your public "
+                "address (any \"what is my IP\" site). The join code contains your IP address: share it only with "
+                "people you trust.", Typography::Body, color::TextDim);
             host_button = context.create_element<recompui::Button>(host, "Host", recompui::ButtonStyle::Primary);
             host_button->add_pressed_callback([this]() { on_host(); });
 
             // Joining.
             recompui::Element* join = column(this, 12.0f);
-            text(join, "Join a match", Typography::LabelLG);
+            join_section = join;
             recompui::Element* join_row = row(join);
             text(join_row, "Join code", Typography::LabelMD);
             join_input = input(join_row, "", 520.0f);
@@ -346,6 +360,14 @@ namespace {
             join_button = context.create_element<recompui::Button>(join, "Join", recompui::ButtonStyle::Primary);
             join_button->add_pressed_callback([this]() { on_join(); });
 
+            tabs->set_change_tab_callback([this](int index) {
+                host_section->set_display(index == 0 ? recompui::Display::Flex : recompui::Display::None);
+                join_section->set_display(index == 1 ? recompui::Display::Flex : recompui::Display::None);
+                queue_update();
+            });
+            tabs->set_active_tab(0, false);
+            join_section->set_display(recompui::Display::None);
+
             // What this window shows of the split screen.
             recompui::Element* display = column(this, 12.0f);
             text(display, "Your screen", Typography::LabelLG);
@@ -354,16 +376,10 @@ namespace {
             display_radio->add_option("My view only");
             display_radio->set_index(conker::netplay_view::is_mine_only() ? 1 : 0);
             display_radio->add_index_changed_callback([](uint32_t index) { conker::netplay_view::set_mine_only(index == 1); });
-            text(display, "Every player's view is still drawn on every machine (that's what keeps the games the same): "
-                "\"My view only\" shows just yours, across the whole window (two players here: both, one above the other). When the host's rule for the match is "
-                "that everyone sees only their own view (Screens), that's what you get, whatever you pick here.",
+            text(display, "\"My view only\" fills the window with your view (two players here: one above the other). "
+                "The host's Screens setting can choose it for everyone.",
                 Typography::Body, color::TextDim);
 
-            // How it goes.
-            recompui::Element* status = row(this);
-            status_label = text(status, "", Typography::LabelLG);
-            cancel_button = context.create_element<recompui::Button>(status, "Cancel", recompui::ButtonStyle::Tertiary);
-            cancel_button->add_pressed_callback([this]() { on_cancel(); });
             set_state(State::idle, "");
             show_code();
             queue_update();
@@ -397,7 +413,12 @@ void conker::netplay_menu::open() {
         modal = recompui::Modal::create_modal(recompui::ModalType::Fullscreen);
         recompui::ContextId context = modal->modal_root_context;
         context.open();
-        page = context.create_element<NetplayPage>(modal->get_body());
+        // In a scroll container: the page is taller than a small window, and squeezed into it its rows and
+        // texts would be drawn over each other.
+        modal->get_body()->set_overflow_y(recompui::Overflow::Hidden);
+        recompui::ScrollContainer* scroll = context.create_element<recompui::ScrollContainer>(modal->get_body(), recompui::ScrollDirection::Vertical);
+        scroll->set_background_color(recompui::theme::color::Background1);    // the page's, below it too
+        page = context.create_element<NetplayPage>(scroll);
         context.close();
         if (launcher_open) {
             launcher.open();
