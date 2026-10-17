@@ -88,6 +88,140 @@ index f79adbf..e40a61d 100644
      struct FixedRect {
          int32_t ulx;
          int32_t uly;
+diff --git a/src/common/rt64_conker_view_focus.h b/src/common/rt64_conker_view_focus.h
+new file mode 100644
+index 0000000..0a7ad73
+--- /dev/null
++++ b/src/common/rt64_conker_view_focus.h
+@@ -0,0 +1,128 @@
++//
++// RT64
++//
++
++// Conker: netplay's "my view only", drawn anew (the host's netplay/view.cpp). While it's on, one player's view of
++// the split screen is drawn across the whole frame instead of its part of it, and the other views aren't drawn:
++// the view's viewport and scissor are stretched with it to the whole frame (RSP::setViewport, RDP::setScissor;
++// a smaller one inside the view goes to the same place in the stretched view), and its projection is made
++// taller by as much as the stretch isn't uniform (ProjectionProcessor), so nothing is
++// stretched and more of the scene shows. The widescreen widening then widens it like any full-frame view. The
++// other views' viewports are collapsed to nothing and their scissors emptied, which also leaves out their 2D.
++// Rectangles in pixels of the frame, which is frameWidth by frameHeight. Only the renderer changes: the game's
++// memory doesn't (its Render to RAM is off in netplay), so it can't desync.
++
++#pragma once
++
++#include <algorithm>
++#include <cmath>
++
++#include "common/rt64_common.h"
++
++
++namespace RT64 {
++    struct ConkerViewFocus {
++        bool on = false;
++        float left = 0.0f, top = 0.0f, right = 0.0f, bottom = 0.0f;
++        float frameWidth = 0.0f, frameHeight = 0.0f;
++    };
++
++    // Set by the game's host each frame (defined in rt64_vi_renderer.cpp).
++    void setViewFocusRedraw(bool on, float left, float top, float right, float bottom, float frameWidth, float frameHeight);
++    ConkerViewFocus conkerViewFocus();
++
++    // Whether the focus applies to what's drawn now: only to the frame itself, an image as wide as the frame.
++    // The game also draws into small images of its own (a shadow's silhouette, 64 pixels wide), which the
++    // frame's views have nothing to do with.
++    inline bool conkerFocusApplies(const ConkerViewFocus &f, uint16_t colorImageWidth) {
++        return f.on && (f.frameWidth > 0.0f) && (colorImageWidth == uint16_t(f.frameWidth));
++    }
++
++    // A point of the focused view, where it goes in the frame: the view stretched to the whole frame. (Its
++    // projection is made taller by as much as the stretch isn't uniform, so what's drawn isn't stretched.)
++    inline float conkerMapX(const ConkerViewFocus &f, float x) { return (x - f.left) * f.frameWidth / (f.right - f.left); }
++    inline float conkerMapY(const ConkerViewFocus &f, float y) { return (y - f.top) * f.frameHeight / (f.bottom - f.top); }
++
++    // Where a rectangle (in pixels) stands: the whole frame (left alone), the focused view (moved to the whole
++    // frame), or another view (not drawn). Judged by its middle, so a view's own slightly different edges match.
++    enum class ConkerViewPart { Whole, Focused, Other };
++
++    inline ConkerViewPart conkerViewPart(const ConkerViewFocus &f, float left, float top, float right, float bottom) {
++        if (((right - left) >= 0.9f * f.frameWidth) && ((bottom - top) >= 0.9f * f.frameHeight)) {
++            return ConkerViewPart::Whole;
++        }
++        const float middleX = (left + right) / 2.0f;
++        const float middleY = (top + bottom) / 2.0f;
++        if ((middleX >= f.left) && (middleX <= f.right) && (middleY >= f.top) && (middleY <= f.bottom)) {
++            return ConkerViewPart::Focused;
++        }
++        return ConkerViewPart::Other;
++    }
++
++    // A rectangle of the frame's 2D (quarter pixels), moved with the focused view: false if it isn't drawn. Only moved,
++    // never scaled: the game draws a split screen's 2D at full size.
++    // - At the line between the top and bottom views (within 3 pixels of it): shared by the views, moved down to the
++    //   bottom of the frame, all of it by as much so it keeps together: the match timer in the middle of the frame,
++    //   War's and Beach's team scores beside it, Heist's row of every player's $$$.
++    // - Its middle outside the view: another's, left out (a piece on the line between views belongs to the one
++    //   its middle is in, as Heist's $$$ rows).
++    // - Covering most of the view in fill mode (its clears, color and depth): the whole frame.
++    // - Otherwise the view's: moved as far as the view's nearest edges move, across and down. Its middle in the
++    //   first 30% of the view's width goes with the left edge, past 70% with the right, otherwise with the middle
++    //   (wide, so centered text such as "0 (1st)" moves whole); the same down.
++    inline bool conkerMoveRect(const ConkerViewFocus &f, bool fillMode, FixedRect &rect) {
++        const float left = rect.ulx / 4.0f, top = rect.uly / 4.0f, right = rect.lrx / 4.0f, bottom = rect.lry / 4.0f;
++        if ((right - left >= 0.9f * f.frameWidth) && (bottom - top >= 0.9f * f.frameHeight)) {
++            return true;
++        }
++        const float viewWidth = f.right - f.left;
++        const float viewHeight = f.bottom - f.top;
++        const float splitLine = f.frameHeight / 2.0f;
++        const bool split = viewHeight < 0.75f * f.frameHeight;
++        float moveX = 0.0f, moveY = 0.0f;
++        const float middleX = (left + right) / 2.0f;
++        const float middleY = (top + bottom) / 2.0f;
++        const float nearLine = 3.0f;
++        if (split && (top < splitLine + nearLine) && (bottom > splitLine - nearLine)) {
++            const float margin = 6.0f;
++            const float sharedHalfHeight = 6.0f;
++            moveY = (f.frameHeight - margin) - (splitLine + sharedHalfHeight);
++        }
++        else if ((middleX < f.left - 1.0f) || (middleX > f.right + 1.0f) || (middleY < f.top - 1.0f) || (middleY > f.bottom + 1.0f)) {
++            return false;
++        }
++        else if (fillMode && (right - left >= 0.8f * viewWidth) && (bottom - top >= 0.8f * viewHeight)) {
++            rect.ulx = 0;
++            rect.uly = 0;
++            rect.lrx = int32_t(f.frameWidth * 4.0f);
++            rect.lry = int32_t(f.frameHeight * 4.0f);
++            return true;
++        }
++        else {
++            auto edgeMove = [](float middle, float viewStart, float viewEnd, float frameSize) {
++                const float share = (middle - viewStart) / (viewEnd - viewStart);
++                if (share < 0.3f) return -viewStart;
++                if (share > 0.7f) return frameSize - viewEnd;
++                return frameSize / 2.0f - (viewStart + viewEnd) / 2.0f;
++            };
++            moveX = edgeMove((left + right) / 2.0f, f.left, f.right, f.frameWidth);
++            moveY = edgeMove((top + bottom) / 2.0f, f.top, f.bottom, f.frameHeight);
++            // Kept inside the frame (a piece hanging over the view's edge would go past the frame's), where
++            // it fits in it at all.
++            const float inset = 2.0f;
++            if ((right - left) <= f.frameWidth - 2.0f * inset) {
++                moveX = std::clamp(moveX, inset - left, (f.frameWidth - inset) - right);
++            }
++            if ((bottom - top) <= f.frameHeight - 2.0f * inset) {
++                moveY = std::clamp(moveY, inset - top, (f.frameHeight - inset) - bottom);
++            }
++        }
++        const int32_t dx = int32_t(std::lround(moveX * 4.0f));
++        const int32_t dy = int32_t(std::lround(moveY * 4.0f));
++        rect.ulx += dx;
++        rect.lrx += dx;
++        rect.uly += dy;
++        rect.lry += dy;
++        return true;
++    }
++};
 diff --git a/src/common/rt64_fblog.h b/src/common/rt64_fblog.h
 new file mode 100644
 index 0000000..c9dd621
@@ -1055,6 +1189,68 @@ index e08b02c..084ccfd 100644
      struct PresentQueue {
          struct External {
              ApplicationWindow *appWindow = nullptr;
+diff --git a/src/hle/rt64_rdp.cpp b/src/hle/rt64_rdp.cpp
+index a10c11a..026d138 100644
+--- a/src/hle/rt64_rdp.cpp
++++ b/src/hle/rt64_rdp.cpp
+@@ -4,7 +4,10 @@
+ 
+ #include "rt64_rdp.h"
+ 
++#include "common/rt64_conker_view_focus.h"
++
+ #include <cassert>
++#include <cmath>
+ 
+ #include "../include/rt64_extended_gbi.h"
+ 
+@@ -977,6 +980,27 @@ namespace RT64 {
+         scissorRect.uly = std::clamp(uly + extAlignment.topOffset, extAlignment.topBound, extAlignment.bottomBound);
+         scissorRect.lrx = std::clamp(movedFromOrigin(lrx + extAlignment.rightOffset, extAlignment.rightOrigin), extAlignment.leftBound, extAlignment.rightBound);
+         scissorRect.lry = std::clamp(lry + extAlignment.bottomOffset, extAlignment.topBound, extAlignment.bottomBound);
++
++        // Conker: netplay's "my view only", drawn anew (rt64_conker_view_focus.h). The rectangle is in quarter pixels.
++        const ConkerViewFocus focus = conkerViewFocus();
++        if (conkerFocusApplies(focus, colorImage.width)) {
++            const ConkerViewPart part = conkerViewPart(focus, scissorRect.ulx / 4.0f, scissorRect.uly / 4.0f, scissorRect.lrx / 4.0f, scissorRect.lry / 4.0f);
++            if (part == ConkerViewPart::Focused) {
++                // Stretched with the view (the view's own scissor to the whole frame), within the frame.
++                auto mapped = [](float v, float limit) { return int32_t(std::lround(std::clamp(v, 0.0f, limit) * 4.0f)); };
++                const float left = conkerMapX(focus, scissorRect.ulx / 4.0f), right = conkerMapX(focus, scissorRect.lrx / 4.0f);
++                const float top = conkerMapY(focus, scissorRect.uly / 4.0f), bottom = conkerMapY(focus, scissorRect.lry / 4.0f);
++                scissorRect.ulx = mapped(left, focus.frameWidth);
++                scissorRect.uly = mapped(top, focus.frameHeight);
++                scissorRect.lrx = mapped(right, focus.frameWidth);
++                scissorRect.lry = mapped(bottom, focus.frameHeight);
++            }
++            else if (part == ConkerViewPart::Other) {
++                scissorRect.lrx = scissorRect.ulx;
++                scissorRect.lry = scissorRect.uly;
++            }
++        }
++
+         scissorModeStack[scissorStackSize - 1] = mode;
+         extended.scissorLeftOriginStack[scissorStackSize - 1] = extAlignment.leftOrigin;
+         extended.scissorRightOriginStack[scissorStackSize - 1] = extAlignment.rightOrigin;
+@@ -1192,11 +1216,17 @@ namespace RT64 {
+             }
+         }
+ 
+-        const FixedRect drawRect(movedFromOrigin(ulx, extAlignment.leftOrigin), uly, movedFromOrigin(lrx, extAlignment.rightOrigin), lry);
++        FixedRect drawRect(movedFromOrigin(ulx, extAlignment.leftOrigin), uly, movedFromOrigin(lrx, extAlignment.rightOrigin), lry);
+         if (drawRect.isEmpty()) {
+             return;
+         }
+ 
++        // Conker: netplay's "my view only", drawn anew (rt64_conker_view_focus.h): the view's 2D goes with it.
++        const ConkerViewFocus focus = conkerViewFocus();
++        if (conkerFocusApplies(focus, colorImage.width) && !conkerMoveRect(focus, usesFillMode, drawRect)) {
++            return;
++        }
++
+         // Check if framebuffer pair must be changed.
+         checkFramebufferPair();
+ 
 diff --git a/src/hle/rt64_rdp_tmem.cpp b/src/hle/rt64_rdp_tmem.cpp
 index 6051f4e..8f00934 100644
 --- a/src/hle/rt64_rdp_tmem.cpp
@@ -1520,20 +1716,30 @@ index 778e08b..f53d597 100644
          void updatePerspective(const hlslpp::float4x4 &prevTransform, const hlslpp::float4x4 &curTransform, uint8_t perspInterpolation);
  
 diff --git a/src/hle/rt64_rsp.cpp b/src/hle/rt64_rsp.cpp
-index 1da2550..c2c7517 100644
+index 1da2550..c4edb88 100644
 --- a/src/hle/rt64_rsp.cpp
 +++ b/src/hle/rt64_rsp.cpp
-@@ -4,7 +4,9 @@
+@@ -4,7 +4,11 @@
  
  #include "rt64_rsp.h"
  
++#include "common/rt64_conker_view_focus.h"
++
 +#include <algorithm>
  #include <cassert>
 +#include <cmath>
  
  #include "../include/rt64_extended_gbi.h"
  #include "common/rt64_common.h"
-@@ -427,6 +429,215 @@ namespace RT64 {
+@@ -56,6 +60,7 @@ namespace RT64 {
+         lights.fill({});
+         segments.fill(0);
+         viewportStack[0] = {};
++        extended.viewportFocusYScaleStack.fill(1.0f);
+         clipRatios[0] = 1;
+         clipRatios[1] = 1;
+         clipRatios[2] = -1;
+@@ -427,6 +432,215 @@ namespace RT64 {
          setVertexCommon<false, sizeof(VertexEXV1)>(rdramAddress, dstIndex, dstIndex + vtxCount);
      }
  
@@ -1749,7 +1955,15 @@ index 1da2550..c2c7517 100644
      void RSP::setVertexColorPD(uint32_t address) {
          vertexColorPDAddress = fromSegmentedMasked(address);
      }
-@@ -506,13 +717,18 @@ namespace RT64 {
+@@ -471,6 +685,7 @@ namespace RT64 {
+             drawData.viewProjTransformGroups.emplace_back(extended.curViewProjMatrixIdGroupIndex);
+             drawData.rspViewports.emplace_back(viewportStack[viewportStackSize - 1]);
+             drawData.viewportOrigins.emplace_back(extended.viewportOriginStack[viewportStackSize - 1]);
++            drawData.viewportFocusYScales.emplace_back(extended.viewportFocusYScaleStack[viewportStackSize - 1]);
+ 
+             for (uint32_t j = 0; j < 4; j++) {
+                 drawData.viewportClipRatios.emplace_back(clipRatios[j]);
+@@ -506,13 +721,18 @@ namespace RT64 {
          const int workloadCursor = state->ext.workloadQueue->writeCursor;
          Workload &workload = state->ext.workloadQueue->workloads[workloadCursor];
  
@@ -1769,7 +1983,7 @@ index 1da2550..c2c7517 100644
          // ModelViewProj is only updated when a vertex is processed and the flag is enabled.
          auto &worldTransforms = workload.drawData.worldTransforms;
          auto &worldTransformGroups = workload.drawData.worldTransformGroups;
-@@ -520,6 +736,12 @@ namespace RT64 {
+@@ -520,6 +740,12 @@ namespace RT64 {
          auto &worldTransformPhysicalAddresses = workload.drawData.worldTransformPhysicalAddresses;
          auto &worldTransformVertexIndices = workload.drawData.worldTransformVertexIndices;
          bool addWorldTransform = (modelViewProjChanged || modelViewProjInserted);
@@ -1782,7 +1996,7 @@ index 1da2550..c2c7517 100644
          if (modelViewProjChanged) {
              computeModelViewProj();
              curTransformIndex = static_cast<uint16_t>(worldTransforms.size());
-@@ -731,6 +953,22 @@ namespace RT64 {
+@@ -731,6 +957,22 @@ namespace RT64 {
                  tcFloats.emplace_back((float)((double)((vertices[i].s) * TextureSc) / Divisor));
                  tcFloats.emplace_back((float)((double)((vertices[i].t) * TextureTc) / Divisor));
              }
@@ -1805,7 +2019,7 @@ index 1da2550..c2c7517 100644
          }
      }
  
-@@ -841,7 +1079,12 @@ namespace RT64 {
+@@ -841,7 +1083,12 @@ namespace RT64 {
          const uint32_t globalIndex = indices[vtxIndex];
          const float screenZ = workload.drawData.posScreen[globalIndex][2] * DepthRange;
          const float zValueFloat = zValue / 65536.0f;
@@ -1819,7 +2033,50 @@ index 1da2550..c2c7517 100644
              const uint32_t rdramAddress = fromSegmentedMasked(branchDl);
              *dl = reinterpret_cast<DisplayList *>(state->fromRDRAM(rdramAddress)) - 1;
          }
-@@ -1152,6 +1395,16 @@ namespace RT64 {
+@@ -910,6 +1157,34 @@ namespace RT64 {
+         viewport.translate.y = float(vp->vtrans[0] + offy) / 4.0f;
+         viewport.translate.z = float(vp->vtrans[3]) / DepthRange;
+         extended.viewportOriginStack[viewportStackSize - 1] = ori;
++
++        // Conker: netplay's "my view only", drawn anew (rt64_conker_view_focus.h).
++        float focusYScale = 1.0f;
++        const ConkerViewFocus focus = conkerViewFocus();
++        if (conkerFocusApplies(focus, state->rdp->colorImage.width)) {
++            const float halfWidth = std::fabs(viewport.scale.x);
++            const float halfHeight = std::fabs(viewport.scale.y);
++            const ConkerViewPart part = conkerViewPart(focus, viewport.translate.x - halfWidth, viewport.translate.y - halfHeight,
++                viewport.translate.x + halfWidth, viewport.translate.y + halfHeight);
++            if ((part == ConkerViewPart::Focused) && (halfWidth > 0.0f) && (halfHeight > 0.0f)) {
++                // Stretched with the view to the whole frame; the projection's height scaled by the stretch across
++                // over the stretch down, so what's drawn keeps its shape (a 2-player half: 1.26 / 2.04, about
++                // 0.62, more of the scene shown up and down; a quarter: 2 / 2, unchanged).
++                const float stretchX = focus.frameWidth / (focus.right - focus.left);
++                const float stretchY = focus.frameHeight / (focus.bottom - focus.top);
++                focusYScale = stretchX / stretchY;
++                viewport.translate.x = conkerMapX(focus, viewport.translate.x);
++                viewport.translate.y = conkerMapY(focus, viewport.translate.y);
++                viewport.scale.x *= stretchX;
++                viewport.scale.y *= stretchY;
++            }
++            else if (part == ConkerViewPart::Other) {
++                viewport.scale.x = 0.0f;
++                viewport.scale.y = 0.0f;
++            }
++        }
++
++        extended.viewportFocusYScaleStack[viewportStackSize - 1] = focusYScale;
+         viewportChanged = true;
+     }
+ 
+@@ -917,6 +1192,7 @@ namespace RT64 {
+         if (viewportStackSize < RSP_EXTENDED_STACK_SIZE) {
+             viewportStack[viewportStackSize] = viewportStack[viewportStackSize - 1];
+             extended.viewportOriginStack[viewportStackSize] = extended.viewportOriginStack[viewportStackSize - 1];
++            extended.viewportFocusYScaleStack[viewportStackSize] = extended.viewportFocusYScaleStack[viewportStackSize - 1];
+             viewportStackSize++;
+         }
+     }
+@@ -1152,6 +1428,16 @@ namespace RT64 {
  
              const interop::RSPViewport &viewport = viewportStack[viewportStackSize - 1];
              const FixedRect viewportClipRect = viewport.rect(clipRatios.data());
@@ -1837,7 +2094,7 @@ index 1da2550..c2c7517 100644
              if (!drawRect.isNull()) {
                  fbPair.drawColorRect.merge(drawRect);
 diff --git a/src/hle/rt64_rsp.h b/src/hle/rt64_rsp.h
-index 61bb3b1..782ed13 100644
+index 61bb3b1..5c37959 100644
 --- a/src/hle/rt64_rsp.h
 +++ b/src/hle/rt64_rsp.h
 @@ -162,6 +162,28 @@ namespace RT64 {
@@ -1869,7 +2126,16 @@ index 61bb3b1..782ed13 100644
          uint32_t vertexFogIndex;
          uint32_t vertexLightIndex;
          uint32_t vertexLightCount;
-@@ -254,6 +276,11 @@ namespace RT64 {
+@@ -205,6 +227,8 @@ namespace RT64 {
+             } global;
+ 
+             std::array<uint16_t, RSP_EXTENDED_STACK_SIZE> viewportOriginStack;
++            // Conker: how much each viewport's projection is scaled up and down (rt64_conker_view_focus.h).
++            std::array<float, RSP_EXTENDED_STACK_SIZE> viewportFocusYScaleStack;
+ 
+             DrawExtendedType drawExtendedType;
+             DrawExtendedData drawExtendedData;
+@@ -254,6 +278,11 @@ namespace RT64 {
          void setVertex(uint32_t address, uint32_t vtxCount, uint32_t dstIndex);
          void setVertexPD(uint32_t address, uint32_t vtxCount, uint32_t dstIndex);
          void setVertexEXV1(uint32_t address, uint32_t vtxCount, uint32_t dstIndex);
@@ -1882,7 +2148,7 @@ index 61bb3b1..782ed13 100644
          void setVertexSegmentV1(bool isEnabled, uint32_t vertexElement, uint32_t vertexAddress, uint32_t baseSegmentAddress);
          template<uint32_t floatCount, uint32_t vertexSize>
 diff --git a/src/hle/rt64_state.cpp b/src/hle/rt64_state.cpp
-index 2970e71..5358814 100644
+index 2970e71..3a8d39e 100644
 --- a/src/hle/rt64_state.cpp
 +++ b/src/hle/rt64_state.cpp
 @@ -4,6 +4,8 @@
@@ -1973,7 +2239,17 @@ index 2970e71..5358814 100644
              if (!differentFbs.empty()) {
                  RenderWorkerExecution execution(ext.framebufferGraphicsWorker);
                  framebufferManager.uploadRAM(ext.framebufferGraphicsWorker, differentFbs.data(), differentFbs.size(), workload.fbChangePool, RDRAM, true, drawFbOperations, drawFbDiscards, ext.shaderLibrary);
-@@ -1611,6 +1657,9 @@ namespace RT64 {
+@@ -818,7 +864,8 @@ namespace RT64 {
+ 
+         // Validate all tile copies to be used during the rendering.
+         const bool extendedRenderToRAMSet = (extended.renderToRAM < UINT8_MAX);
+-        const bool renderToRDRAM = extendedRenderToRAMSet ? (extended.renderToRAM != 0) : ext.emulatorConfig->framebuffer.renderToRAM;
++        // Conker: not while the game's host has it off (setRenderToRAMOff).
++        const bool renderToRDRAM = !renderToRAMOff() && (extendedRenderToRAMSet ? (extended.renderToRAM != 0) : ext.emulatorConfig->framebuffer.renderToRAM);
+         const bool warningsEnabled = ext.userConfig->developerMode;
+         const bool linearFiltering = !ext.userConfig->threePointFiltering;
+         const size_t callTileCount = workload.drawData.callTiles.size();
+@@ -1611,6 +1658,9 @@ namespace RT64 {
          }
  #   endif
  
@@ -1983,7 +2259,7 @@ index 2970e71..5358814 100644
          // Store the presentation rate in the workload.
          if (extended.refreshRate != UINT16_MAX) {
              workload.viOriginalRate = extended.refreshRate;
-@@ -2727,6 +2776,13 @@ namespace RT64 {
+@@ -2727,6 +2777,13 @@ namespace RT64 {
      void State::setDitherNoiseStrength(float noiseStrength) {
          extended.ditherNoiseStrength = noiseStrength;
      }
@@ -2010,10 +2286,10 @@ index 7a8c13b..373815a 100644
          void endSpriteCommand();
          uint8_t *fromRDRAM(uint32_t rdramAddress) const;
 diff --git a/src/hle/rt64_workload.cpp b/src/hle/rt64_workload.cpp
-index b4c85f5..5980a7f 100644
+index b4c85f5..33d4d84 100644
 --- a/src/hle/rt64_workload.cpp
 +++ b/src/hle/rt64_workload.cpp
-@@ -4,7 +4,23 @@
+@@ -4,7 +4,33 @@
  
  #include "rt64_workload.h"
  
@@ -2034,10 +2310,20 @@ index b4c85f5..5980a7f 100644
 +        return interpolationPausedFlag;
 +    }
 +
++    static std::atomic<bool> renderToRAMOffFlag{ false };
++
++    void setRenderToRAMOff(bool off) {
++        renderToRAMOffFlag = off;
++    }
++
++    bool renderToRAMOff() {
++        return renderToRAMOffFlag;
++    }
++
      // Common functions.
  
      static uint64_t roundUp(uint64_t value, uint64_t powerOf2Alignment) {
-@@ -22,6 +38,8 @@ namespace RT64 {
+@@ -22,6 +48,8 @@ namespace RT64 {
          workloadId = 0;
          extended.testZIndexCount = 0;
          extended.ditherNoiseStrength = 1.0f;
@@ -2046,7 +2332,23 @@ index b4c85f5..5980a7f 100644
  
          commandWarnings.clear();
          spriteCommands.clear();
-@@ -315,6 +333,82 @@ namespace RT64 {
+@@ -68,6 +96,7 @@ namespace RT64 {
+         drawData.rspViewports.clear();
+         drawData.viewportClipRatios.clear();
+         drawData.viewportOrigins.clear();
++        drawData.viewportFocusYScales.clear();
+         drawData.rspFog.clear();
+         drawData.rspLights.clear();
+         drawData.rspLookAt.clear();
+@@ -102,6 +131,7 @@ namespace RT64 {
+ 
+         // Push an identity matrix into the transforms by default so rects can use them.
+         drawData.rspViewports.push_back(interop::RSPViewport::identity());
++        drawData.viewportFocusYScales.push_back(1.0f);
+         drawData.viewTransforms.push_back(interop::float4x4::identity());
+         drawData.projTransforms.push_back(interop::float4x4::identity());
+         drawData.viewProjTransforms.push_back(interop::float4x4::identity());
+@@ -315,6 +345,82 @@ namespace RT64 {
          return addedPair;
      }
  
@@ -2130,10 +2432,10 @@ index b4c85f5..5980a7f 100644
          if (fbPairCount > 0) {
              return fbPairCount - 1;
 diff --git a/src/hle/rt64_workload.h b/src/hle/rt64_workload.h
-index 8ea27d5..dc05e45 100644
+index 8ea27d5..a23608f 100644
 --- a/src/hle/rt64_workload.h
 +++ b/src/hle/rt64_workload.h
-@@ -23,6 +23,13 @@
+@@ -23,6 +23,19 @@
  #include "rt64_transform_group.h"
  
  namespace RT64 {
@@ -2144,10 +2446,24 @@ index 8ea27d5..dc05e45 100644
 +    void setInterpolationPaused(bool paused);
 +    bool interpolationPaused();
 +
++    // Conker: renders nothing back into the game's memory (its color and depth images), whatever the emulator's
++    // Render to RAM, while the game's host asks (netplay's deterministic mode): those writes come from the
++    // renderer's thread whenever it gets to a display list, and a headless run, with no renderer, has none.
++    void setRenderToRAMOff(bool off);
++    bool renderToRAMOff();
++
      struct DrawData {
          std::vector<float> posFloats;
          std::vector<float> velFloats;
-@@ -234,11 +241,16 @@ namespace RT64 {
+@@ -62,6 +75,7 @@ namespace RT64 {
+         std::vector<interop::RSPViewport> rspViewports;
+         std::vector<int16_t> viewportClipRatios;
+         std::vector<uint16_t> viewportOrigins;
++        std::vector<float> viewportFocusYScales;
+         std::vector<interop::RSPFog> rspFog;
+         std::vector<interop::RSPLight> rspLights;
+         std::vector<interop::RSPLookAt> rspLookAt;
+@@ -234,11 +248,16 @@ namespace RT64 {
          uint64_t workloadId = 0;
          uint64_t presentId = 0;
          bool paused = false;
@@ -2164,7 +2480,7 @@ index 8ea27d5..dc05e45 100644
          } extended;
  
          void reset();
-@@ -253,5 +265,17 @@ namespace RT64 {
+@@ -253,5 +272,17 @@ namespace RT64 {
          void begin(uint64_t submissionFrame);
          bool addFramebufferPair(uint32_t colorAddress, uint8_t colorFmt, uint8_t colorSiz, uint16_t colorWidth, uint32_t depthAddress);
          int currentFramebufferPairIndex() const;
@@ -2624,7 +2940,7 @@ index 9fae0d4..ce26584 100644
                          bool usesViewport = (proj.type == Projection::Type::Perspective) || (proj.type == Projection::Type::Orthographic);
                          if (usesViewport) {
 diff --git a/src/render/rt64_projection_processor.cpp b/src/render/rt64_projection_processor.cpp
-index e842dcc..c8cc898 100644
+index e842dcc..f9aab3c 100644
 --- a/src/render/rt64_projection_processor.cpp
 +++ b/src/render/rt64_projection_processor.cpp
 @@ -4,6 +4,7 @@
@@ -2732,16 +3048,27 @@ index e842dcc..c8cc898 100644
              interop::float4x4 &viewMatrix = drawData.modViewTransforms[proj.transformsIndex];
              interop::float4x4 &projMatrix = drawData.modProjTransforms[proj.transformsIndex];
              interop::float4x4 &viewProjMatrix = drawData.modViewProjTransforms[proj.transformsIndex];
-@@ -112,7 +179,7 @@ namespace RT64 {
+@@ -112,7 +179,18 @@ namespace RT64 {
                  projMatrix = workload.debuggerCamera.projMatrix;
              }
  
 -            adjustProjectionMatrix(projMatrix, projRatioScale);
 +            adjustProjectionMatrix(projMatrix, projRatioScale, projCenterX);
++
++            // Conker: a view drawn anew across the frame is made taller (rt64_conker_view_focus.h).
++            const float focusYScale = drawData.viewportFocusYScales[proj.transformsIndex];
++            auto adjustProjectionHeight = [focusYScale](interop::float4x4 &matrix) {
++                if (focusYScale != 1.0f) {
++                    for (int r = 0; r < 4; r++) {
++                        matrix[r][1] *= focusYScale;
++                    }
++                }
++            };
++            adjustProjectionHeight(projMatrix);
  
              interop::float4x4 &prevViewTransform = drawData.prevViewTransforms[proj.transformsIndex];
              interop::float4x4 &prevProjTransform = drawData.prevProjTransforms[proj.transformsIndex];
-@@ -120,9 +187,21 @@ namespace RT64 {
+@@ -120,9 +198,22 @@ namespace RT64 {
                  const interop::float4x4 curViewTransform = viewMatrix;
                  const interop::float4x4 curProjTransform = projMatrix;
                  interop::float4x4 adjustedPrevProj = *prevProjMatrix;
@@ -2749,6 +3076,7 @@ index e842dcc..c8cc898 100644
 -                viewMatrix = rigidBody->lerp(p.curFrameWeight, *prevViewMatrix, curViewTransform, true);
 -                prevViewTransform = rigidBody->lerp(p.prevFrameWeight, *prevViewMatrix, curViewTransform, true);
 +                adjustProjectionMatrix(adjustedPrevProj, projRatioScale, projCenterX);
++                adjustProjectionHeight(adjustedPrevProj);
 +                if (rigidBody->lerpDecompose) {
 +                    viewMatrix = rigidBody->lerp(p.curFrameWeight, *prevViewMatrix, curViewTransform, true);
 +                    prevViewTransform = rigidBody->lerp(p.prevFrameWeight, *prevViewMatrix, curViewTransform, true);
@@ -2766,7 +3094,7 @@ index e842dcc..c8cc898 100644
  
                  // We only interpolate the projection if the view matrix has been interpolated.
                  const bool interpolateProjection = rigidBody->lerpTranslation || rigidBody->lerpRotation;
-@@ -144,6 +223,31 @@ namespace RT64 {
+@@ -144,6 +235,31 @@ namespace RT64 {
  
              interop::float4x4 &prevViewProjTransform = drawData.prevViewProjTransforms[proj.transformsIndex];
              prevViewProjTransform = hlslpp::mul(prevViewTransform, prevProjTransform);
@@ -3266,16 +3594,19 @@ index 9131697..9c74131 100644
          void reloadReplacements(bool clearQueue, uint64_t exclusiveDbHash = 0);
          bool loadReplacementDirectory(const ReplacementDirectory &replacementDirectory);
 diff --git a/src/render/rt64_vi_renderer.cpp b/src/render/rt64_vi_renderer.cpp
-index b4ff4e9..3edef2f 100644
+index b4ff4e9..a984aee 100644
 --- a/src/render/rt64_vi_renderer.cpp
 +++ b/src/render/rt64_vi_renderer.cpp
-@@ -4,10 +4,24 @@
+@@ -4,10 +4,42 @@
  
  #include "rt64_vi_renderer.h"
  
 +#include <algorithm>
 +#include <atomic>
++#include <cmath>
++#include <mutex>
 +
++#include "common/rt64_conker_view_focus.h"
  #include "shared/rt64_hlsl.h"
  #include "shared/rt64_video_interface.h"
  
@@ -3291,10 +3622,25 @@ index b4ff4e9..3edef2f 100644
 +        return presentationCropShare;
 +    }
 +
++    // Conker: the view focus drawn anew (see common/rt64_conker_view_focus.h), set from the game's thread and read
++    // on the workload's.
++    static std::mutex viewFocusMutex;
++    static ConkerViewFocus viewFocus;
++
++    void setViewFocusRedraw(bool on, float left, float top, float right, float bottom, float frameWidth, float frameHeight) {
++        std::scoped_lock lock(viewFocusMutex);
++        viewFocus = { on, left, top, right, bottom, frameWidth, frameHeight };
++    }
++
++    ConkerViewFocus conkerViewFocus() {
++        std::scoped_lock lock(viewFocusMutex);
++        return viewFocus;
++    }
++
      // VIRenderer
  
      VIRenderer::VIRenderer() { }
-@@ -108,6 +122,18 @@ namespace RT64 {
+@@ -108,6 +140,18 @@ namespace RT64 {
          hlslpp::float4 viViewRect = vi.viewRectangle() * sdSize.xyxy;
          hlslpp::float4 viCropRect = vi.cropRectangle() * sdSize.xyxy;
  

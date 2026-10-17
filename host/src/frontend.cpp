@@ -241,6 +241,9 @@ namespace {
         conker::texture_packs::update_unpacking();
         conker::fps_counter::update();
         conker::notices::update();
+#if defined(CONKER_NETPLAY)
+        conker::netplay_menu::update();
+#endif
         update_hotkeys();
         conker::reticle::update();
         std::string title;
@@ -335,6 +338,10 @@ namespace {
         conker::local_achievements::init();
         conker::reticle::on_ui_ready();
         options->add_start_game_or_load_rom_option();
+#if defined(CONKER_NETPLAY)
+        conker::netplay_menu::init(game.game_id, recomp::get_config_path() / game.stored_filename());
+        options->add_option("Netplay", conker::netplay_menu::open);
+#endif
         version_option = options->add_option("Version", on_version_selected);
         add_rom_option = options->add_option("Add ROM", on_add_rom_selected);
         options->add_setup_controls_option();

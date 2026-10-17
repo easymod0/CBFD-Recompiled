@@ -21,9 +21,9 @@
 // what the game has saved.
 //
 // The file: "CBFDSTAT", the file's version (u32), the program's version (u32 length, text), when it was
-// taken (u64, seconds since 1970), a block for achievements' progress (u32 length, bytes: empty now; it
-// held RetroAchievements', which was removed, and stays so the files keep their layout), then the
-// runtime's state (u32 length, bytes; librecomp/save_states.hpp).
+// taken (u64, seconds since 1970), a block of the host's own state (u32 length, bytes: conker::host_state;
+// it held RetroAchievements' progress, which was removed, then stayed empty so the files kept their
+// layout), then the runtime's state (u32 length, bytes; librecomp/save_states.hpp).
 
 #include <atomic>
 #include <chrono>
@@ -255,7 +255,7 @@ namespace {
             log_line("[save] slot %d taken after %u tries, thread %d running\n%s", request_slot, attempts,
                 (int)osGetThreadId(rdram, NULLPTR),
                 recomp::save_states::describe_current_threads(rdram).c_str());
-            write_state(request_slot, std::move(state), {});
+            write_state(request_slot, std::move(state), conker::host_state::save());
             notify_done("State saved to slot " + std::to_string(request_slot));
             finish();
             return;
@@ -267,6 +267,7 @@ namespace {
             case recomp::save_states::LoadResult::Loaded:
                 log_line("[load] slot %d loaded after %u tries", request_slot, attempts);
                 conker::local_achievements::state_loaded();
+                conker::host_state::load(load_progress);
                 notify_done("Loaded the state in slot " + std::to_string(request_slot));
                 finish();
                 break;
@@ -343,11 +344,21 @@ namespace {
 
 // The Controls tab's Hotkeys (frontend.cpp's update_hotkeys): Save State (F5), Load State (F7) and Next Save
 // State Slot (F6) by default.
+// Off with the netplay settings profile (netplay/profile.cpp): a recording, a replay or a netplay match
+// goes on from boot.
 void conker::save_states::save() {
+    if (conker::netplay_profile::active()) {
+        conker::notices::show("Save states are off in netplay and while recording or replaying");
+        return;
+    }
     ask_to_save();
 }
 
 void conker::save_states::load() {
+    if (conker::netplay_profile::active()) {
+        conker::notices::show("Save states are off in netplay and while recording or replaying");
+        return;
+    }
     ask_to_load();
 }
 

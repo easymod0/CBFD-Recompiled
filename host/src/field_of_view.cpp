@@ -30,6 +30,7 @@
 #include "recomp.h"
 
 #include "conker.hpp"
+#include "game_trig.hpp"
 
 namespace {
     constexpr uint32_t cameras = 0x800BE628; // D_800BE628, a pointer to the cameras
@@ -58,12 +59,12 @@ namespace {
     }
 
     float half_tan(float degrees) {
-        return std::tan(degrees * 0.5f * degrees_to_radians);
+        return conker::game_trig::tan(degrees * 0.5f * degrees_to_radians);
     }
 
     // The degrees whose half angle's tangent is t.
     float from_half_tan(float t) {
-        return 2.0f * std::atan(t) / degrees_to_radians;
+        return 2.0f * conker::game_trig::atan(t) / degrees_to_radians;
     }
 
     // The setting's vertical field of view, or 0 without one (the build without the menus).

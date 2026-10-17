@@ -9,11 +9,27 @@ cmake_minimum_required(VERSION 3.20)
 #   cmake -S host -B host/build -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=RelWithDebInfo
 #   cmake --build host/build
 
+# Netplay (issue #126), off until it has been reviewed and tested. So far: the determinism harness
+# (--record, --replay, --hash-log: src/netplay/harness.cpp) and the transport (src/netplay/net).
+option(CONKER_NETPLAY "Build the netplay work in progress" OFF)
+if (CONKER_NETPLAY)
+    # On Windows, protobuf from vcpkg: set up before project().
+    include("${CMAKE_CURRENT_SOURCE_DIR}/src/netplay/net/vcpkg.cmake")
+endif()
+
 project(ConkerRecomp C CXX)
 if (APPLE)
     # RT64 and RecompFrontend have Objective-C++ sources (Metal, Cocoa); rt64 enables
     # the languages only in its own directory.
     enable_language(OBJC OBJCXX)
+endif()
+
+# Netplay runs the same game on every machine, so every compiler has to turn its floating-point code into the
+# same arithmetic. Clang fuses a multiply and an add into one instruction (one rounding instead of two) where the
+# processor has it, as ARM's always does (Apple Silicon); MSVC doesn't unless asked. So no fusing, for every
+# target here (the recompiled game, the runtime, the host).
+if (CONKER_NETPLAY AND NOT MSVC)
+    add_compile_options(-ffp-contract=off)
 endif()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -83,6 +99,8 @@ add_executable(ConkerRecomp
     src/null_renderer.cpp
     src/overlays.cpp
     src/ultra_extras.cpp
+    src/host_state.cpp
+    src/audio_clock.cpp
     src/mod_api.cpp
     src/rom_versions.cpp
     src/widescreen.cpp
@@ -105,6 +123,24 @@ target_include_directories(ConkerRecomp PRIVATE
     "${REPO_ROOT}/RecompiledFuncs"
 )
 target_link_libraries(ConkerRecomp PRIVATE RecompiledFuncs librecomp ultramodern)
+
+if (CONKER_NETPLAY)
+    target_sources(ConkerRecomp PRIVATE src/netplay/harness.cpp src/netplay/profile.cpp src/netplay/hello.cpp
+        src/netplay/lockstep.cpp)
+    target_compile_definitions(ConkerRecomp PRIVATE CONKER_NETPLAY)
+    # The build id for the handshake (src/netplay/hello.cpp), from git at every build.
+    set(CONKER_BUILD_ID_CPP "${CMAKE_CURRENT_BINARY_DIR}/netplay_build_id.cpp")
+    add_custom_target(conker_build_id
+        COMMAND "${CMAKE_COMMAND}" -DSOURCE_DIR=${REPO_ROOT} -DOUT=${CONKER_BUILD_ID_CPP}
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/src/netplay/build_id.cmake"
+        BYPRODUCTS "${CONKER_BUILD_ID_CPP}")
+    target_sources(ConkerRecomp PRIVATE "${CONKER_BUILD_ID_CPP}")
+    add_dependencies(ConkerRecomp conker_build_id)
+    # The transport (src/netplay/net): GameNetworkingSockets, which needs protobuf (on Windows from
+    # vcpkg) and, but on Windows, OpenSSL.
+    add_subdirectory(src/netplay/net)
+    target_link_libraries(ConkerRecomp PRIVATE conker_netplay_net)
+endif()
 
 if (CONKER_RT64)
     set(RT64_STATIC ON CACHE BOOL "" FORCE)
@@ -169,6 +205,10 @@ if (CONKER_RT64)
 
     # CONKER_RT64 selects the window build; the rest are what rt64 compiles its own headers with.
     target_compile_definitions(ConkerRecomp PRIVATE CONKER_RT64 HLSL_CPU)
+    if (CONKER_NETPLAY)
+        # The launcher's Netplay menu.
+        target_sources(ConkerRecomp PRIVATE src/netplay/menu.cpp src/netplay/view.cpp)
+    endif()
     if (WIN32)
         target_compile_definitions(ConkerRecomp PRIVATE NOMINMAX)
     endif()

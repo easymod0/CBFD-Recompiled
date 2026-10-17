@@ -343,10 +343,10 @@ index 850689d..e061d59 100644
      const recomp::GameEntry& game_entry = find_it->second;
 diff --git a/librecomp/src/save_states.cpp b/librecomp/src/save_states.cpp
 new file mode 100644
-index 0000000..5b25a28
+index 0000000..5d6e10d
 --- /dev/null
 +++ b/librecomp/src/save_states.cpp
-@@ -0,0 +1,431 @@
+@@ -0,0 +1,453 @@
 +// Save states: a whole state of the game, as bytes (see librecomp/save_states.hpp, and
 +// ultramodern/save_states.hpp for how a save state of a recompiled game works).
 +//
@@ -359,6 +359,9 @@ index 0000000..5b25a28
 +//   the clock and the timers: the game's clock (u64), osSetTime's offset (i64), the running timers'
 +//     count (u32) and their OSTimers (i32 each)
 +//   the VI and the events (ultramodern::save_states::EventState, as it's laid out)
++//   the timeline (ultramodern::save_states::TimelineState, as it's laid out) and the RSP's data memory
++//     (4KB: an audio task's microcode keeps some of its state there for the next); both from layout 4,
++//     which reads layout 3's states too
 +//   the game's memory: its size (u32), then the memory as the program holds it
 +
 +#include <algorithm>
@@ -372,10 +375,15 @@ index 0000000..5b25a28
 +#include "ultramodern/save_states.hpp"
 +#include "librecomp/game.hpp"
 +#include "librecomp/overlays.hpp"
++#include "librecomp/rsp.hpp"
 +
 +namespace {
 +    constexpr char magic[4] = { 'R', 'C', 'S', 'T' };
-+    constexpr uint32_t layout_version = 3;
++    constexpr uint32_t layout_version = 4;
++    // The oldest layout this one reads (3 has no timeline or RSP memory).
++    constexpr uint32_t oldest_layout_version = 3;
++    // librecomp/rsp.hpp's dmem.
++    constexpr size_t rsp_dmem_size = 0x1000;
 +
 +    struct Registers {
 +        uint64_t gpr[32];
@@ -472,6 +480,9 @@ index 0000000..5b25a28
 +        std::vector<SavedThread> threads;
 +        ultramodern::save_states::TimerState timers;
 +        ultramodern::save_states::EventState events;
++        bool has_timeline = false;
++        ultramodern::save_states::TimelineState timeline{};
++        const uint8_t* rsp_dmem = nullptr;
 +        const uint8_t* memory = nullptr;
 +        uint32_t memory_size = 0;
 +    };
@@ -484,7 +495,7 @@ index 0000000..5b25a28
 +            return false;
 +        }
 +        const uint32_t version = in.get<uint32_t>();
-+        if (version != layout_version) {
++        if (version < oldest_layout_version || version > layout_version) {
 +            error = "it was saved by another version of the program (its layout is " + std::to_string(version) + ")";
 +            return false;
 +        }
@@ -510,6 +521,11 @@ index 0000000..5b25a28
 +            out.timers.active.push_back(in.get<int32_t>());
 +        }
 +        out.events = in.get<ultramodern::save_states::EventState>();
++        if (version >= 4) {
++            out.has_timeline = true;
++            out.timeline = in.get<ultramodern::save_states::TimelineState>();
++            out.rsp_dmem = in.get_bytes(rsp_dmem_size);
++        }
 +        out.memory_size = in.get<uint32_t>();
 +        out.memory = in.get_bytes(out.memory_size);
 +        if (!in.ok || out.memory_size != recomp::save_states::game_memory_size) {
@@ -673,6 +689,8 @@ index 0000000..5b25a28
 +    }
 +
 +    w.put(get_event_state(rdram));
++    w.put(get_timeline_state());
++    w.put_bytes(dmem, rsp_dmem_size);
 +
 +    w.put(game_memory_size);
 +    w.put_bytes(rdram, game_memory_size);
@@ -745,6 +763,10 @@ index 0000000..5b25a28
 +    }
 +    set_timer_state(state.timers);
 +    set_event_state(rdram, state.events);
++    set_timeline_state(state.has_timeline ? &state.timeline : nullptr, state.timers.now);
++    if (state.rsp_dmem != nullptr) {
++        std::memcpy(dmem, state.rsp_dmem, rsp_dmem_size);
++    }
 +    unlock_timers();
 +
 +    // The events that came in for the state that was replaced.
@@ -779,10 +801,10 @@ index 0000000..5b25a28
 +    return out;
 +}
 diff --git a/ultramodern/CMakeLists.txt b/ultramodern/CMakeLists.txt
-index 5593172..a5c8c38 100644
+index 5593172..83e0733 100644
 --- a/ultramodern/CMakeLists.txt
 +++ b/ultramodern/CMakeLists.txt
-@@ -15,6 +15,7 @@ add_library(ultramodern STATIC
+@@ -15,10 +15,12 @@ add_library(ultramodern STATIC
      "${CMAKE_CURRENT_SOURCE_DIR}/src/misc_ultra.cpp"
      "${CMAKE_CURRENT_SOURCE_DIR}/src/renderer_context.cpp"
      "${CMAKE_CURRENT_SOURCE_DIR}/src/rsp.cpp"
@@ -790,7 +812,12 @@ index 5593172..a5c8c38 100644
      "${CMAKE_CURRENT_SOURCE_DIR}/src/scheduling.cpp"
      "${CMAKE_CURRENT_SOURCE_DIR}/src/task_win32.cpp"
      "${CMAKE_CURRENT_SOURCE_DIR}/src/threadqueue.cpp"
-@@ -30,11 +31,13 @@ target_include_directories(ultramodern PUBLIC
+     "${CMAKE_CURRENT_SOURCE_DIR}/src/threads.cpp"
++    "${CMAKE_CURRENT_SOURCE_DIR}/src/timeline.cpp"
+     "${CMAKE_CURRENT_SOURCE_DIR}/src/timer.cpp"
+     "${CMAKE_CURRENT_SOURCE_DIR}/src/ultrainit.cpp"
+ )
+@@ -30,11 +32,13 @@ target_include_directories(ultramodern PUBLIC
      "${PROJECT_SOURCE_DIR}/../thirdparty/sse2neon"
  )
  
@@ -809,12 +836,37 @@ index 5593172..a5c8c38 100644
  
  if (WIN32)
      add_compile_definitions(NOMINMAX)
+diff --git a/ultramodern/include/ultramodern/input.hpp b/ultramodern/include/ultramodern/input.hpp
+index 1dab1b8..22f09df 100644
+--- a/ultramodern/include/ultramodern/input.hpp
++++ b/ultramodern/include/ultramodern/input.hpp
+@@ -57,6 +57,20 @@ namespace ultramodern {
+         };
+ 
+         void set_callbacks(const callbacks_t& callbacks);
++
++        // Called by osContGetReadData once it has filled in every controller's pad, as the game will read
++        // them (the N64's own values, after the analog sticks are converted), on the game thread that
++        // reads them. The host can see or replace what the game gets, e.g. to record and replay a game's
++        // inputs. `pads` points to MAXCONTROLLERS pads: those past what the game reads (osContSetCh) and
++        // controllers that didn't respond have a nonzero err_no.
++        struct Pad {
++            uint16_t button;
++            int8_t stick_x;
++            int8_t stick_y;
++            uint8_t err_no;
++        };
++        using read_data_callback_t = void(Pad* pads, int count);
++        void set_read_data_callback(read_data_callback_t* callback);
+     }
+ }
+ 
 diff --git a/ultramodern/include/ultramodern/save_states.hpp b/ultramodern/include/ultramodern/save_states.hpp
 new file mode 100644
-index 0000000..0c9078a
+index 0000000..a653fe4
 --- /dev/null
 +++ b/ultramodern/include/ultramodern/save_states.hpp
-@@ -0,0 +1,180 @@
+@@ -0,0 +1,201 @@
 +#ifndef __ULTRAMODERN_SAVE_STATES_HPP__
 +#define __ULTRAMODERN_SAVE_STATES_HPP__
 +
@@ -969,6 +1021,27 @@ index 0000000..0c9078a
 +EventState get_event_state(RDRAM_ARG1);
 +void set_event_state(RDRAM_ARG const EventState& state);
 +
++// --- The timeline (deterministic mode, timeline.hpp) ---
++
++// In deterministic mode a state is only taken and loaded at a delivery point (the idle thread in
++// pause_self), not also in osRecvMesg: the timeline is then between two deliveries.
++struct TimelineState {
++    // Whether the state was taken in deterministic mode (if not, the rest is 0).
++    uint32_t deterministic;
++    uint32_t unused0;   // 0: the padding the layout had, named so the saved bytes are always the same
++    // The time of the last delivery, the next VI's number, and the graphics tasks whose DP done is due
++    // at the next VI.
++    uint64_t now;
++    uint64_t next_vi;
++    uint32_t dp_due;
++    uint32_t unused1;   // 0, as unused0
++};
++
++TimelineState get_timeline_state();
++// `state` is null for a state that has none (taken by an older layout): in deterministic mode the
++// timeline then starts again from the state's clock, `clock`.
++void set_timeline_state(const TimelineState* state, uint64_t clock);
++
 +// For is_quiet: an RSP task was handed to the RSP (or the renderer), or finished (once its last
 +// message has been sent).
 +void task_submitted();
@@ -993,6 +1066,69 @@ index 0000000..0c9078a
 +
 +} // namespace save_states
 +} // namespace ultramodern
++
++#endif
+diff --git a/ultramodern/include/ultramodern/timeline.hpp b/ultramodern/include/ultramodern/timeline.hpp
+new file mode 100644
+index 0000000..c888735
+--- /dev/null
++++ b/ultramodern/include/ultramodern/timeline.hpp
+@@ -0,0 +1,57 @@
++#ifndef __ULTRAMODERN_TIMELINE_HPP__
++#define __ULTRAMODERN_TIMELINE_HPP__
++
++#include <cstdint>
++
++#include "ultra64.h"
++
++// Deterministic mode, for replays and netplay: the game runs on a virtual timeline instead of the
++// time, so the same inputs give the same game however fast the host is.
++//
++// Game code takes no virtual time. Events (VIs, timers, DP done) are delivered only at delivery
++// points, when the game is idle (every game thread waits): there virtual time moves straight to the
++// next event. No host thread posts to the game: the VI and timer threads stop, the audio task runs on
++// the game thread that starts it, and the graphics thread only reports that it's done. The game's
++// clock (osGetCount, osGetTime) is the timeline's time, plus a step each time the game reads it.
++namespace ultramodern {
++    namespace timeline {
++        // Turns deterministic mode on, for good: call it before the game starts. `fast` doesn't wait for
++        // real time to reach each event (headless replays).
++        void enable(bool fast);
++        bool enabled();
++        // The time of the last delivery (ticks): the time on the game's side between delivery points, as
++        // events have reached the game. Unlike the game's clock, reading it doesn't move it. On a game
++        // thread.
++        uint64_t delivery_time();
++        // Random sleeps of up to `max_us` microseconds at OS calls and in the graphics thread, to show
++        // anything that still depends on how fast the host is (a test; 0 is off).
++        void set_jitter(uint32_t max_us);
++        void jitter();
++        // At each OS call that hands over messages (send, jam, receive), on a game thread: counts them
++        // (and jitters).
++        void os_call();
++
++        // A delivery point, on a game thread: delivers the events due next, in order, until one wakes a
++        // thread (`until_woken`), or (not `until_woken`) for at most `max_ticks` of virtual time.
++        void deliver(RDRAM_ARG bool until_woken, uint64_t max_ticks);
++    }
++
++    // The timeline's pieces in the runtime's other files.
++    namespace timeline_parts {
++        // timer.cpp
++        void clock_enable();
++        void clock_advance_to(uint64_t ticks);
++        bool timers_next_deadline(RDRAM_ARG uint64_t& deadline);
++        void timers_fire_due(RDRAM_ARG uint64_t ticks);
++        // events.cpp
++        void vi_take_over();
++        void vi_deliver(RDRAM_ARG1);
++        void dp_deliver();
++        // Save states: the graphics tasks whose DP done is due, and setting it on a load (with no task
++        // in flight).
++        uint32_t dp_due();
++        void set_dp_due(uint32_t count);
++    }
++}
 +
 +#endif
 diff --git a/ultramodern/include/ultramodern/ultramodern.hpp b/ultramodern/include/ultramodern/ultramodern.hpp
@@ -1030,28 +1166,107 @@ index 46aea61..17be6dd 100644
  bool is_entrypoint_thread();
  bool is_game_thread();
 diff --git a/ultramodern/src/events.cpp b/ultramodern/src/events.cpp
-index 17d7a47..d4fb0de 100644
+index 17d7a47..97d04ea 100644
 --- a/ultramodern/src/events.cpp
 +++ b/ultramodern/src/events.cpp
-@@ -17,6 +17,7 @@
+@@ -17,6 +17,8 @@
  
  #include "ultramodern/rsp.hpp"
  #include "ultramodern/renderer_context.hpp"
 +#include "ultramodern/save_states.hpp"
++#include "ultramodern/timeline.hpp"
  
  static ultramodern::events::callbacks_t events_callbacks{};
  
-@@ -184,6 +185,9 @@ extern moodycamel::LightweightSemaphore graphics_shutdown_ready;
+@@ -184,6 +186,87 @@ extern moodycamel::LightweightSemaphore graphics_shutdown_ready;
  
  void set_dummy_vi(bool odd);
  
 +// The VIs left until the next retrace message (the VI thread's; saved in save states).
 +static std::atomic_int remaining_retraces = 1;
 +
++// Deterministic mode (timeline.hpp): set once the VI thread has stopped for good, and the graphics
++// tasks submitted and finished (for DP done, which the timeline delivers).
++static std::atomic_bool vi_thread_stopped = false;
++static std::atomic<uint64_t> gfx_tasks_submitted = 0;
++static std::atomic<uint64_t> gfx_tasks_finished = 0;
++static uint64_t gfx_tasks_delivered = 0;
++
++void sp_complete();
++void dp_complete();
++extern std::atomic_bool exited;
++
++void ultramodern::timeline_parts::vi_take_over() {
++    using namespace std::chrono_literals;
++    // The VI thread stops between two VIs, never partway through one.
++    while (!vi_thread_stopped) {
++        std::this_thread::sleep_for(1ms);
++    }
++    // The first VI state, as if no VI had been: the dummy VIs before the game started differ in number.
++    std::lock_guard lock{ events_context.message_mutex };
++    events_context.vi.cur_state = 0;
++    events_context.vi.field = 0;
++    events_context.vi.states[0] = ViState{};
++    events_context.vi.states[1] = ViState{};
++    remaining_retraces = 1;
++}
++
++// A VI on the timeline: what the VI thread does at each once the game has started.
++void ultramodern::timeline_parts::vi_deliver(RDRAM_ARG1) {
++    // Nothing once the game is quitting (the VI thread stops then too).
++    if (exited) {
++        return;
++    }
++    {
++        std::lock_guard lock{ events_context.message_mutex };
++        events_context.action_queue.enqueue(ScreenUpdateAction{ events_context.vi.regs });
++        events_context.vi.update_vi();
++        remaining_retraces--;
++        ViState* cur_state = events_context.vi.get_cur_state();
++        if (remaining_retraces == 0) {
++            if (cur_state->mq != NULLPTR) {
++                ultramodern::enqueue_external_message_src(cur_state->mq, cur_state->msg, false, ultramodern::EventMessageSource::Vi);
++            }
++            remaining_retraces = cur_state->retrace_count;
++        }
++        if (events_context.ai.mq != NULLPTR) {
++            ultramodern::enqueue_external_message_src(events_context.ai.mq, events_context.ai.msg, false, ultramodern::EventMessageSource::Ai);
++        }
++    }
++    if (events_callbacks.vi_callback != nullptr) {
++        events_callbacks.vi_callback();
++    }
++}
++
++uint32_t ultramodern::timeline_parts::dp_due() {
++    return (uint32_t)(gfx_tasks_submitted.load() - gfx_tasks_delivered);
++}
++
++void ultramodern::timeline_parts::set_dp_due(uint32_t count) {
++    // Those of the game that was running count as delivered; the state's are due (the renderer never
++    // had their display lists, so a frame isn't drawn).
++    gfx_tasks_delivered = gfx_tasks_submitted.load();
++    gfx_tasks_submitted = gfx_tasks_delivered + count;
++    gfx_tasks_finished = gfx_tasks_delivered + count;
++}
++
++// DP done for every graphics task submitted, once the renderer has finished them all.
++void ultramodern::timeline_parts::dp_deliver() {
++    using namespace std::chrono_literals;
++    const uint64_t submitted = gfx_tasks_submitted.load();
++    // (Not once quitting: the graphics thread may have stopped.)
++    while ((gfx_tasks_finished.load() < submitted) && !exited) {
++        std::this_thread::sleep_for(100us);
++    }
++    for (; gfx_tasks_delivered < submitted; gfx_tasks_delivered++) {
++        dp_complete();
++    }
++}
++
  void vi_thread_func() {
      ultramodern::set_native_thread_name("VI Thread");
      // This thread should be prioritized over every other thread in the application, as it's what allows
-@@ -191,8 +195,6 @@ void vi_thread_func() {
+@@ -191,8 +274,6 @@ void vi_thread_func() {
      ultramodern::set_native_thread_priority(ultramodern::ThreadPriority::Critical);
      using namespace std::chrono_literals;
  
@@ -1060,7 +1275,20 @@ index 17d7a47..d4fb0de 100644
      while (!exited) {
          // Determine the next VI time (more accurate than adding 16ms each VI interrupt)
          auto next = ultramodern::get_start() + (total_vis * 1000000us) / (60 * ultramodern::get_speed_multiplier());
-@@ -295,6 +297,7 @@ void task_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_r
+@@ -210,6 +291,12 @@ void vi_thread_func() {
+             next = std::chrono::high_resolution_clock::now();
+         }
+         ultramodern::sleep_until(next);
++        // In deterministic mode the timeline has the VIs.
++        if (ultramodern::timeline::enabled()) {
++            vi_thread_stopped = true;
++            ultramodern::sleep_milliseconds(16);
++            continue;
++        }
+         auto time_now = ultramodern::time_since_start();
+         // Calculate how many VIs have passed
+         uint64_t new_total_vis = (time_now * (60 * ultramodern::get_speed_multiplier()) / 1000ms) + 1;
+@@ -295,6 +382,7 @@ void task_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_r
  
          // Tell the game that the RSP has completed
          sp_complete();
@@ -1068,25 +1296,71 @@ index 17d7a47..d4fb0de 100644
      }
  }
  
-@@ -379,6 +382,7 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
+@@ -364,11 +452,16 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
+         if (events_context.action_queue.wait_dequeue_timed(action, 1ms)) {
+             // Determine the action type and act on it
+             if (const auto* task_action = std::get_if<SpTaskAction>(&action)) {
++                const bool deterministic = ultramodern::timeline::enabled();
+                 // Tell the game that the RSP completed instantly. This will allow it to queue other task types, but it won't
+                 // start another graphics task until the RDP is also complete. Games usually preserve the RSP inputs until the RDP
+                 // is finished as well, so sending this early shouldn't be an issue in most cases.
+                 // If this causes issues then the logic can be replaced with responding to yield requests.
+-                sp_complete();
++                // (In deterministic mode the game thread that submitted it has.)
++                if (!deterministic) {
++                    sp_complete();
++                }
++                ultramodern::timeline::jitter();
+                 ultramodern::measure_input_latency();
+ 
+                 PTR(u64) displaylist = task_action->task.t.data_ptr;
+@@ -378,7 +471,14 @@ void gfx_thread_func(uint8_t* rdram, moodycamel::LightweightSemaphore* thread_re
+                 renderer_context->send_dl(&task_action->task);
                  [[maybe_unused]] auto renderer_end = std::chrono::high_resolution_clock::now();
  
-                 dp_complete();
+-                dp_complete();
++                if (deterministic) {
++                    // The timeline delivers DP done, at the next VI.
++                    gfx_tasks_finished++;
++                }
++                else {
++                    dp_complete();
++                }
 +                ultramodern::save_states::task_finished();
                  // TODO hook the parsed event up to the actual parsing point when a callback is added to RT64.
                  ultramodern::extensions::on_displaylist_parsed(displaylist);
                  ultramodern::extensions::on_displaylist_completed(displaylist);
-@@ -565,6 +569,9 @@ extern "C" PTR(void) osViGetCurrentFramebuffer() {
+@@ -565,6 +665,29 @@ extern "C" PTR(void) osViGetCurrentFramebuffer() {
  void ultramodern::submit_rsp_task(RDRAM_ARG PTR(OSTask) task_) {
      OSTask* task = TO_PTR(OSTask, task_);
  
 +    // Counted until its last message is sent, for save states (save_states.hpp).
 +    ultramodern::save_states::task_submitted();
 +
++    if (ultramodern::timeline::enabled()) {
++        // In deterministic mode no host thread posts to the game. A graphics task's SP done is posted
++        // here (the RSP completes instantly, as the graphics thread says otherwise), and its DP done
++        // by the timeline once the renderer is done. Other tasks (audio) run here, on the game thread.
++        if (task->t.type == M_GFXTASK) {
++            gfx_tasks_submitted++;
++            sp_complete();
++            events_context.action_queue.enqueue(SpTaskAction{ *task });
++        }
++        else {
++            if (!ultramodern::rsp::run_task(PASS_RDRAM task)) {
++                fprintf(stderr, "Failed to execute task type: %" PRIu32 "\n", task->t.type);
++                ULTRAMODERN_QUICK_EXIT();
++            }
++            sp_complete();
++            ultramodern::save_states::task_finished();
++        }
++        return;
++    }
++
      // Send gfx tasks to the graphics action queue
      if (task->t.type == M_GFXTASK) {
          events_context.action_queue.enqueue(SpTaskAction{ *task });
-@@ -575,6 +582,57 @@ void ultramodern::submit_rsp_task(RDRAM_ARG PTR(OSTask) task_) {
+@@ -575,6 +698,57 @@ void ultramodern::submit_rsp_task(RDRAM_ARG PTR(OSTask) task_) {
      }
  }
  
@@ -1144,19 +1418,80 @@ index 17d7a47..d4fb0de 100644
  void ultramodern::send_si_message() {
      ultramodern::enqueue_external_message_src(events_context.si.mq, events_context.si.msg, false, ultramodern::EventMessageSource::Si);
  }
+diff --git a/ultramodern/src/input.cpp b/ultramodern/src/input.cpp
+index 23228c7..a22dba4 100644
+--- a/ultramodern/src/input.cpp
++++ b/ultramodern/src/input.cpp
+@@ -1,3 +1,4 @@
++#include <atomic>
+ #include <cassert>
+ #include <cmath>
+ 
+@@ -22,6 +23,12 @@ void ultramodern::input::set_callbacks(const callbacks_t& callbacks) {
+     input_callbacks = callbacks;
+ }
+ 
++static std::atomic<ultramodern::input::read_data_callback_t*> read_data_callback = nullptr;
++
++void ultramodern::input::set_read_data_callback(read_data_callback_t* callback) {
++    read_data_callback = callback;
++}
++
+ static std::chrono::high_resolution_clock::time_point input_poll_time;
+ 
+ static void update_poll_time() {
+@@ -162,6 +169,15 @@ void convert_to_n64_range(float x, float y, int8_t& stick_x, int8_t& stick_y) {
+ }
+ 
+ extern "C" void osContGetReadData(OSContPad *data) {
++    // For the read data callback (the harness), the pads past what the game reads don't respond, so what
++    // it's given doesn't depend on what was left in the caller's buffer. Otherwise they're left alone, as
++    // libultra does.
++    if (read_data_callback.load() != nullptr) {
++        for (int controller = max_controllers; controller < MAXCONTROLLERS; controller++) {
++            data[controller] = {};
++            data[controller].err_no = CONT_NO_RESPONSE_ERROR; // CHNL_ERR_NORESP >> 4
++        }
++    }
+     for (int controller = 0; controller < max_controllers; controller++) {
+         uint16_t buttons = 0;
+         float x = 0.0f;
+@@ -181,6 +197,21 @@ extern "C" void osContGetReadData(OSContPad *data) {
+             data[controller].err_no =  CONT_NO_RESPONSE_ERROR; // CHNL_ERR_NORESP >> 4
+         }
+     }
++
++    ultramodern::input::read_data_callback_t* callback = read_data_callback.load();
++    if (callback != nullptr) {
++        ultramodern::input::Pad pads[MAXCONTROLLERS];
++        for (int controller = 0; controller < MAXCONTROLLERS; controller++) {
++            pads[controller] = { data[controller].button, data[controller].stick_x, data[controller].stick_y, data[controller].err_no };
++        }
++        callback(pads, max_controllers);
++        for (int controller = 0; controller < MAXCONTROLLERS; controller++) {
++            data[controller].button = pads[controller].button;
++            data[controller].stick_x = pads[controller].stick_x;
++            data[controller].stick_y = pads[controller].stick_y;
++            data[controller].err_no = pads[controller].err_no;
++        }
++    }
+ }
+ 
+ /* Rumble */
 diff --git a/ultramodern/src/mesgqueue.cpp b/ultramodern/src/mesgqueue.cpp
-index 9944a02..dc03182 100644
+index 9944a02..a7a40ae 100644
 --- a/ultramodern/src/mesgqueue.cpp
 +++ b/ultramodern/src/mesgqueue.cpp
-@@ -5,6 +5,7 @@
+@@ -5,6 +5,8 @@
  
  #include "ultramodern/ultra64.h"
  #include "ultramodern/ultramodern.hpp"
 +#include "ultramodern/save_states.hpp"
++#include "ultramodern/timeline.hpp"
  
  struct QueuedMessage {
      PTR(OSMesgQueue) mq;
-@@ -37,6 +38,16 @@ void ultramodern::enqueue_external_message(PTR(OSMesgQueue) mq, OSMesg msg, bool
+@@ -37,6 +39,16 @@ void ultramodern::enqueue_external_message(PTR(OSMesgQueue) mq, OSMesg msg, bool
  
  bool do_send(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, bool jam, bool block);
  
@@ -1173,7 +1508,7 @@ index 9944a02..dc03182 100644
  void dequeue_external_messages(RDRAM_ARG1) {
      QueuedMessage to_send;
      std::vector<QueuedMessage> requeued_messages{};
-@@ -102,6 +113,7 @@ bool do_send(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, bool jam, bool block) {
+@@ -102,6 +114,7 @@ bool do_send(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, bool jam, bool block) {
          while (MQ_IS_FULL(mq)) {
              debug_printf("[Message Queue] Thread %d is blocked on send\n", TO_PTR(OSThread, ultramodern::this_thread())->id);
              ultramodern::thread_queue_insert(PASS_RDRAM GET_MEMBER(OSMesgQueue, mq_, blocked_on_send), ultramodern::this_thread());
@@ -1181,7 +1516,7 @@ index 9944a02..dc03182 100644
              ultramodern::run_next_thread_and_wait(PASS_RDRAM1);
          }
      }
-@@ -140,6 +152,7 @@ bool do_recv(RDRAM_ARG PTR(OSMesgQueue) mq_, PTR(OSMesg) msg_, bool block) {
+@@ -140,6 +153,7 @@ bool do_recv(RDRAM_ARG PTR(OSMesgQueue) mq_, PTR(OSMesg) msg_, bool block) {
          while (MQ_IS_EMPTY(mq)) {
              debug_printf("[Message Queue] Thread %d is blocked on receive\n", TO_PTR(OSThread, ultramodern::this_thread())->id);
              ultramodern::thread_queue_insert(PASS_RDRAM GET_MEMBER(OSMesgQueue, mq_, blocked_on_recv), ultramodern::this_thread());
@@ -1189,8 +1524,27 @@ index 9944a02..dc03182 100644
              ultramodern::run_next_thread_and_wait(PASS_RDRAM1);
          }
      }
-@@ -208,10 +221,13 @@ extern "C" s32 osRecvMesg(RDRAM_ARG PTR(OSMesgQueue) mq_, PTR(OSMesg) msg_, s32
+@@ -162,6 +176,7 @@ bool do_recv(RDRAM_ARG PTR(OSMesgQueue) mq_, PTR(OSMesg) msg_, bool block) {
+ 
+ extern "C" s32 osSendMesg(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, s32 flags) {
      OSMesgQueue *mq = TO_PTR(OSMesgQueue, mq_);
++    ultramodern::timeline::os_call();
+     bool jam = false;
+     
+     // Don't directly send to the message queue if this isn't a game thread to avoid contention.
+@@ -184,6 +199,7 @@ extern "C" s32 osSendMesg(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, s32 flags)
+ 
+ extern "C" s32 osJamMesg(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, s32 flags) {
+     OSMesgQueue *mq = TO_PTR(OSMesgQueue, mq_);
++    ultramodern::timeline::os_call();
+     bool jam = true;
+     
+     // Don't directly send to the message queue if this isn't a game thread to avoid contention.
+@@ -206,12 +222,16 @@ extern "C" s32 osJamMesg(RDRAM_ARG PTR(OSMesgQueue) mq_, OSMesg msg, s32 flags)
+ 
+ extern "C" s32 osRecvMesg(RDRAM_ARG PTR(OSMesgQueue) mq_, PTR(OSMesg) msg_, s32 flags) {
+     OSMesgQueue *mq = TO_PTR(OSMesgQueue, mq_);
++    ultramodern::timeline::os_call();
      
      assert(ultramodern::is_game_thread() && "RecvMesg not allowed outside of game threads.");
 -    
@@ -1206,10 +1560,10 @@ index 9944a02..dc03182 100644
      
 diff --git a/ultramodern/src/save_states.cpp b/ultramodern/src/save_states.cpp
 new file mode 100644
-index 0000000..de5a368
+index 0000000..3dd2f99
 --- /dev/null
 +++ b/ultramodern/src/save_states.cpp
-@@ -0,0 +1,299 @@
+@@ -0,0 +1,304 @@
 +// Save states: the game's threads, where each one waits, and the idle moment (see save_states.hpp for
 +// how a save state of a recompiled game works).
 +
@@ -1221,6 +1575,7 @@ index 0000000..de5a368
 +#include "ultramodern/ultra64.h"
 +#include "ultramodern/ultramodern.hpp"
 +#include "ultramodern/save_states.hpp"
++#include "ultramodern/timeline.hpp"
 +
 +#if defined(_WIN32)
 +#   define WIN32_LEAN_AND_MEAN
@@ -1471,6 +1826,10 @@ index 0000000..de5a368
 +    if (callback == nullptr || !safe_points_wanted.load() || current_thread_context == nullptr) {
 +        return;
 +    }
++    // In deterministic mode only at delivery points (TimelineState).
++    if (ultramodern::timeline::enabled()) {
++        return;
++    }
 +    // Every other thread waits only with none ready to run.
 +    if (!thread_queue_empty(PASS_RDRAM running_queue)) {
 +        return;
@@ -1510,25 +1869,60 @@ index 0000000..de5a368
 +    tasks_in_flight.fetch_sub(1);
 +}
 diff --git a/ultramodern/src/scheduling.cpp b/ultramodern/src/scheduling.cpp
-index a22f747..4a21bbd 100644
+index a22f747..48cff77 100644
 --- a/ultramodern/src/scheduling.cpp
 +++ b/ultramodern/src/scheduling.cpp
-@@ -1,4 +1,5 @@
+@@ -1,4 +1,6 @@
  #include "ultramodern/ultramodern.hpp"
 +#include "ultramodern/save_states.hpp"
++#include "ultramodern/timeline.hpp"
  
  void ultramodern::schedule_running_thread(RDRAM_ARG PTR(OSThread) t_) {
      debug_printf("[Scheduling] Adding thread %d to the running queue\n", TO_PTR(OSThread, t_)->id);
-@@ -31,6 +32,9 @@ void ultramodern::check_running_queue(RDRAM_ARG1) {
+@@ -31,18 +33,39 @@ void ultramodern::check_running_queue(RDRAM_ARG1) {
  
  extern "C" void pause_self(RDRAM_ARG1) {
      while (true) {
+-        // Wait until an external message arrives, then allow the next thread to run.
+-        ultramodern::wait_for_external_message(PASS_RDRAM1);
 +        // The idle thread runs only while every other game thread waits: the moment save states are
 +        // taken and loaded at (save_states.hpp).
 +        ultramodern::save_states::on_idle(PASS_RDRAM1);
-         // Wait until an external message arrives, then allow the next thread to run.
-         ultramodern::wait_for_external_message(PASS_RDRAM1);
++        if (ultramodern::timeline::enabled()) {
++            // A delivery point: the events due next, until one wakes a thread.
++            ultramodern::timeline::deliver(PASS_RDRAM true, 0);
++        }
++        else {
++            // Wait until an external message arrives, then allow the next thread to run.
++            ultramodern::wait_for_external_message(PASS_RDRAM1);
++        }
          ultramodern::check_running_queue(PASS_RDRAM1);
+     }
+ }
+ 
+ extern "C" void yield_self(RDRAM_ARG1) {
+-    ultramodern::wait_for_external_message(PASS_RDRAM1);
++    if (ultramodern::timeline::enabled()) {
++        // Nothing would post the message it waits for: a delivery point, as yield_self_1ms's.
++        ultramodern::timeline::deliver(PASS_RDRAM false, 46'875);
++    }
++    else {
++        ultramodern::wait_for_external_message(PASS_RDRAM1);
++    }
+     ultramodern::check_running_queue(PASS_RDRAM1);
+ }
+ 
+ extern "C" void yield_self_1ms(RDRAM_ARG1) {
+-    ultramodern::wait_for_external_message_timed(PASS_RDRAM1, 1);
++    if (ultramodern::timeline::enabled()) {
++        // A delivery point for up to 1 ms of virtual time (46,875 ticks).
++        ultramodern::timeline::deliver(PASS_RDRAM false, 46'875);
++    }
++    else {
++        ultramodern::wait_for_external_message_timed(PASS_RDRAM1, 1);
++    }
+     ultramodern::check_running_queue(PASS_RDRAM1);
+ }
 diff --git a/ultramodern/src/threads.cpp b/ultramodern/src/threads.cpp
 index 6e3ed18..221ad3d 100644
 --- a/ultramodern/src/threads.cpp
@@ -1608,11 +2002,225 @@ index 6e3ed18..221ad3d 100644
      deleted_threads.enqueue(cur_context);
  }
  
+diff --git a/ultramodern/src/timeline.cpp b/ultramodern/src/timeline.cpp
+new file mode 100644
+index 0000000..3d6d278
+--- /dev/null
++++ b/ultramodern/src/timeline.cpp
+@@ -0,0 +1,208 @@
++#include <algorithm>
++#include <atomic>
++#include <chrono>
++#include <cstdio>
++#include <random>
++#include <thread>
++
++#include "ultramodern/ultramodern.hpp"
++#include "ultramodern/save_states.hpp"
++#include "ultramodern/timeline.hpp"
++
++// Deterministic mode (timeline.hpp). The timeline's own state is only used at delivery points, which
++// are on the game thread running at the time (one at a time), so it needs no lock.
++
++void dequeue_external_messages(RDRAM_ARG1);
++extern std::atomic_bool exited;
++std::chrono::microseconds ticks_to_duration(uint64_t ticks);
++
++namespace {
++    // Exactly 60 VIs a second: a whole number of ticks (46,875,000 a second) each.
++    constexpr uint64_t ticks_per_vi = 46'875'000 / 60;
++
++    std::atomic_bool deterministic = false;
++    bool fast = false;
++    // The time of the last delivery, and the next VI's number (VI k is at k × ticks_per_vi).
++    uint64_t now = 0;
++    uint64_t next_vi = 1;
++    // Real time at virtual time 0 (moved on after a stall, so the game doesn't then race to catch up).
++    std::chrono::high_resolution_clock::time_point real_start;
++
++    std::atomic<uint32_t> jitter_max_us = 0;
++
++    // The game's bursts of work between two delivery points: the OS calls in each, and the real time it
++    // took. The longest are logged: a game that never went idle (which no limit stops) would show here.
++    // Counted at OS calls, which in deterministic mode only game threads make (no host thread posts to the
++    // game), but atomic all the same.
++    std::atomic<uint64_t> burst_calls = 0;
++    std::chrono::high_resolution_clock::time_point burst_start;
++    bool in_burst = false;
++    uint64_t most_calls = 0;
++    std::chrono::microseconds longest{ 0 };
++
++    void burst_ended() {
++        if (!in_burst) {
++            return;
++        }
++        in_burst = false;
++        const auto took = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::high_resolution_clock::now() - burst_start);
++        bool more = false;
++        const uint64_t calls = burst_calls.load(std::memory_order_relaxed);
++        if (calls > most_calls) {
++            most_calls = calls;
++            more = true;
++        }
++        if (took > longest) {
++            longest = took;
++            more = true;
++        }
++        if (more) {
++            std::printf("[timeline] at %.2f s: a burst of %llu OS calls, %.2f ms (the most so far: %llu calls, %.2f ms)\n",
++                now / 46'875'000.0, (unsigned long long)calls, took.count() / 1000.0,
++                (unsigned long long)most_calls, longest.count() / 1000.0);
++            std::fflush(stdout);
++        }
++    }
++
++    void burst_started() {
++        in_burst = true;
++        burst_calls = 0;
++        burst_start = std::chrono::high_resolution_clock::now();
++    }
++
++    // Waits for real time to reach virtual time `ticks`.
++    void pace(uint64_t ticks) {
++        using namespace std::chrono_literals;
++        if (fast) {
++            return;
++        }
++        const auto target = real_start + ticks_to_duration(ticks);
++        const auto real_now = std::chrono::high_resolution_clock::now();
++        if (real_now < target) {
++            ultramodern::sleep_until(target);
++        }
++        else if (real_now - target > 100ms) {
++            real_start += real_now - target;
++        }
++    }
++}
++
++void ultramodern::timeline::enable(bool fast_) {
++    fast = fast_;
++    now = 0;
++    next_vi = 1;
++    deterministic = true;
++    ultramodern::timeline_parts::clock_enable();
++    ultramodern::timeline_parts::vi_take_over();
++    real_start = std::chrono::high_resolution_clock::now();
++}
++
++bool ultramodern::timeline::enabled() {
++    return deterministic.load();
++}
++
++uint64_t ultramodern::timeline::delivery_time() {
++    return now;
++}
++
++ultramodern::save_states::TimelineState ultramodern::save_states::get_timeline_state() {
++    if (!deterministic) {
++        return {};
++    }
++    return { 1, 0, now, next_vi, ultramodern::timeline_parts::dp_due(), 0 };
++}
++
++void ultramodern::save_states::set_timeline_state(const TimelineState* state, uint64_t clock) {
++    if (!deterministic) {
++        return;
++    }
++    if (state != nullptr && state->deterministic != 0) {
++        now = state->now;
++        next_vi = state->next_vi;
++        ultramodern::timeline_parts::set_dp_due(state->dp_due);
++    }
++    else {
++        // A state from normal mode: the timeline goes on from its clock, at the next whole VI.
++        now = clock;
++        next_vi = clock / ticks_per_vi + 1;
++        ultramodern::timeline_parts::set_dp_due(0);
++    }
++    // Paced from here, neither waiting for nor racing to the state's time.
++    real_start = std::chrono::high_resolution_clock::now() - ticks_to_duration(now);
++    in_burst = false;
++}
++
++void ultramodern::timeline::set_jitter(uint32_t max_us) {
++    jitter_max_us = max_us;
++}
++
++void ultramodern::timeline::os_call() {
++    if (!deterministic) {
++        return;
++    }
++    burst_calls.fetch_add(1, std::memory_order_relaxed);
++    jitter();
++}
++
++void ultramodern::timeline::jitter() {
++    const uint32_t max_us = jitter_max_us.load();
++    if (max_us == 0) {
++        return;
++    }
++    thread_local std::mt19937 random{ std::random_device{}() };
++    std::this_thread::sleep_for(std::chrono::microseconds{ random() % max_us });
++}
++
++void ultramodern::timeline::deliver(RDRAM_ARG bool until_woken, uint64_t max_ticks) {
++    burst_ended();
++    // The game's own messages first (PI, SI, SP done: posted by game threads, so in the same order
++    // every run).
++    dequeue_external_messages(PASS_RDRAM1);
++    if (until_woken && !thread_queue_empty(PASS_RDRAM running_queue)) {
++        burst_started();
++        return;
++    }
++    const uint64_t stop_at = until_woken ? UINT64_MAX : now + max_ticks;
++    while (true) {
++        // Once the game is quitting, its memory goes: the game waits for good, as it does in normal
++        // mode when nothing more arrives.
++        while (exited) {
++            std::this_thread::sleep_for(std::chrono::seconds{ 1 });
++        }
++        // The next event: the next VI, or a timer that runs out sooner (never before the last).
++        const uint64_t vi_time = next_vi * ticks_per_vi;
++        uint64_t at = vi_time;
++        uint64_t deadline;
++        if (ultramodern::timeline_parts::timers_next_deadline(PASS_RDRAM deadline) && deadline < at) {
++            at = deadline;
++        }
++        at = std::max(at, now);
++        if (at > stop_at) {
++            pace(stop_at);
++            now = stop_at;
++            ultramodern::timeline_parts::clock_advance_to(now);
++            burst_started();
++            return;
++        }
++
++        pace(at);
++        now = at;
++        ultramodern::timeline_parts::clock_advance_to(now);
++        // In this order: DP done before the VI it's due at, so the scheduler sees the task done at the VI.
++        const bool vi_due = at == vi_time;
++        if (vi_due) {
++            ultramodern::timeline_parts::dp_deliver();
++        }
++        ultramodern::timeline_parts::timers_fire_due(PASS_RDRAM now);
++        if (vi_due) {
++            ultramodern::timeline_parts::vi_deliver(PASS_RDRAM1);
++            next_vi++;
++        }
++        dequeue_external_messages(PASS_RDRAM1);
++
++        if (until_woken && !thread_queue_empty(PASS_RDRAM running_queue)) {
++            burst_started();
++            return;
++        }
++    }
++}
 diff --git a/ultramodern/src/timer.cpp b/ultramodern/src/timer.cpp
-index ee26c45..603e5fc 100644
+index ee26c45..7e25f1a 100644
 --- a/ultramodern/src/timer.cpp
 +++ b/ultramodern/src/timer.cpp
-@@ -1,10 +1,15 @@
+@@ -1,10 +1,16 @@
  #include <thread>
  #include <variant>
 -#include <set>
@@ -1626,10 +2234,11 @@ index ee26c45..603e5fc 100644
  #include "ultramodern/ultra64.h"
  #include "ultramodern/ultramodern.hpp"
 +#include "ultramodern/save_states.hpp"
++#include "ultramodern/timeline.hpp"
  
  #ifdef _WIN32
  #define WIN32_LEAN_AND_MEAN
-@@ -29,20 +34,25 @@ struct OSTimer {
+@@ -29,20 +35,25 @@ struct OSTimer {
      OSMesg msg;
  };
  
@@ -1667,7 +2276,7 @@ index ee26c45..603e5fc 100644
  
  uint64_t duration_to_ticks(std::chrono::high_resolution_clock::duration duration) {
      uint64_t delta_micros = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-@@ -59,83 +69,52 @@ std::chrono::microseconds ticks_to_duration(uint64_t ticks) {
+@@ -59,83 +70,121 @@ std::chrono::microseconds ticks_to_duration(uint64_t ticks) {
  }
  
  std::chrono::high_resolution_clock::time_point ticks_to_timepoint(uint64_t ticks) {
@@ -1675,25 +2284,57 @@ index ee26c45..603e5fc 100644
 +    return start_time + ticks_to_duration(ticks + clock_offset.load());
  }
  
++// The virtual clock, in deterministic mode (timeline.hpp): the timeline's time, which each read of
++// the clock moves on a step, so reads still differ and loops that wait on the clock still end.
++static std::atomic<bool> virtual_clock = false;
++// About a microsecond.
++constexpr uint64_t virtual_ticks_per_read = 47;
++static std::atomic<uint64_t> virtual_now = 0;
++
++uint64_t real_time_now() {
++    return duration_to_ticks(std::chrono::high_resolution_clock::now() - start_time) - clock_offset.load();
++}
++
++// The game's clock, for the game's own reads: with the virtual clock, each moves it on.
  uint64_t time_now() {
 -    return duration_to_ticks(std::chrono::high_resolution_clock::now() - start_time);
-+    return duration_to_ticks(std::chrono::high_resolution_clock::now() - start_time) - clock_offset.load();
++    if (virtual_clock.load()) {
++        return virtual_now.fetch_add(virtual_ticks_per_read) + virtual_ticks_per_read;
++    }
++    return real_time_now();
  }
  
- void timer_thread(RDRAM_ARG1) {
-     ultramodern::set_native_thread_name("Timer Thread");
-     ultramodern::set_native_thread_priority(ultramodern::ThreadPriority::VeryHigh);
+-void timer_thread(RDRAM_ARG1) {
+-    ultramodern::set_native_thread_name("Timer Thread");
+-    ultramodern::set_native_thread_priority(ultramodern::ThreadPriority::VeryHigh);
++// The game's clock without moving it, for the runtime's own reads.
++uint64_t peek_time_now() {
++    if (virtual_clock.load()) {
++        return virtual_now.load();
++    }
++    return real_time_now();
++}
  
 -    // Lambda comparator function to keep the set ordered
 -    auto timer_sort = [PASS_RDRAM1](PTR(OSTimer) a_, PTR(OSTimer) b_) {
 -        OSTimer* a = TO_PTR(OSTimer, a_);
 -        OSTimer* b = TO_PTR(OSTimer, b_);
--
++void ultramodern::timeline_parts::clock_enable() {
++    // From 0, not the time since the program started, which differs from run to run.
++    virtual_now = 0;
++    virtual_clock = true;
++}
+ 
 -        // Order by timestamp if the timers have different timestamps
 -        if (a->timestamp != b->timestamp) {
 -            return a->timestamp < b->timestamp;
 -        }
--
++void ultramodern::timeline_parts::clock_advance_to(uint64_t ticks) {
++    uint64_t now = virtual_now.load();
++    while (now < ticks && !virtual_now.compare_exchange_weak(now, ticks)) {
++    }
++}
+ 
 -        // If they have the exact same timestamp then order by address instead
 -        return a < b;
 -    };
@@ -1708,37 +2349,73 @@ index ee26c45..603e5fc 100644
 -            active_timers.insert(add_action->timer);
 -        } else if (const auto* remove_action = std::get_if<RemoveTimerAction>(&action)) {
 -            active_timers.erase(remove_action->timer);
--        }
++// The running timer that runs out first (the lower address of two with the same deadline).
++static std::vector<PTR(OSTimer)>::iterator next_timer(RDRAM_ARG1) {
++    auto next = timer_context.active.begin();
++    for (auto it = timer_context.active.begin(); it != timer_context.active.end(); ++it) {
++        const OSTimer* a = TO_PTR(OSTimer, *it);
++        const OSTimer* b = TO_PTR(OSTimer, *next);
++        if (a->timestamp < b->timestamp || (a->timestamp == b->timestamp && *it < *next)) {
++            next = it;
+         }
 -    };
--
-+    std::unique_lock lock{ timer_context.mutex };
-     while (true) {
++    }
++    return next;
++}
+ 
+-    while (true) {
 -        // Empty the action queue
 -        Action cur_action;
 -        while (timer_context.action_queue.try_dequeue(cur_action)) {
 -            process_timer_action(cur_action);
-+        // If there's no timer to act on, wait for one.
-+        if (timer_context.active.empty()) {
-+            timer_context.changed.wait(lock);
-+            continue;
++bool ultramodern::timeline_parts::timers_next_deadline(RDRAM_ARG uint64_t& deadline) {
++    std::lock_guard lock{ timer_context.mutex };
++    if (timer_context.active.empty()) {
++        return false;
++    }
++    deadline = TO_PTR(OSTimer, *next_timer(PASS_RDRAM1))->timestamp;
++    return true;
++}
++
++void ultramodern::timeline_parts::timers_fire_due(RDRAM_ARG uint64_t ticks) {
++    std::lock_guard lock{ timer_context.mutex };
++    while (!timer_context.active.empty()) {
++        auto next = next_timer(PASS_RDRAM1);
++        OSTimer* timer = TO_PTR(OSTimer, *next);
++        if (timer->timestamp > ticks) {
++            return;
++        }
++        ultramodern::enqueue_external_message_src(timer->mq, timer->msg, false, ultramodern::EventMessageSource::Timer);
++        if (timer->interval != 0) {
++            // From its deadline, not the clock: a repeating timer keeps its beat.
++            timer->timestamp += timer->interval;
          }
++        else {
++            timer_context.active.erase(next);
++        }
++    }
++}
++
++void timer_thread(RDRAM_ARG1) {
++    ultramodern::set_native_thread_name("Timer Thread");
++    ultramodern::set_native_thread_priority(ultramodern::ThreadPriority::VeryHigh);
  
 -        // If there's no timer to act on, wait for one to come in from the action queue
 -        while (active_timers.empty()) {
 -            timer_context.action_queue.wait_dequeue(cur_action);
 -            process_timer_action(cur_action);
-+        // The timer that's closest to running out (the lower address of two with the same deadline).
-+        auto next = timer_context.active.begin();
-+        for (auto it = timer_context.active.begin(); it != timer_context.active.end(); ++it) {
-+            const OSTimer* a = TO_PTR(OSTimer, *it);
-+            const OSTimer* b = TO_PTR(OSTimer, *next);
-+            if (a->timestamp < b->timestamp || (a->timestamp == b->timestamp && *it < *next)) {
-+                next = it;
-+            }
++    std::unique_lock lock{ timer_context.mutex };
++    while (true) {
++        // If there's no timer to act on, wait for one. In deterministic mode the timeline runs them.
++        if (timer_context.active.empty() || virtual_clock.load()) {
++            timer_context.changed.wait(lock);
++            continue;
          }
--
+ 
 -        // Get the timer that's closest to running out
 -        PTR(OSTimer) cur_timer_ = *active_timers.begin();
++        // The timer that's closest to running out.
++        auto next = next_timer(PASS_RDRAM1);
 +        PTR(OSTimer) cur_timer_ = *next;
          OSTimer* cur_timer = TO_PTR(OSTimer, cur_timer_);
  
@@ -1778,7 +2455,7 @@ index ee26c45..603e5fc 100644
          }
      }
  }
-@@ -180,6 +159,7 @@ extern "C" void osSetTime(OSTime t) {
+@@ -180,30 +229,68 @@ extern "C" void osSetTime(OSTime t) {
  
  extern "C" int osSetTimer(RDRAM_ARG PTR(OSTimer) t_, OSTime countdown, OSTime interval, PTR(OSMesgQueue) mq, OSMesg msg) {
      OSTimer* t = TO_PTR(OSTimer, t_);
@@ -1786,7 +2463,14 @@ index ee26c45..603e5fc 100644
  
      // Determine the time when this timer will trigger off
      if (countdown == 0) {
-@@ -192,18 +172,53 @@ extern "C" int osSetTimer(RDRAM_ARG PTR(OSTimer) t_, OSTime countdown, OSTime in
+         // Set the timestamp based on the interval
+-        t->timestamp = interval + time_now();
+-    } else {
+-        t->timestamp = countdown + time_now();
++        countdown = interval;
+     }
++    t->timestamp = countdown + time_now();
+     t->interval = interval;
      t->mq = mq;
      t->msg = msg;
  
@@ -1830,12 +2514,15 @@ index ee26c45..603e5fc 100644
 +}
 +
 +ultramodern::save_states::TimerState ultramodern::save_states::get_timer_state() {
-+    return TimerState{ time_now(), ostime_offset, timer_context.active };
++    return TimerState{ peek_time_now(), ostime_offset, timer_context.active };
 +}
 +
 +void ultramodern::save_states::set_timer_state(const TimerState& state) {
 +    // The clock goes on from the state's time: the offset that makes time_now() the state's now.
 +    clock_offset = (int64_t)duration_to_ticks(std::chrono::high_resolution_clock::now() - start_time) - (int64_t)state.now;
++    if (virtual_clock.load()) {
++        virtual_now = state.now;
++    }
 +    ostime_offset = state.ostime_offset;
 +    timer_context.active = state.active;
 +}

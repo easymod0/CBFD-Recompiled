@@ -20,10 +20,48 @@
 
 #include "recomp.h"
 
+#include "conker.hpp"
+
 // func_151408A4 at 0x15140DB4, just after it compared the depths: $t3 is the light's depth
 // ($t8) less the sample's ($a2), $a0 the raw sample. Zero passes the test.
 extern "C" void conker_light_glow_depth(uint8_t* rdram, recomp_context* ctx) {
     ctx->r11 = 0;
+}
+
+// The follow camera's view of its player, in netplay (and anything else on the harness: recordings, replays).
+//
+// Each camera keeps a row of the depth buffer, at its player's height on the screen (+0x8BC points at it, 2 bytes
+// a pixel across the whole frame), which the RDP copies there mid-frame (func_1512E5F0). func_1512AD54 reads it
+// around the player (func_1512B1B8, indexed by the pixel's x on the frame) and, where something nearer than the
+// player hides them, turns the camera and pulls it in (func_1512B730, the camera's +0x3EC), so the player stays in
+// view. The game clears the row to the farthest depth (0xFFFC) itself as a camera starts (func_1512B53C), but only
+// as many pixels as a view is wide (the camera's view's +0x4), from the left edge of the frame.
+//
+// On the harness the renderer writes nothing back into game memory (netplay/profile.cpp: what a GPU draws isn't
+// the same on every machine, and the games must be), so the copies never arrive: the row is what the clear left.
+// Player 1's view (the left of the frame) reads only cleared pixels, nothing in front, and its camera stays put.
+// The others' views reach past them, into pixels that were never written and read as something just in front of
+// the player: players 2 to 4's cameras turned and pulled in on their own all match, the same on every machine,
+// with nobody touching anything. So on the harness the whole row is the farthest depth whenever the check is about
+// to read it: every player's camera sees what player 1's did. (The game's other ways of keeping its player in
+// view, its collision with walls and floors, don't use the depth buffer and are as they were.)
+//
+// func_1512AD54 at 0x1512AD58: $a0 is the camera.
+extern "C" void conker_camera_depth_row(uint8_t* rdram, recomp_context* ctx) {
+    if (!conker::netplay_profile::active()) {
+        return;
+    }
+    const gpr row = (gpr)(int32_t)MEM_W(0x8BC, ctx->r4);
+    if (((uint32_t)row & 0xFF800000u) != 0x80000000u) {
+        return;
+    }
+    // As many pixels as the game made the row: func_15005290 allocates each camera's (D_800BE2B0, copied to
+    // +0x8BC as the camera starts) as the frame's width (D_800BE620, 292, set once) times 2 bytes, and the RDP's
+    // copy fills that much. (The 640 only keeps a broken width from writing far.)
+    const int32_t width = std::clamp((int32_t)MEM_W(0, (gpr)(int32_t)0x800BE620), (int32_t)0, (int32_t)640);
+    for (int32_t x = 0; x < width; x++) {
+        MEM_H(x * 2, row) = (int16_t)0xFFFC;
+    }
 }
 
 // Sprite pieces less than a pixel across (the smoke puffs over Windy's beehive, as one starts).

@@ -224,7 +224,8 @@ bool conker::graphics_config_ready() {
 }
 
 bool conker::cutscene_aspect::in_4x3() {
-    if (!conker::graphics_config_ready()) {
+    // The netplay settings profile: Expand, the default (the bars are drawn from game memory).
+    if (!conker::graphics_config_ready() || conker::netplay_profile::active()) {
         return false;
     }
     const auto value = recompui::config::get_graphics_config().get_option_value(cutscene_aspect_id);
@@ -240,7 +241,8 @@ bool conker::overscan_borders::hidden() {
 }
 
 bool conker::model_detail::always_highest() {
-    if (!conker::graphics_config_ready()) {
+    // The netplay settings profile: Always Highest, the default.
+    if (!conker::graphics_config_ready() || conker::netplay_profile::active()) {
         return true;
     }
     const auto value = recompui::config::get_graphics_config().get_option_value(conker_detail_id);

@@ -151,6 +151,12 @@ void conker::texture_packs::apply() {
     }
 }
 
+bool conker::texture_packs::is_pack(const std::string& mod_id) {
+    // The packs are listed with the settings, which headless doesn't make.
+    static const std::vector<Pack> listed = find_packs(recomp::mods::get_mods_directory());
+    return std::any_of(listed.begin(), listed.end(), [&](const Pack& pack) { return pack.id == mod_id; });
+}
+
 namespace {
     std::atomic<bool> originals_shown = false;
 

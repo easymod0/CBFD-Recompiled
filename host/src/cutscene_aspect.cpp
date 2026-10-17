@@ -77,6 +77,15 @@ namespace {
     }
 }
 
+// For save states (conker::host_state): where the ring is, so a load writes where the state would.
+uint32_t conker::cutscene_aspect::dl_ring() {
+    return bars_dl_next;
+}
+
+void conker::cutscene_aspect::set_dl_ring(uint32_t slot) {
+    bars_dl_next = slot < bars_dl_slots ? slot : 0;
+}
+
 void conker::cutscene_aspect::update(uint8_t* rdram) {
 #if defined(CONKER_RT64)
     if (!conker::graphics_config_ready()) {
