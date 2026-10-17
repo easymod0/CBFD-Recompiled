@@ -90,23 +90,25 @@ index f79adbf..e40a61d 100644
          int32_t uly;
 diff --git a/src/common/rt64_conker_view_focus.h b/src/common/rt64_conker_view_focus.h
 new file mode 100644
-index 0000000..0a7ad73
+index 0000000..c0697c9
 --- /dev/null
 +++ b/src/common/rt64_conker_view_focus.h
-@@ -0,0 +1,128 @@
+@@ -0,0 +1,169 @@
 +//
 +// RT64
 +//
 +
-+// Conker: netplay's "my view only", drawn anew (the host's netplay/view.cpp). While it's on, one player's view of
-+// the split screen is drawn across the whole frame instead of its part of it, and the other views aren't drawn:
-+// the view's viewport and scissor are stretched with it to the whole frame (RSP::setViewport, RDP::setScissor;
-+// a smaller one inside the view goes to the same place in the stretched view), and its projection is made
-+// taller by as much as the stretch isn't uniform (ProjectionProcessor), so nothing is
-+// stretched and more of the scene shows. The widescreen widening then widens it like any full-frame view. The
-+// other views' viewports are collapsed to nothing and their scissors emptied, which also leaves out their 2D.
-+// Rectangles in pixels of the frame, which is frameWidth by frameHeight. Only the renderer changes: the game's
-+// memory doesn't (its Render to RAM is off in netplay), so it can't desync.
++// Conker: netplay's "my view only", drawn anew (the host's netplay/view.cpp). While it's on, this machine's players'
++// views of the split screen are each drawn across a part of the frame of their own instead of their part of the
++// split, and the other views aren't drawn: one player's view across the whole frame, two players' views across the
++// top and bottom halves. Each view's viewport and scissor are moved and stretched with it (RSP::setViewport,
++// RDP::setScissor; a smaller one inside the view goes to the same place in the stretched view), and its projection
++// is scaled by as much as the stretch isn't uniform (ProjectionProcessor), so nothing is stretched: a view made
++// relatively taller shows more of the scene up and down, one made relatively wider more of it across. The widescreen
++// widening then widens each like any view across the frame's width. The other views' viewports are collapsed to
++// nothing and their scissors emptied, which also leaves out their 2D. Rectangles in pixels of the frame, which is
++// frameWidth by frameHeight. Only the renderer changes: the game's memory doesn't (its Render to RAM is off in
++// netplay), so it can't desync.
 +
 +#pragma once
 +
@@ -117,100 +119,139 @@ index 0000000..0a7ad73
 +
 +
 +namespace RT64 {
++    // One focused view: where the game draws it (src), and where it's drawn instead.
++    struct ConkerFocusView {
++        float srcLeft = 0.0f, srcTop = 0.0f, srcRight = 0.0f, srcBottom = 0.0f;
++        float left = 0.0f, top = 0.0f, right = 0.0f, bottom = 0.0f;
++    };
++
++    constexpr int ConkerMaxFocusViews = 2;
++
 +    struct ConkerViewFocus {
 +        bool on = false;
-+        float left = 0.0f, top = 0.0f, right = 0.0f, bottom = 0.0f;
++        int count = 0;
++        ConkerFocusView views[ConkerMaxFocusViews];
 +        float frameWidth = 0.0f, frameHeight = 0.0f;
 +    };
 +
-+    // Set by the game's host each frame (defined in rt64_vi_renderer.cpp).
-+    void setViewFocusRedraw(bool on, float left, float top, float right, float bottom, float frameWidth, float frameHeight);
++    // Set by the game's host each frame (defined in rt64_vi_renderer.cpp): `count` views (1 or 2), each 8 floats in
++    // `rects`, its rectangle in the split then where it's drawn (left, top, right, bottom).
++    void setViewFocusRedraw(bool on, int count, const float *rects, float frameWidth, float frameHeight);
 +    ConkerViewFocus conkerViewFocus();
 +
 +    // Whether the focus applies to what's drawn now: only to the frame itself, an image as wide as the frame.
 +    // The game also draws into small images of its own (a shadow's silhouette, 64 pixels wide), which the
 +    // frame's views have nothing to do with.
 +    inline bool conkerFocusApplies(const ConkerViewFocus &f, uint16_t colorImageWidth) {
-+        return f.on && (f.frameWidth > 0.0f) && (colorImageWidth == uint16_t(f.frameWidth));
++        return f.on && (f.count > 0) && (f.frameWidth > 0.0f) && (colorImageWidth == uint16_t(f.frameWidth));
 +    }
 +
-+    // A point of the focused view, where it goes in the frame: the view stretched to the whole frame. (Its
-+    // projection is made taller by as much as the stretch isn't uniform, so what's drawn isn't stretched.)
-+    inline float conkerMapX(const ConkerViewFocus &f, float x) { return (x - f.left) * f.frameWidth / (f.right - f.left); }
-+    inline float conkerMapY(const ConkerViewFocus &f, float y) { return (y - f.top) * f.frameHeight / (f.bottom - f.top); }
++    // A point of a focused view, where it goes in the frame: the view stretched to where it's drawn.
++    inline float conkerMapX(const ConkerFocusView &v, float x) { return v.left + (x - v.srcLeft) * (v.right - v.left) / (v.srcRight - v.srcLeft); }
++    inline float conkerMapY(const ConkerFocusView &v, float y) { return v.top + (y - v.srcTop) * (v.bottom - v.top) / (v.srcBottom - v.srcTop); }
 +
-+    // Where a rectangle (in pixels) stands: the whole frame (left alone), the focused view (moved to the whole
-+    // frame), or another view (not drawn). Judged by its middle, so a view's own slightly different edges match.
++    // How much a focused view's projection is scaled across and down so what's drawn keeps its shape, from how much
++    // more it's stretched across than down (k). Alone across the frame it keeps its width of the scene and is made
++    // taller or shorter by k (a 2-player half, 1.26 / 2.04, about 0.62: more of the scene up and down; a quarter,
++    // about 1: unchanged). With two views, one made relatively wider (a quarter across half the frame, 2.04 / 1.0) is
++    // met halfway (`halfway`): by the square root of k across and down, more of the scene across and less up and
++    // down, rather than a band cut from the middle of it or a view twice as wide (which the widescreen widening
++    // would make wider again).
++    inline void conkerFocusScale(const ConkerFocusView &v, bool halfway, float &xScale, float &yScale) {
++        const float stretchX = (v.right - v.left) / (v.srcRight - v.srcLeft);
++        const float stretchY = (v.bottom - v.top) / (v.srcBottom - v.srcTop);
++        const float k = stretchX / stretchY;
++        if (!std::isfinite(k) || (k <= 0.0f) || (k <= 1.0f) || !halfway) {
++            xScale = 1.0f;
++            yScale = std::isfinite(k) && (k > 0.0f) ? k : 1.0f;
++            return;
++        }
++
++        const float root = std::sqrt(k);
++        xScale = 1.0f / root;
++        yScale = root;
++    }
++
++    // Where a rectangle (in pixels) stands: the whole frame (left alone), a focused view (`index`: moved with it),
++    // or another view (not drawn). Judged by its middle, so a view's own slightly different edges match.
 +    enum class ConkerViewPart { Whole, Focused, Other };
 +
-+    inline ConkerViewPart conkerViewPart(const ConkerViewFocus &f, float left, float top, float right, float bottom) {
++    inline ConkerViewPart conkerViewPart(const ConkerViewFocus &f, float left, float top, float right, float bottom, int &index, float slack = 0.0f) {
 +        if (((right - left) >= 0.9f * f.frameWidth) && ((bottom - top) >= 0.9f * f.frameHeight)) {
 +            return ConkerViewPart::Whole;
 +        }
 +        const float middleX = (left + right) / 2.0f;
 +        const float middleY = (top + bottom) / 2.0f;
-+        if ((middleX >= f.left) && (middleX <= f.right) && (middleY >= f.top) && (middleY <= f.bottom)) {
-+            return ConkerViewPart::Focused;
++        for (int i = 0; i < f.count; i++) {
++            const ConkerFocusView &v = f.views[i];
++            if ((middleX >= v.srcLeft - slack) && (middleX <= v.srcRight + slack) && (middleY >= v.srcTop - slack) && (middleY <= v.srcBottom + slack)) {
++                index = i;
++                return ConkerViewPart::Focused;
++            }
 +        }
 +        return ConkerViewPart::Other;
 +    }
 +
-+    // A rectangle of the frame's 2D (quarter pixels), moved with the focused view: false if it isn't drawn. Only moved,
++    // A rectangle of the frame's 2D (quarter pixels), moved with its focused view: false if it isn't drawn. Only moved,
 +    // never scaled: the game draws a split screen's 2D at full size.
-+    // - At the line between the top and bottom views (within 3 pixels of it): shared by the views, moved down to the
-+    //   bottom of the frame, all of it by as much so it keeps together: the match timer in the middle of the frame,
-+    //   War's and Beach's team scores beside it, Heist's row of every player's $$$.
-+    // - Its middle outside the view: another's, left out (a piece on the line between views belongs to the one
-+    //   its middle is in, as Heist's $$$ rows).
-+    // - Covering most of the view in fill mode (its clears, color and depth): the whole frame.
-+    // - Otherwise the view's: moved as far as the view's nearest edges move, across and down. Its middle in the
++    // - At the line between the top and bottom views (within 3 pixels of it): shared by the views. With one view
++    //   focused it's moved down to the bottom of the frame, all of it by as much so it keeps together: the match timer
++    //   in the middle of the frame, War's and Beach's team scores beside it, Heist's row of every player's $$$. With
++    //   two it stays on the line, which is where the two halves meet.
++    // - Its middle outside the focused views: another's, left out (a piece on the line between views belongs to the
++    //   one its middle is in, as Heist's $$$ rows).
++    // - Covering most of its view in fill mode (its clears, color and depth): all of where the view is drawn.
++    // - Otherwise its view's: moved as far as the view's nearest edges move, across and down. Its middle in the
 +    //   first 30% of the view's width goes with the left edge, past 70% with the right, otherwise with the middle
-+    //   (wide, so centered text such as "0 (1st)" moves whole); the same down.
++    //   (wide, so centered text such as "0 (1st)" moves whole); the same down. Kept inside where the view is drawn.
 +    inline bool conkerMoveRect(const ConkerViewFocus &f, bool fillMode, FixedRect &rect) {
 +        const float left = rect.ulx / 4.0f, top = rect.uly / 4.0f, right = rect.lrx / 4.0f, bottom = rect.lry / 4.0f;
 +        if ((right - left >= 0.9f * f.frameWidth) && (bottom - top >= 0.9f * f.frameHeight)) {
 +            return true;
 +        }
-+        const float viewWidth = f.right - f.left;
-+        const float viewHeight = f.bottom - f.top;
 +        const float splitLine = f.frameHeight / 2.0f;
-+        const bool split = viewHeight < 0.75f * f.frameHeight;
++        const bool split = (f.views[0].srcBottom - f.views[0].srcTop) < 0.75f * f.frameHeight;
 +        float moveX = 0.0f, moveY = 0.0f;
-+        const float middleX = (left + right) / 2.0f;
-+        const float middleY = (top + bottom) / 2.0f;
 +        const float nearLine = 3.0f;
++        int index = 0;
 +        if (split && (top < splitLine + nearLine) && (bottom > splitLine - nearLine)) {
-+            const float margin = 6.0f;
-+            const float sharedHalfHeight = 6.0f;
-+            moveY = (f.frameHeight - margin) - (splitLine + sharedHalfHeight);
++            if (f.count == 1) {
++                const float margin = 6.0f;
++                const float sharedHalfHeight = 6.0f;
++                moveY = (f.frameHeight - margin) - (splitLine + sharedHalfHeight);
++            }
 +        }
-+        else if ((middleX < f.left - 1.0f) || (middleX > f.right + 1.0f) || (middleY < f.top - 1.0f) || (middleY > f.bottom + 1.0f)) {
++        else if (conkerViewPart(f, left, top, right, bottom, index, 1.0f) != ConkerViewPart::Focused) {
 +            return false;
 +        }
-+        else if (fillMode && (right - left >= 0.8f * viewWidth) && (bottom - top >= 0.8f * viewHeight)) {
-+            rect.ulx = 0;
-+            rect.uly = 0;
-+            rect.lrx = int32_t(f.frameWidth * 4.0f);
-+            rect.lry = int32_t(f.frameHeight * 4.0f);
-+            return true;
-+        }
 +        else {
-+            auto edgeMove = [](float middle, float viewStart, float viewEnd, float frameSize) {
-+                const float share = (middle - viewStart) / (viewEnd - viewStart);
-+                if (share < 0.3f) return -viewStart;
-+                if (share > 0.7f) return frameSize - viewEnd;
-+                return frameSize / 2.0f - (viewStart + viewEnd) / 2.0f;
-+            };
-+            moveX = edgeMove((left + right) / 2.0f, f.left, f.right, f.frameWidth);
-+            moveY = edgeMove((top + bottom) / 2.0f, f.top, f.bottom, f.frameHeight);
-+            // Kept inside the frame (a piece hanging over the view's edge would go past the frame's), where
-+            // it fits in it at all.
-+            const float inset = 2.0f;
-+            if ((right - left) <= f.frameWidth - 2.0f * inset) {
-+                moveX = std::clamp(moveX, inset - left, (f.frameWidth - inset) - right);
++            const ConkerFocusView &v = f.views[index];
++            const float viewWidth = v.srcRight - v.srcLeft;
++            const float viewHeight = v.srcBottom - v.srcTop;
++            if (fillMode && (right - left >= 0.8f * viewWidth) && (bottom - top >= 0.8f * viewHeight)) {
++                rect.ulx = int32_t(v.left * 4.0f);
++                rect.uly = int32_t(v.top * 4.0f);
++                rect.lrx = int32_t(v.right * 4.0f);
++                rect.lry = int32_t(v.bottom * 4.0f);
++                return true;
 +            }
-+            if ((bottom - top) <= f.frameHeight - 2.0f * inset) {
-+                moveY = std::clamp(moveY, inset - top, (f.frameHeight - inset) - bottom);
++
++            auto edgeMove = [](float middle, float srcStart, float srcEnd, float start, float end) {
++                const float share = (middle - srcStart) / (srcEnd - srcStart);
++                if (share < 0.3f) return start - srcStart;
++                if (share > 0.7f) return end - srcEnd;
++                return (start + end) / 2.0f - (srcStart + srcEnd) / 2.0f;
++            };
++            moveX = edgeMove((left + right) / 2.0f, v.srcLeft, v.srcRight, v.left, v.right);
++            moveY = edgeMove((top + bottom) / 2.0f, v.srcTop, v.srcBottom, v.top, v.bottom);
++            // Kept inside where the view is drawn (a piece hanging over the view's edge would go past it), where it
++            // fits in it at all.
++            const float inset = 2.0f;
++            if ((right - left) <= (v.right - v.left) - 2.0f * inset) {
++                moveX = std::clamp(moveX, (v.left + inset) - left, (v.right - inset) - right);
++            }
++            if ((bottom - top) <= (v.bottom - v.top) - 2.0f * inset) {
++                moveY = std::clamp(moveY, (v.top + inset) - top, (v.bottom - inset) - bottom);
 +            }
 +        }
 +        const int32_t dx = int32_t(std::lround(moveX * 4.0f));
@@ -1190,7 +1231,7 @@ index e08b02c..084ccfd 100644
          struct External {
              ApplicationWindow *appWindow = nullptr;
 diff --git a/src/hle/rt64_rdp.cpp b/src/hle/rt64_rdp.cpp
-index a10c11a..026d138 100644
+index a10c11a..e82a715 100644
 --- a/src/hle/rt64_rdp.cpp
 +++ b/src/hle/rt64_rdp.cpp
 @@ -4,7 +4,10 @@
@@ -1204,7 +1245,7 @@ index a10c11a..026d138 100644
  
  #include "../include/rt64_extended_gbi.h"
  
-@@ -977,6 +980,27 @@ namespace RT64 {
+@@ -977,6 +980,29 @@ namespace RT64 {
          scissorRect.uly = std::clamp(uly + extAlignment.topOffset, extAlignment.topBound, extAlignment.bottomBound);
          scissorRect.lrx = std::clamp(movedFromOrigin(lrx + extAlignment.rightOffset, extAlignment.rightOrigin), extAlignment.leftBound, extAlignment.rightBound);
          scissorRect.lry = std::clamp(lry + extAlignment.bottomOffset, extAlignment.topBound, extAlignment.bottomBound);
@@ -1212,16 +1253,18 @@ index a10c11a..026d138 100644
 +        // Conker: netplay's "my view only", drawn anew (rt64_conker_view_focus.h). The rectangle is in quarter pixels.
 +        const ConkerViewFocus focus = conkerViewFocus();
 +        if (conkerFocusApplies(focus, colorImage.width)) {
-+            const ConkerViewPart part = conkerViewPart(focus, scissorRect.ulx / 4.0f, scissorRect.uly / 4.0f, scissorRect.lrx / 4.0f, scissorRect.lry / 4.0f);
++            int index = 0;
++            const ConkerViewPart part = conkerViewPart(focus, scissorRect.ulx / 4.0f, scissorRect.uly / 4.0f, scissorRect.lrx / 4.0f, scissorRect.lry / 4.0f, index);
 +            if (part == ConkerViewPart::Focused) {
-+                // Stretched with the view (the view's own scissor to the whole frame), within the frame.
-+                auto mapped = [](float v, float limit) { return int32_t(std::lround(std::clamp(v, 0.0f, limit) * 4.0f)); };
-+                const float left = conkerMapX(focus, scissorRect.ulx / 4.0f), right = conkerMapX(focus, scissorRect.lrx / 4.0f);
-+                const float top = conkerMapY(focus, scissorRect.uly / 4.0f), bottom = conkerMapY(focus, scissorRect.lry / 4.0f);
-+                scissorRect.ulx = mapped(left, focus.frameWidth);
-+                scissorRect.uly = mapped(top, focus.frameHeight);
-+                scissorRect.lrx = mapped(right, focus.frameWidth);
-+                scissorRect.lry = mapped(bottom, focus.frameHeight);
++                // Stretched with the view (the view's own scissor to where it's drawn), within that.
++                const ConkerFocusView &view = focus.views[index];
++                auto mapped = [](float v, float low, float high) { return int32_t(std::lround(std::clamp(v, low, high) * 4.0f)); };
++                const float left = conkerMapX(view, scissorRect.ulx / 4.0f), right = conkerMapX(view, scissorRect.lrx / 4.0f);
++                const float top = conkerMapY(view, scissorRect.uly / 4.0f), bottom = conkerMapY(view, scissorRect.lry / 4.0f);
++                scissorRect.ulx = mapped(left, view.left, view.right);
++                scissorRect.uly = mapped(top, view.top, view.bottom);
++                scissorRect.lrx = mapped(right, view.left, view.right);
++                scissorRect.lry = mapped(bottom, view.top, view.bottom);
 +            }
 +            else if (part == ConkerViewPart::Other) {
 +                scissorRect.lrx = scissorRect.ulx;
@@ -1232,7 +1275,7 @@ index a10c11a..026d138 100644
          scissorModeStack[scissorStackSize - 1] = mode;
          extended.scissorLeftOriginStack[scissorStackSize - 1] = extAlignment.leftOrigin;
          extended.scissorRightOriginStack[scissorStackSize - 1] = extAlignment.rightOrigin;
-@@ -1192,11 +1216,17 @@ namespace RT64 {
+@@ -1192,11 +1218,17 @@ namespace RT64 {
              }
          }
  
@@ -1716,7 +1759,7 @@ index 778e08b..f53d597 100644
          void updatePerspective(const hlslpp::float4x4 &prevTransform, const hlslpp::float4x4 &curTransform, uint8_t perspInterpolation);
  
 diff --git a/src/hle/rt64_rsp.cpp b/src/hle/rt64_rsp.cpp
-index 1da2550..c4edb88 100644
+index 1da2550..1d7bd6f 100644
 --- a/src/hle/rt64_rsp.cpp
 +++ b/src/hle/rt64_rsp.cpp
 @@ -4,7 +4,11 @@
@@ -1731,15 +1774,16 @@ index 1da2550..c4edb88 100644
  
  #include "../include/rt64_extended_gbi.h"
  #include "common/rt64_common.h"
-@@ -56,6 +60,7 @@ namespace RT64 {
+@@ -56,6 +60,8 @@ namespace RT64 {
          lights.fill({});
          segments.fill(0);
          viewportStack[0] = {};
++        extended.viewportFocusXScaleStack.fill(1.0f);
 +        extended.viewportFocusYScaleStack.fill(1.0f);
          clipRatios[0] = 1;
          clipRatios[1] = 1;
          clipRatios[2] = -1;
-@@ -427,6 +432,215 @@ namespace RT64 {
+@@ -427,6 +433,215 @@ namespace RT64 {
          setVertexCommon<false, sizeof(VertexEXV1)>(rdramAddress, dstIndex, dstIndex + vtxCount);
      }
  
@@ -1955,15 +1999,16 @@ index 1da2550..c4edb88 100644
      void RSP::setVertexColorPD(uint32_t address) {
          vertexColorPDAddress = fromSegmentedMasked(address);
      }
-@@ -471,6 +685,7 @@ namespace RT64 {
+@@ -471,6 +686,8 @@ namespace RT64 {
              drawData.viewProjTransformGroups.emplace_back(extended.curViewProjMatrixIdGroupIndex);
              drawData.rspViewports.emplace_back(viewportStack[viewportStackSize - 1]);
              drawData.viewportOrigins.emplace_back(extended.viewportOriginStack[viewportStackSize - 1]);
++            drawData.viewportFocusXScales.emplace_back(extended.viewportFocusXScaleStack[viewportStackSize - 1]);
 +            drawData.viewportFocusYScales.emplace_back(extended.viewportFocusYScaleStack[viewportStackSize - 1]);
  
              for (uint32_t j = 0; j < 4; j++) {
                  drawData.viewportClipRatios.emplace_back(clipRatios[j]);
-@@ -506,13 +721,18 @@ namespace RT64 {
+@@ -506,13 +723,18 @@ namespace RT64 {
          const int workloadCursor = state->ext.workloadQueue->writeCursor;
          Workload &workload = state->ext.workloadQueue->workloads[workloadCursor];
  
@@ -1983,7 +2028,7 @@ index 1da2550..c4edb88 100644
          // ModelViewProj is only updated when a vertex is processed and the flag is enabled.
          auto &worldTransforms = workload.drawData.worldTransforms;
          auto &worldTransformGroups = workload.drawData.worldTransformGroups;
-@@ -520,6 +740,12 @@ namespace RT64 {
+@@ -520,6 +742,12 @@ namespace RT64 {
          auto &worldTransformPhysicalAddresses = workload.drawData.worldTransformPhysicalAddresses;
          auto &worldTransformVertexIndices = workload.drawData.worldTransformVertexIndices;
          bool addWorldTransform = (modelViewProjChanged || modelViewProjInserted);
@@ -1996,7 +2041,7 @@ index 1da2550..c4edb88 100644
          if (modelViewProjChanged) {
              computeModelViewProj();
              curTransformIndex = static_cast<uint16_t>(worldTransforms.size());
-@@ -731,6 +957,22 @@ namespace RT64 {
+@@ -731,6 +959,22 @@ namespace RT64 {
                  tcFloats.emplace_back((float)((double)((vertices[i].s) * TextureSc) / Divisor));
                  tcFloats.emplace_back((float)((double)((vertices[i].t) * TextureTc) / Divisor));
              }
@@ -2019,7 +2064,7 @@ index 1da2550..c4edb88 100644
          }
      }
  
-@@ -841,7 +1083,12 @@ namespace RT64 {
+@@ -841,7 +1085,12 @@ namespace RT64 {
          const uint32_t globalIndex = indices[vtxIndex];
          const float screenZ = workload.drawData.posScreen[globalIndex][2] * DepthRange;
          const float zValueFloat = zValue / 65536.0f;
@@ -2033,28 +2078,29 @@ index 1da2550..c4edb88 100644
              const uint32_t rdramAddress = fromSegmentedMasked(branchDl);
              *dl = reinterpret_cast<DisplayList *>(state->fromRDRAM(rdramAddress)) - 1;
          }
-@@ -910,6 +1157,34 @@ namespace RT64 {
+@@ -910,6 +1159,36 @@ namespace RT64 {
          viewport.translate.y = float(vp->vtrans[0] + offy) / 4.0f;
          viewport.translate.z = float(vp->vtrans[3]) / DepthRange;
          extended.viewportOriginStack[viewportStackSize - 1] = ori;
 +
 +        // Conker: netplay's "my view only", drawn anew (rt64_conker_view_focus.h).
++        float focusXScale = 1.0f;
 +        float focusYScale = 1.0f;
 +        const ConkerViewFocus focus = conkerViewFocus();
 +        if (conkerFocusApplies(focus, state->rdp->colorImage.width)) {
 +            const float halfWidth = std::fabs(viewport.scale.x);
 +            const float halfHeight = std::fabs(viewport.scale.y);
++            int index = 0;
 +            const ConkerViewPart part = conkerViewPart(focus, viewport.translate.x - halfWidth, viewport.translate.y - halfHeight,
-+                viewport.translate.x + halfWidth, viewport.translate.y + halfHeight);
++                viewport.translate.x + halfWidth, viewport.translate.y + halfHeight, index);
 +            if ((part == ConkerViewPart::Focused) && (halfWidth > 0.0f) && (halfHeight > 0.0f)) {
-+                // Stretched with the view to the whole frame; the projection's height scaled by the stretch across
-+                // over the stretch down, so what's drawn keeps its shape (a 2-player half: 1.26 / 2.04, about
-+                // 0.62, more of the scene shown up and down; a quarter: 2 / 2, unchanged).
-+                const float stretchX = focus.frameWidth / (focus.right - focus.left);
-+                const float stretchY = focus.frameHeight / (focus.bottom - focus.top);
-+                focusYScale = stretchX / stretchY;
-+                viewport.translate.x = conkerMapX(focus, viewport.translate.x);
-+                viewport.translate.y = conkerMapY(focus, viewport.translate.y);
++                // Stretched with the view to where it's drawn; the projection scaled so what's drawn keeps its shape.
++                const ConkerFocusView &view = focus.views[index];
++                const float stretchX = (view.right - view.left) / (view.srcRight - view.srcLeft);
++                const float stretchY = (view.bottom - view.top) / (view.srcBottom - view.srcTop);
++                conkerFocusScale(view, focus.count > 1, focusXScale, focusYScale);
++                viewport.translate.x = conkerMapX(view, viewport.translate.x);
++                viewport.translate.y = conkerMapY(view, viewport.translate.y);
 +                viewport.scale.x *= stretchX;
 +                viewport.scale.y *= stretchY;
 +            }
@@ -2064,19 +2110,21 @@ index 1da2550..c4edb88 100644
 +            }
 +        }
 +
++        extended.viewportFocusXScaleStack[viewportStackSize - 1] = focusXScale;
 +        extended.viewportFocusYScaleStack[viewportStackSize - 1] = focusYScale;
          viewportChanged = true;
      }
  
-@@ -917,6 +1192,7 @@ namespace RT64 {
+@@ -917,6 +1196,8 @@ namespace RT64 {
          if (viewportStackSize < RSP_EXTENDED_STACK_SIZE) {
              viewportStack[viewportStackSize] = viewportStack[viewportStackSize - 1];
              extended.viewportOriginStack[viewportStackSize] = extended.viewportOriginStack[viewportStackSize - 1];
++            extended.viewportFocusXScaleStack[viewportStackSize] = extended.viewportFocusXScaleStack[viewportStackSize - 1];
 +            extended.viewportFocusYScaleStack[viewportStackSize] = extended.viewportFocusYScaleStack[viewportStackSize - 1];
              viewportStackSize++;
          }
      }
-@@ -1152,6 +1428,16 @@ namespace RT64 {
+@@ -1152,6 +1433,16 @@ namespace RT64 {
  
              const interop::RSPViewport &viewport = viewportStack[viewportStackSize - 1];
              const FixedRect viewportClipRect = viewport.rect(clipRatios.data());
@@ -2094,7 +2142,7 @@ index 1da2550..c4edb88 100644
              if (!drawRect.isNull()) {
                  fbPair.drawColorRect.merge(drawRect);
 diff --git a/src/hle/rt64_rsp.h b/src/hle/rt64_rsp.h
-index 61bb3b1..5c37959 100644
+index 61bb3b1..b76a3d6 100644
 --- a/src/hle/rt64_rsp.h
 +++ b/src/hle/rt64_rsp.h
 @@ -162,6 +162,28 @@ namespace RT64 {
@@ -2126,16 +2174,17 @@ index 61bb3b1..5c37959 100644
          uint32_t vertexFogIndex;
          uint32_t vertexLightIndex;
          uint32_t vertexLightCount;
-@@ -205,6 +227,8 @@ namespace RT64 {
+@@ -205,6 +227,9 @@ namespace RT64 {
              } global;
  
              std::array<uint16_t, RSP_EXTENDED_STACK_SIZE> viewportOriginStack;
-+            // Conker: how much each viewport's projection is scaled up and down (rt64_conker_view_focus.h).
++            // Conker: how much each viewport's projection is scaled across and up and down (rt64_conker_view_focus.h).
++            std::array<float, RSP_EXTENDED_STACK_SIZE> viewportFocusXScaleStack;
 +            std::array<float, RSP_EXTENDED_STACK_SIZE> viewportFocusYScaleStack;
  
              DrawExtendedType drawExtendedType;
              DrawExtendedData drawExtendedData;
-@@ -254,6 +278,11 @@ namespace RT64 {
+@@ -254,6 +279,11 @@ namespace RT64 {
          void setVertex(uint32_t address, uint32_t vtxCount, uint32_t dstIndex);
          void setVertexPD(uint32_t address, uint32_t vtxCount, uint32_t dstIndex);
          void setVertexEXV1(uint32_t address, uint32_t vtxCount, uint32_t dstIndex);
@@ -2286,7 +2335,7 @@ index 7a8c13b..373815a 100644
          void endSpriteCommand();
          uint8_t *fromRDRAM(uint32_t rdramAddress) const;
 diff --git a/src/hle/rt64_workload.cpp b/src/hle/rt64_workload.cpp
-index b4c85f5..33d4d84 100644
+index b4c85f5..d025d8b 100644
 --- a/src/hle/rt64_workload.cpp
 +++ b/src/hle/rt64_workload.cpp
 @@ -4,7 +4,33 @@
@@ -2332,23 +2381,25 @@ index b4c85f5..33d4d84 100644
  
          commandWarnings.clear();
          spriteCommands.clear();
-@@ -68,6 +96,7 @@ namespace RT64 {
+@@ -68,6 +96,8 @@ namespace RT64 {
          drawData.rspViewports.clear();
          drawData.viewportClipRatios.clear();
          drawData.viewportOrigins.clear();
++        drawData.viewportFocusXScales.clear();
 +        drawData.viewportFocusYScales.clear();
          drawData.rspFog.clear();
          drawData.rspLights.clear();
          drawData.rspLookAt.clear();
-@@ -102,6 +131,7 @@ namespace RT64 {
+@@ -102,6 +132,8 @@ namespace RT64 {
  
          // Push an identity matrix into the transforms by default so rects can use them.
          drawData.rspViewports.push_back(interop::RSPViewport::identity());
++        drawData.viewportFocusXScales.push_back(1.0f);
 +        drawData.viewportFocusYScales.push_back(1.0f);
          drawData.viewTransforms.push_back(interop::float4x4::identity());
          drawData.projTransforms.push_back(interop::float4x4::identity());
          drawData.viewProjTransforms.push_back(interop::float4x4::identity());
-@@ -315,6 +345,82 @@ namespace RT64 {
+@@ -315,6 +347,82 @@ namespace RT64 {
          return addedPair;
      }
  
@@ -2432,7 +2483,7 @@ index b4c85f5..33d4d84 100644
          if (fbPairCount > 0) {
              return fbPairCount - 1;
 diff --git a/src/hle/rt64_workload.h b/src/hle/rt64_workload.h
-index 8ea27d5..a23608f 100644
+index 8ea27d5..d28d37e 100644
 --- a/src/hle/rt64_workload.h
 +++ b/src/hle/rt64_workload.h
 @@ -23,6 +23,19 @@
@@ -2455,15 +2506,16 @@ index 8ea27d5..a23608f 100644
      struct DrawData {
          std::vector<float> posFloats;
          std::vector<float> velFloats;
-@@ -62,6 +75,7 @@ namespace RT64 {
+@@ -62,6 +75,8 @@ namespace RT64 {
          std::vector<interop::RSPViewport> rspViewports;
          std::vector<int16_t> viewportClipRatios;
          std::vector<uint16_t> viewportOrigins;
++        std::vector<float> viewportFocusXScales;
 +        std::vector<float> viewportFocusYScales;
          std::vector<interop::RSPFog> rspFog;
          std::vector<interop::RSPLight> rspLights;
          std::vector<interop::RSPLookAt> rspLookAt;
-@@ -234,11 +248,16 @@ namespace RT64 {
+@@ -234,11 +249,16 @@ namespace RT64 {
          uint64_t workloadId = 0;
          uint64_t presentId = 0;
          bool paused = false;
@@ -2480,7 +2532,7 @@ index 8ea27d5..a23608f 100644
          } extended;
  
          void reset();
-@@ -253,5 +272,17 @@ namespace RT64 {
+@@ -253,5 +273,17 @@ namespace RT64 {
          void begin(uint64_t submissionFrame);
          bool addFramebufferPair(uint32_t colorAddress, uint8_t colorFmt, uint8_t colorSiz, uint16_t colorWidth, uint32_t depthAddress);
          int currentFramebufferPairIndex() const;
@@ -2940,7 +2992,7 @@ index 9fae0d4..ce26584 100644
                          bool usesViewport = (proj.type == Projection::Type::Perspective) || (proj.type == Projection::Type::Orthographic);
                          if (usesViewport) {
 diff --git a/src/render/rt64_projection_processor.cpp b/src/render/rt64_projection_processor.cpp
-index e842dcc..f9aab3c 100644
+index e842dcc..5b0ff63 100644
 --- a/src/render/rt64_projection_processor.cpp
 +++ b/src/render/rt64_projection_processor.cpp
 @@ -4,6 +4,7 @@
@@ -3048,27 +3100,29 @@ index e842dcc..f9aab3c 100644
              interop::float4x4 &viewMatrix = drawData.modViewTransforms[proj.transformsIndex];
              interop::float4x4 &projMatrix = drawData.modProjTransforms[proj.transformsIndex];
              interop::float4x4 &viewProjMatrix = drawData.modViewProjTransforms[proj.transformsIndex];
-@@ -112,7 +179,18 @@ namespace RT64 {
+@@ -112,7 +179,20 @@ namespace RT64 {
                  projMatrix = workload.debuggerCamera.projMatrix;
              }
  
 -            adjustProjectionMatrix(projMatrix, projRatioScale);
 +            adjustProjectionMatrix(projMatrix, projRatioScale, projCenterX);
 +
-+            // Conker: a view drawn anew across the frame is made taller (rt64_conker_view_focus.h).
++            // Conker: a view drawn anew elsewhere in the frame keeps its shape (rt64_conker_view_focus.h).
++            const float focusXScale = drawData.viewportFocusXScales[proj.transformsIndex];
 +            const float focusYScale = drawData.viewportFocusYScales[proj.transformsIndex];
-+            auto adjustProjectionHeight = [focusYScale](interop::float4x4 &matrix) {
-+                if (focusYScale != 1.0f) {
++            auto adjustProjectionShape = [focusXScale, focusYScale](interop::float4x4 &matrix) {
++                if ((focusXScale != 1.0f) || (focusYScale != 1.0f)) {
 +                    for (int r = 0; r < 4; r++) {
++                        matrix[r][0] *= focusXScale;
 +                        matrix[r][1] *= focusYScale;
 +                    }
 +                }
 +            };
-+            adjustProjectionHeight(projMatrix);
++            adjustProjectionShape(projMatrix);
  
              interop::float4x4 &prevViewTransform = drawData.prevViewTransforms[proj.transformsIndex];
              interop::float4x4 &prevProjTransform = drawData.prevProjTransforms[proj.transformsIndex];
-@@ -120,9 +198,22 @@ namespace RT64 {
+@@ -120,9 +200,22 @@ namespace RT64 {
                  const interop::float4x4 curViewTransform = viewMatrix;
                  const interop::float4x4 curProjTransform = projMatrix;
                  interop::float4x4 adjustedPrevProj = *prevProjMatrix;
@@ -3076,7 +3130,7 @@ index e842dcc..f9aab3c 100644
 -                viewMatrix = rigidBody->lerp(p.curFrameWeight, *prevViewMatrix, curViewTransform, true);
 -                prevViewTransform = rigidBody->lerp(p.prevFrameWeight, *prevViewMatrix, curViewTransform, true);
 +                adjustProjectionMatrix(adjustedPrevProj, projRatioScale, projCenterX);
-+                adjustProjectionHeight(adjustedPrevProj);
++                adjustProjectionShape(adjustedPrevProj);
 +                if (rigidBody->lerpDecompose) {
 +                    viewMatrix = rigidBody->lerp(p.curFrameWeight, *prevViewMatrix, curViewTransform, true);
 +                    prevViewTransform = rigidBody->lerp(p.prevFrameWeight, *prevViewMatrix, curViewTransform, true);
@@ -3094,7 +3148,7 @@ index e842dcc..f9aab3c 100644
  
                  // We only interpolate the projection if the view matrix has been interpolated.
                  const bool interpolateProjection = rigidBody->lerpTranslation || rigidBody->lerpRotation;
-@@ -144,6 +235,31 @@ namespace RT64 {
+@@ -144,6 +237,31 @@ namespace RT64 {
  
              interop::float4x4 &prevViewProjTransform = drawData.prevViewProjTransforms[proj.transformsIndex];
              prevViewProjTransform = hlslpp::mul(prevViewTransform, prevProjTransform);
@@ -3594,10 +3648,10 @@ index 9131697..9c74131 100644
          void reloadReplacements(bool clearQueue, uint64_t exclusiveDbHash = 0);
          bool loadReplacementDirectory(const ReplacementDirectory &replacementDirectory);
 diff --git a/src/render/rt64_vi_renderer.cpp b/src/render/rt64_vi_renderer.cpp
-index b4ff4e9..a984aee 100644
+index b4ff4e9..24423a4 100644
 --- a/src/render/rt64_vi_renderer.cpp
 +++ b/src/render/rt64_vi_renderer.cpp
-@@ -4,10 +4,42 @@
+@@ -4,10 +4,58 @@
  
  #include "rt64_vi_renderer.h"
  
@@ -3627,9 +3681,25 @@ index b4ff4e9..a984aee 100644
 +    static std::mutex viewFocusMutex;
 +    static ConkerViewFocus viewFocus;
 +
-+    void setViewFocusRedraw(bool on, float left, float top, float right, float bottom, float frameWidth, float frameHeight) {
++    void setViewFocusRedraw(bool on, int count, const float *rects, float frameWidth, float frameHeight) {
++        ConkerViewFocus focus;
++        focus.on = on && (count >= 1) && (count <= ConkerMaxFocusViews) && (rects != nullptr);
++        focus.count = focus.on ? count : 0;
++        for (int i = 0; i < focus.count; i++) {
++            const float *r = rects + i * 8;
++            focus.views[i] = { r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7] };
++            // A view with no size (or not a number) can't be mapped: nothing is focused then.
++            const ConkerFocusView &v = focus.views[i];
++            if (!((v.srcRight > v.srcLeft) && (v.srcBottom > v.srcTop) && (v.right > v.left) && (v.bottom > v.top))) {
++                focus.on = false;
++                focus.count = 0;
++                break;
++            }
++        }
++        focus.frameWidth = frameWidth;
++        focus.frameHeight = frameHeight;
 +        std::scoped_lock lock(viewFocusMutex);
-+        viewFocus = { on, left, top, right, bottom, frameWidth, frameHeight };
++        viewFocus = focus;
 +    }
 +
 +    ConkerViewFocus conkerViewFocus() {
@@ -3640,7 +3710,7 @@ index b4ff4e9..a984aee 100644
      // VIRenderer
  
      VIRenderer::VIRenderer() { }
-@@ -108,6 +140,18 @@ namespace RT64 {
+@@ -108,6 +156,18 @@ namespace RT64 {
          hlslpp::float4 viViewRect = vi.viewRectangle() * sdSize.xyxy;
          hlslpp::float4 viCropRect = vi.cropRectangle() * sdSize.xyxy;
  

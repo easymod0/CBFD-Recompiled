@@ -1,5 +1,5 @@
 // netplay_probe: tries the netplay transport (session.hpp) without the game. Peers connect as a match
-// would and each sends made-up pads for its own port, 30 reads a second as the game reads them; each
+// would and each sends made-up pads for its own ports, 30 reads a second as the game reads them; each
 // checks that every other port's pads arrive, and are the ones sent.
 //
 //   netplay_probe host <port> [--players 2] [options]     (prints its join code, for 127.0.0.1)
@@ -7,6 +7,7 @@
 //   netplay_probe join <address:port> --silent | --oversize
 //   netplay_probe code <address:port> <key, hex>
 //     --reads <n>        how many reads each peer sends (300: 10 s)
+//     --local <n>        players on this peer, each with a port (1 by default)
 //     --loss <percent>   the library drops this share of the packets sent (they're resent)
 //     --build/--rom/--profile/--mods <hex>   the handshake's hashes (all 1 by default), to test refusals
 //     --silent           connect but never say Hello: the host must drop it after its handshake time
@@ -14,12 +15,14 @@
 //     --own-view 1       (hosting) the match's rule that every player sees only their own view
 //     --hostile early    (joining) send Inputs before the match starts: the host must drop it
 //     --hostile far      (joining) send Inputs far beyond the reads it could have got to: dropped too
+//     --hostile port     (joining) send Inputs for the host's port 0 once the match starts: dropped too
 //     --hostile hash     (joining) send the same Hash twice once the match starts: dropped too
 //
 // It exits 0 once it has every other port's pads for every read and they're all right, 1 otherwise;
 // --silent, once the host has closed the connection for a timeout; --oversize, once it's closed before
 // that. `code` prints the join code for an address and key.
 
+#include <bit>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -140,10 +143,12 @@ int main(int argc, char** argv) {
     Hello me{ 1, 1, 1, 1 };
     std::string hostile;
     bool own_view = false;
+    int local = 1;
     for (int i = 3; i + 1 < argc; i += 2) {
         const std::string option = argv[i];
         const char* value = argv[i + 1];
         if (option == "--players") players = std::atoi(value);
+        else if (option == "--local") local = me.players = (uint8_t)std::atoi(value);
         else if (option == "--reads") reads = (uint32_t)std::strtoul(value, nullptr, 10);
         else if (option == "--loss") loss = std::strtof(value, nullptr);
         else if (option == "--build") me.build = std::strtoull(value, nullptr, 16);
@@ -176,7 +181,7 @@ int main(int argc, char** argv) {
     int result = 1;
     {
         Session session;
-        const bool started = hosting ? session.host((uint16_t)std::atoi(where.c_str()), players, me, error)
+        const bool started = hosting ? session.host((uint16_t)std::atoi(where.c_str()), players, me, error, local)
                                      : session.join(where, me, error);
         if (!started) {
             std::fprintf(stderr, "%s\n", error.c_str());
@@ -188,7 +193,7 @@ int main(int argc, char** argv) {
                 std::fflush(stdout);
             }
             std::map<int, Received> received;   // by port
-            int joined = 1;                     // the host counts itself
+            int joined = local;                 // the host counts its own
             bool playing = false;               // started: all the ports are taken
             bool ended = false;
             uint32_t sent = 0;                  // reads sent so far
@@ -199,8 +204,8 @@ int main(int argc, char** argv) {
                 for (Event& event : session.poll()) {
                     switch (event.type) {
                         case Event::Type::joined:
-                            joined++;
-                            std::printf("port %d joined (%d of %d)\n", event.port, joined, players);
+                            joined += std::popcount(event.ports);
+                            std::printf("ports %x joined (%d of %d)\n", event.ports, joined, players);
                             if (joined == players && session.start(own_view)) {
                                 playing = true;
                                 std::printf("started%s\n", own_view ? " (own view)" : "");
@@ -208,7 +213,7 @@ int main(int argc, char** argv) {
                             break;
                         case Event::Type::welcomed:
                             players = event.players;
-                            std::printf("welcomed: port %d of %d\n", event.port, event.players);
+                            std::printf("welcomed: ports %x of %d\n", event.ports, event.players);
                             if (hostile == "early") {
                                 session.send(inputs_for(event.port, 0));
                                 std::printf("sent Inputs before the start\n");
@@ -218,8 +223,12 @@ int main(int argc, char** argv) {
                             playing = true;
                             std::printf("started%s\n", event.own_view ? " (own view)" : "");
                             if (hostile == "far") {
-                                session.send(inputs_for(session.port(), 100000));
+                                session.send(inputs_for(std::countr_zero(session.ports()), 100000));
                                 std::printf("sent Inputs far ahead\n");
+                            }
+                            if (hostile == "port") {
+                                session.send(inputs_for(0, 0));
+                                std::printf("sent Inputs for another's port\n");
                             }
                             if (hostile == "hash") {
                                 session.send(Hash{ 30, 1 });
@@ -262,11 +271,15 @@ int main(int argc, char** argv) {
                     // that far ahead of this one's.
                     session.set_horizon(sent + 150);
                     next_tick += std::chrono::microseconds(33333);
-                    session.send(inputs_for(session.port(), sent));
+                    for (int port = 0; port < max_players; port++) {
+                        if ((session.ports() & (1u << port)) != 0) {
+                            session.send(inputs_for(port, sent));
+                        }
+                    }
                     sent++;
                 }
 
-                bool complete = playing && sent == reads && (int)received.size() == players - 1;
+                bool complete = playing && sent == reads && (int)received.size() == players - std::popcount(session.ports());
                 for (const auto& [port, r] : received) {
                     complete = complete && r.next >= reads;
                 }

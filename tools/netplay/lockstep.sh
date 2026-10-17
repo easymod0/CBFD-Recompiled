@@ -15,11 +15,16 @@
 #   mouse      a 3-player Deathmatch where everyone moves their mouse, gyro and scroll wheel and aims
 #              (make_match.py --mouse), alone and as a match of three at the automatic input delay, each
 #              copy with the others' pads and movement scrambled: all three must match the solo replay
+#   couch      the same 3-player Deathmatch with two players on one copy (--local-players 2): the host
+#              with ports 1 and 2 and a joiner with port 3, then the host with port 1 and a joiner with 2
+#              and 3; each copy's file has the other copy's ports scrambled. All must match the solo replay
 #   jittery    the same with input delay 0 and random sleeps (--jitter 500) on the joiner, so the two
 #              are out of step and wait for each other all the time
 #   desync     the host changes a byte of its memory at read 300: both must stop for a desync
-# It exits 0 if all is as it should be, 1 if not. The logs are kept in --out (a temporary folder
-# otherwise). As in check.sh, a run is judged by what it prints and then stopped. It uses UDP ports 27310 to 27313 on 127.0.0.1.
+# It exits 0 if all is as it should be, 1 if not. The logs are kept in --out; without it they're in a
+# temporary folder, deleted if all passed. The data folders it makes for the copies (about 1 GB in all) are
+# always deleted. As in check.sh, a run is judged by what it prints and then stopped. It uses UDP ports
+# 27310 to 27315 on 127.0.0.1.
 set -u
 
 cd "$(dirname "$0")/../.."
@@ -37,7 +42,7 @@ while [ $# -gt 0 ]; do
         --seed) SEED=$2; shift 2 ;;
         --timeout) TIMEOUT=$2; shift 2 ;;
         --out) OUT=$2; shift 2 ;;
-        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -46,9 +51,20 @@ done
 # Absolute: the game changes its working folder.
 EXE=$(cd "$(dirname "$EXE")" && pwd)/$(basename "$EXE")
 ROM=$(cd "$(dirname "$ROM")" && pwd)/$(basename "$ROM")
-[ -n "$OUT" ] || OUT=$(mktemp -d "${TMPDIR:-/tmp}/netplay-lockstep.XXXXXX")
+KEEP=1
+[ -n "$OUT" ] || { OUT=$(mktemp -d "${TMPDIR:-/tmp}/netplay-lockstep.XXXXXX"); KEEP=0; }
 mkdir -p "$OUT"
 OUT=$(cd "$OUT" && pwd)
+# However the check ends (Ctrl-C too): the copies still running are stopped, and the data folders this
+# made deleted (only those: one already in an --out folder is left alone).
+made=
+pids=
+cleanup() {
+    for pid in $pids; do kill -9 "$pid" 2>/dev/null; done
+    for name in $made; do rm -rf "$OUT/data-$name"; done
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 # scramble <recording> <other> <ports> <prefix>: <prefix><n>.pads for each port n (from 1), the recording
 # with every other port's pads and movement taken from <other> (the same length, from another seed).
@@ -75,21 +91,48 @@ for own in range(ports):
 PY
 }
 
+# scramble_own <recording> <other> <ports> <out> <own>: <out>, the recording with every port but those in
+# <own> (port numbers from 1, e.g. 12) scrambled from <other>, for a copy playing several ports.
+scramble_own() {
+    python3 - "$@" <<'PY'
+import sys
+real_path, other_path, ports, out, own = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
+real = open(real_path, "rb").read()
+other = open(other_path, "rb").read()
+assert len(real) == len(other)
+header, read_size, pad_size, motion_size = 32, 65, 5, 11   # version 3 (harness.cpp)
+scrambled = bytearray(real)
+for port in range(ports):
+    if str(port + 1) in own:
+        continue
+    for start in range(header, len(real), read_size):
+        pad = start + 1 + port * pad_size
+        motion = start + 1 + 4 * pad_size + port * motion_size
+        scrambled[pad:pad + pad_size] = other[pad:pad + pad_size]
+        scrambled[motion:motion + motion_size] = other[motion:motion + motion_size]
+assert scrambled != real
+open(out, "wb").write(scrambled)
+PY
+}
+
 python3 tools/netplay/make_inputs.py "$OUT/inputs.pads" --reads "$READS" --seed "$SEED" --ports 2 --mouse || exit 2
 python3 tools/netplay/make_inputs.py "$OUT/other.pads" --reads "$READS" --seed "$((SEED + 1))" --ports 2 --mouse > /dev/null || exit 2
 scramble "$OUT/inputs.pads" "$OUT/other.pads" 2 "$OUT/" || exit 2
 python3 tools/netplay/make_match.py "$OUT/mouse.pads" --mode deathmatch --players 3 --mouse --seed "$SEED" || exit 2
 python3 tools/netplay/make_match.py "$OUT/mouse-other.pads" --mode deathmatch --players 3 --mouse --seed "$((SEED + 1))" > /dev/null || exit 2
 scramble "$OUT/mouse.pads" "$OUT/mouse-other.pads" 3 "$OUT/mouse-" || exit 2
+for own in 12 3 23; do
+    scramble_own "$OUT/mouse.pads" "$OUT/mouse-other.pads" 3 "$OUT/couch-$own.pads" $own || exit 2
+done
 MOUSE_READS=$(( ($(wc -c < "$OUT/mouse.pads") - 32) / 65 ))
 
 # start <name> [options...]: one copy in the background, with its own data folder, its hash log in
 # $OUT/<name>.log and its output in $OUT/<name>.out; its PID is added to $pids.
 # The recording is $OUT/inputs.pads, or $OUT/$pads if that's set.
-pids=
 start() {
     name=$1; shift
     rm -f "$OUT/$name.log" "$OUT/$name.out"
+    [ -e "$OUT/data-$name" ] || made="$made $name"
     "$EXE" --headless --rom "$ROM" --data "$OUT/data-$name" --fast --replay "$OUT/${pads:-inputs.pads}" \
         --hash-log "$OUT/$name.log" "$@" > "$OUT/$name.out" 2>&1 &
     pids="$pids $!"
@@ -207,6 +250,30 @@ else
     failed=1
 fi
 
+echo "couch"
+pads=couch-12.pads start couch-host2 --netplay-host 27314 --netplay-address 127.0.0.1 --players 3 --local-players 2
+pads=couch-3.pads start couch-join1 --netplay-join "$(code_of couch-host2)"
+if finish "was the last: quitting" couch-host2 couch-join1; then
+    grep -q "this is ports 1 and 2" "$OUT/couch-host2.out" || { echo "  couch-host2 isn't on ports 1 and 2"; failed=1; }
+    # The automatic delay counts the joining machine's round trip (one, on loopback: 0), not its players.
+    grep -q "this is ports 1 and 2, input delay 0" "$OUT/couch-host2.out" || { echo "  couch-host2's automatic input delay isn't 0"; failed=1; }
+    for name in couch-host2 couch-join1; do
+        same $name mouse-solo "$MOUSE_READS" || failed=1
+    done
+else
+    failed=1
+fi
+pads=mouse-1.pads start couch-host1 --netplay-host 27315 --netplay-address 127.0.0.1 --players 3 --input-delay 2
+pads=couch-23.pads start couch-join2 --netplay-join "$(code_of couch-host1)" --local-players 2
+if finish "was the last: quitting" couch-host1 couch-join2; then
+    grep -q "this is ports 2 and 3" "$OUT/couch-join2.out" || { echo "  couch-join2 isn't on ports 2 and 3"; failed=1; }
+    for name in couch-host1 couch-join2; do
+        same $name mouse-solo "$MOUSE_READS" || failed=1
+    done
+else
+    failed=1
+fi
+
 echo "desync"
 start desync-host --netplay-host 27312 --netplay-address 127.0.0.1 --players 2 --netplay-desync-at 300
 start desync-join --netplay-join "$(code_of desync-host)"
@@ -225,9 +292,10 @@ else
     failed=1
 fi
 
-echo "logs: $OUT"
 if [ $failed -ne 0 ]; then
+    echo "logs: $OUT"
     echo "FAILED"
     exit 1
 fi
+if [ $KEEP -eq 1 ]; then echo "logs: $OUT"; else rm -rf "$OUT"; fi
 echo "passed: the match gave each copy the same game as the replay alone, and a desync was caught"

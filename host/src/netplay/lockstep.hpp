@@ -7,13 +7,18 @@
 // Part of the harness (harness.cpp), which gives it the deterministic timeline, the settings profile
 // and an empty save on each peer. For now it's started from the command line (the menu is #9):
 //
-//   --netplay-host <port>        hosts a match on UDP <port> (port 1 of the game is the host's)
+//   --netplay-host <port>        hosts a match on UDP <port> (the game's first ports are the host's players')
 //   --players <n>                ...of <n> players, 2 to 4 (2 by default)
 //   --split-screen               (hosting) let each player choose what they see; by default every player
 //                                sees only their own view of the split screen (the match's rule, for all)
 //   --netplay-address <address>  (hosting) this computer's address as the others reach it: the join code
 //                                is made from it and printed (it holds the match's random key)
 //   --netplay-join <code>        joins the host by its join code
+//   --local-players <n>          (hosting or joining) players on this machine, 1 to 3 (1 by default): each
+//                                has a port of their own (the lowest free ones), and plays with this
+//                                machine's controller of the same number (the first has the keyboard, mouse
+//                                and gyro). "My view only" (view.cpp) shows two players' views across
+//                                the top and bottom halves of the window; three see the whole split screen
 //   --input-delay <reads|auto>   (hosting) how many reads ahead each peer's own pads are sent, 0 to 8, or
 //                                auto (the default): chosen from the round trips to the players as the
 //                                match starts. The host tells everyone (Start)
@@ -21,7 +26,7 @@
 //                                hash comparison must catch
 //
 // The game waits at its start for every player to join. With --replay, each peer's own pads come from
-// its port in the recording instead of its controller: peers replaying the same recording give the
+// its ports in the recording instead of its controllers: peers replaying the same recording give the
 // game exactly what a replay alone would (tools/netplay/lockstep.sh tests that).
 
 #pragma once
@@ -41,9 +46,9 @@ namespace conker::lockstep {
     // Hosting or joining.
     bool active();
     // The same as the options, from the menu (frontend's netplay.cpp).
-    // `input_delay`: reads, or -1 for auto.
-    void set_host(int port, int players, bool own_view = true, int input_delay = -1);
-    void set_join(const std::string& where);
+    // `input_delay`: reads, or -1 for auto; `local`: the players on this machine (fewer than `players`).
+    void set_host(int port, int players, bool own_view = true, int input_delay = -1, int local = 1);
+    void set_join(const std::string& where, int local = 1);
     // Checks the options, before the game starts (false: a message was printed).
     bool prepare();
     // Hosting: the join code for this match at `address` (this computer's, as the others reach it; the
@@ -70,8 +75,13 @@ namespace conker::lockstep {
     // host's choice, sent with Start), once connected. Not enforceable: every machine draws every view,
     // so a modified build could show them; it keeps honest players on the same footing.
     bool own_view_for_everyone();
-    // This peer's port and the match's players, once connected.
+    // This peer's first port, all of them (bit n: port n), how many, and the match's players, once
+    // connected.
     int port();
+    uint8_t ports();
+    int local_players();
+    // The port of this machine's player `local` (0 is the first), once connected; -1 if there's none.
+    int port_of_local(int local);
     int players();
     // The match's input delay, once connected.
     int input_delay();
@@ -81,10 +91,11 @@ namespace conker::lockstep {
         netplay::Pad pad;
         netplay::Motion motion;
     };
-    // This peer's own input for read `for_read`: `live` holds the pads the controllers give now, or is null
-    // for the reads before the first (sent at the start, as nobody has played yet).
-    using InputSource = std::function<Input(uint64_t for_read, const ultramodern::input::Pad* live)>;
-    // At controller read `read`, on the game thread: sends this peer's input for read + delay, waits for
+    // The input of this machine's player `local` (0 is the first) for read `for_read`: `live` holds the pads
+    // the controllers give now, or is null for the reads before the first (sent at the start, as nobody has
+    // played yet).
+    using InputSource = std::function<Input(uint64_t for_read, const ultramodern::input::Pad* live, int local)>;
+    // At controller read `read`, on the game thread: sends this peer's players' input for read + delay, waits for
     // every player's for `read` and puts them in `pads` and `motions` (4 each), and compares the memory hash
     // (`hash` is called for it every so often). False if the match has ended (a message was printed): the
     // game can't go on.

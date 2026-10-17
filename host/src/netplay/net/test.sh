@@ -1,9 +1,10 @@
 #!/bin/sh
 # Tests the netplay transport from a build of this folder (CMakeLists.txt): the packets' and join codes'
 # tests, then matches between copies of netplay_probe over loopback (2 players; 3 with 20% of packets
-# lost, which also tests the host passing inputs on), joiners with another match's key, another ROM or
+# lost, which also tests the host passing inputs on; 3 and 4 with two players on the host or on a joiner,
+# also lossy; a joiner with more players than ports left, which must be refused), joiners with another match's key, another ROM or
 # other mods, which must be refused, joiners sending Inputs early or far ahead or a Hash twice, which
-# must be dropped, one that never says Hello, which must be dropped too, and one sending a message bigger
+# must be dropped, as must one sending Inputs for a port that isn't its own, one that never says Hello, which must be dropped too, and one sending a message bigger
 # than any packet, which the library must close.
 #   sh host/src/netplay/net/test.sh <build folder>
 set -u
@@ -55,6 +56,40 @@ match two 27200 2 --reads 150 --own-view 1
 if grep -q "started (own view)" two.join1.txt; then echo "own view: passed"; else echo "own view: FAILED"; failed=1; fi
 match three-lossy 27201 3 --reads 150 --loss 20
 
+# couch <name> <port> <players> <host's players here> <each joiner's...>: a lossy match with more than one
+# player on some machines (joiners started half a second apart); all must succeed.
+couch() {
+    name=$1; port=$2; players=$3; host_local=$4; shift 4
+    "$probe" host "$port" --players "$players" --local "$host_local" --reads 150 --loss 20 > "$name.host.txt" 2>&1 &
+    pids=$!
+    to=$(code_of "$name.host.txt")
+    i=1
+    for local in "$@"; do
+        "$probe" join "$to" --local "$local" --reads 150 --loss 20 > "$name.join$i.txt" 2>&1 &
+        pids="$pids $!"
+        sleep 0.5
+        i=$((i + 1))
+    done
+    ok=1
+    for pid in $pids; do
+        wait "$pid" || ok=0
+    done
+    for f in "$name".*.txt; do
+        echo "-- $f"
+        grep -v '^\[netplay\]' "$f"
+    done
+    if [ $ok -eq 1 ]; then echo "$name: passed"; else echo "$name: FAILED"; failed=1; fi
+}
+couch couch-host 27210 3 2 1
+grep -q "welcomed: ports 4 of 3" couch-host.join1.txt || { echo "couch-host: the joiner isn't on port 2"; failed=1; }
+couch couch-join 27211 4 1 2 1
+# Lowest free ports first, in the order the handshakes finish (with lost packets, either joiner may be first).
+if ! { grep -q "welcomed: ports 6 of 4" couch-join.join1.txt && grep -q "welcomed: ports 8 of 4" couch-join.join2.txt; } &&
+   ! { grep -q "welcomed: ports c of 4" couch-join.join1.txt && grep -q "welcomed: ports 2 of 4" couch-join.join2.txt; }; then
+    echo "couch-join: the joiners' ports aren't the lowest free ones"
+    failed=1
+fi
+
 # Another match's key (a code for this address with another key), another ROM, or other mods: refused,
 # with the reason (a wrong key's alone, as nothing else is checked).
 refused() {
@@ -76,6 +111,8 @@ refused() {
 refused refused-key 27207 --key "not this match's join code"
 refused refused-rom 27202 --rom "a different ROM"
 refused refused-mods 27204 --mods "mods on"
+# More players on a joiner than the match has ports left (a match of 2: the host and one).
+refused refused-full 27212 --local "the match is full"
 
 # A hostile joiner: Inputs before the start (it joins a lobby of 3 alone, so the match hasn't started),
 # far beyond what the game could have reached, or the same Hash twice (in a started match of 2). The host
@@ -98,6 +135,7 @@ hostile() {
 hostile hostile-early 27205 3 early
 hostile hostile-far 27206 2 far
 hostile hostile-hash 27208 2 hash
+hostile hostile-port 27213 2 port
 
 # A joiner that never says Hello: dropped after the handshake time (3 s). One that sends a message bigger
 # than any packet: closed by the library at once.

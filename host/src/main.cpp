@@ -12,7 +12,9 @@
 //   --headless   null renderer, no window, input or sound
 //   --window WxH open the window at this size, e.g. 2520x1080 to try a 21:9 screen
 //                (the window mode, windowed or fullscreen, is still the setting's)
-//   --my-view-only  in a netplay match, show only this player's part of the split screen
+//   --my-view-only  in a netplay match, show only this machine's players' parts of the split screen
+//   --my-view-ports <players>  replaying a recording with --my-view-only: whose views are shown, e.g. 12
+//                (players 1 and 2), as on a machine with those players (1 by default)
 //   --data DIR   keep the game's data (the stored ROM, saves, settings) in DIR instead,
 //                created if need be: e.g. to run two copies at once, as netplay's tests do
 
@@ -461,6 +463,13 @@ int main(int argc, char** argv) {
 #if defined(CONKER_RT64) && defined(CONKER_NETPLAY)
         else if (std::strcmp(argv[i], "--my-view-only") == 0) {
             conker::netplay_view::set_mine_only(true);
+        }
+        else if (std::strcmp(argv[i], "--my-view-ports") == 0 && i + 1 < argc) {
+            uint8_t ports = 0;
+            for (const char* c = argv[++i]; *c != '\0'; c++) {
+                if (*c >= '1' && *c <= '4') ports |= (uint8_t)(1u << (*c - '1'));
+            }
+            conker::netplay_view::set_replay_ports(ports);
         }
 #endif
 #if defined(CONKER_RT64)

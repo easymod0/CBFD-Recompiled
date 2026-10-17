@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <cmath>
 #include <chrono>
 #include <climits>
@@ -53,6 +54,7 @@ namespace {
     std::string host_address;       // hosting from the command line: the address the others reach, for the code
     std::string join_where;
     int wanted_players = 2;
+    int local_option = 1;           // the players on this machine
     bool host_own_view = true;      // hosting: the rule this peer will start the match with
     bool match_own_view = false;    // the rule of the match under way
     // --input-delay's, or the menu's: the reads ahead, or auto (the host chooses from the round trips).
@@ -65,7 +67,7 @@ namespace {
 
     bool library_started = false;
     conker::netplay::Session* session = nullptr;
-    int own_port = -1;
+    uint8_t own_ports = 0;          // bit n: port n
     int match_players = 0;
     bool initial_sent = false;
     bool ended = false;         // the match is over for this peer: nothing more is sent
@@ -101,6 +103,18 @@ namespace {
     double now() {
         using namespace std::chrono;
         return duration<double>(steady_clock::now().time_since_epoch()).count();
+    }
+
+    // "port 2", or "ports 2 and 3", for the log.
+    std::string ports_text(uint8_t ports) {
+        std::string numbers;
+        const int count = std::popcount(ports);
+        for (int port = 0, n = 0; port < conker::netplay::max_players; port++) {
+            if ((ports & (1u << port)) == 0) continue;
+            numbers += (n == 0 ? "" : n == count - 1 ? " and " : ", ") + std::to_string(port + 1);
+            n++;
+        }
+        return (count == 1 ? "port " : "ports ") + numbers;
     }
 
     void end_match(Reason reason, const char* why) {
@@ -157,8 +171,10 @@ namespace {
             case Event::Type::started:
                 break;
             case Event::Type::left:
-                std::printf("[netplay] port %d left: %s\n", event.port + 1, conker::netplay::describe(event.reason));
-                gone[event.port] = true;
+                std::printf("[netplay] %s left: %s\n", ports_text(event.ports).c_str(), conker::netplay::describe(event.reason));
+                for (int port = 0; port < conker::netplay::max_players; port++) {
+                    if ((event.ports & (1u << port)) != 0) gone[port] = true;
+                }
                 gone_silently = gone_silently || event.reason == Reason::timeout;
                 if (event.reason == Reason::desync) {
                     end_match(Reason::desync, "a player's game went a different way (a desync)");
@@ -182,7 +198,7 @@ namespace {
             case Event::Type::packet:
                 if (const Inputs* inputs = std::get_if<Inputs>(&event.packet)) {
                     std::vector<Input>& got = received[inputs->port];
-                    if (inputs->port == own_port || inputs->port >= match_players || inputs->first_read != got.size() ||
+                    if ((own_ports & (1u << inputs->port)) != 0 || inputs->port >= match_players || inputs->first_read != got.size() ||
                         (uint64_t)inputs->first_read + inputs->count > horizon()) {
                         end_match(Reason::protocol, "a player's inputs came out of order");
                         return;
@@ -206,23 +222,33 @@ namespace {
         }
     }
 
-    void send_own(uint64_t read, Input input) {
+    // This machine's player `local`'s port: the `local`th of its own (-1 if there's none).
+    int nth_own_port(int local) {
+        for (int port = 0; port < conker::netplay::max_players; port++) {
+            if ((own_ports & (1u << port)) != 0 && local-- == 0) {
+                return port;
+            }
+        }
+        return -1;
+    }
+
+    void send_own(uint64_t read, int port, Input input) {
         Pad& pad = input.pad;
         pad.buttons &= (uint16_t)~conker::netplay::reserved_buttons;
         pad.err_no = 0;     // a player's port always has a controller
         // CONKER_NETPLAY_LOG_PADS: each change of this peer's buttons, for debugging.
         static const bool log_pads = std::getenv("CONKER_NETPLAY_LOG_PADS") != nullptr;
-        if (log_pads && (received[own_port].empty() || received[own_port].back().pad.buttons != pad.buttons)) {
-            std::printf("[netplay] read %llu: port %d's buttons %04x\n", (unsigned long long)read, own_port + 1, pad.buttons);
+        if (log_pads && (received[port].empty() || received[port].back().pad.buttons != pad.buttons)) {
+            std::printf("[netplay] read %llu: port %d's buttons %04x\n", (unsigned long long)read, port + 1, pad.buttons);
         }
         Inputs inputs;
-        inputs.port = (uint8_t)own_port;
+        inputs.port = (uint8_t)port;
         inputs.first_read = (uint32_t)read;
         inputs.count = 1;
         inputs.pads[0] = pad;
         inputs.motions[0] = input.motion;
         session->send(inputs);
-        received[own_port].push_back(input);
+        received[port].push_back(input);
     }
 
     // The input delay auto chooses, from the round trips to the joiners (ms): enough reads that a pad sent
@@ -288,6 +314,11 @@ bool conker::lockstep::parse_option(int argc, char** argv, int& i) {
         wanted_players = (int)n;
         return true;
     }
+    if (std::strcmp(option, "--local-players") == 0) {
+        number(1, netplay::max_players - 1, n);
+        local_option = (int)n;
+        return true;
+    }
     if (std::strcmp(option, "--split-screen") == 0) {
         host_own_view = false;
         return true;
@@ -332,18 +363,20 @@ bool conker::lockstep::active() {
     return host_port > 0 || !join_where.empty();
 }
 
-void conker::lockstep::set_host(int port, int players, bool own_view, int input_delay) {
+void conker::lockstep::set_host(int port, int players, bool own_view, int input_delay, int local) {
     host_address.clear();
     host_port = port;
     wanted_players = players;
+    local_option = local;
     host_own_view = own_view;
     delay_option = input_delay < 0 ? auto_delay : std::min(input_delay, netplay::max_delay);
     join_where.clear();
 }
 
-void conker::lockstep::set_join(const std::string& where) {
+void conker::lockstep::set_join(const std::string& where, int local) {
     host_port = -1;
     join_where = where;
+    local_option = local;
 }
 
 bool conker::lockstep::prepare() {
@@ -352,6 +385,10 @@ bool conker::lockstep::prepare() {
     }
     if (host_port > 0 && !join_where.empty()) {
         std::fprintf(stderr, "[netplay] --netplay-host and --netplay-join can't be used together\n");
+        return false;
+    }
+    if (host_port > 0 && local_option >= wanted_players) {
+        std::fprintf(stderr, "[netplay] --local-players %d needs a match of more players than that (--players)\n", local_option);
         return false;
     }
     // The others join by the code, which holds the match's key: without the address there's none to give.
@@ -404,15 +441,17 @@ bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
     cancel();
     session = new netplay::Session();
     const bool hosting = host_port > 0;
-    if (hosting ? !session->host((uint16_t)host_port, wanted_players, me, error) : !session->join(join_where, me, error)) {
+    netplay::Hello mine = me;
+    mine.players = (uint8_t)local_option;
+    if (hosting ? !session->host((uint16_t)host_port, wanted_players, mine, error, local_option) : !session->join(join_where, mine, error)) {
         delete session;
         session = nullptr;
         return false;
     }
     sent = me;
-    own_port = hosting ? 0 : -1;
+    own_ports = hosting ? session->ports() : 0;
     match_players = hosting ? wanted_players : 0;
-    joined = 1;
+    joined = hosting ? local_option : 0;
     connecting_since = now();
     match_started = false;
     ended = false;
@@ -427,7 +466,8 @@ bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
     own_hashes.clear();
     their_hashes.clear();
     if (hosting) {
-        std::printf("[netplay] hosting a match of %d on UDP port %d: waiting for the players\n", wanted_players, host_port);
+        std::printf("[netplay] hosting a match of %d on UDP port %d, %d of them here: waiting for the players\n",
+            wanted_players, host_port, local_option);
         if (!host_address.empty()) {
             const std::string code = join_code(host_address);
             if (code.empty()) {
@@ -455,10 +495,10 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
     for (const Event& event : session->poll()) {
         switch (event.type) {
             case Event::Type::joined:
-                joined++;
-                std::printf("[netplay] port %d joined (%d of %d)\n", event.port + 1, joined, match_players);
+                joined += std::popcount(event.ports);
+                std::printf("[netplay] %s joined (%d of %d)\n", ports_text(event.ports).c_str(), joined, match_players);
                 if (joined == match_players) {
-                    const int chosen = delay_option == auto_delay ? delay_for(session->round_trips_ms(), (size_t)(match_players - 1)) : delay_option;
+                    const int chosen = delay_option == auto_delay ? delay_for(session->round_trips_ms(), (size_t)session->joiners()) : delay_option;
                     if (session->start(host_own_view, chosen)) {
                         match_started = true;
                         match_own_view = host_own_view;
@@ -467,16 +507,20 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
                 }
                 break;
             case Event::Type::left:
-                // Before the start, a joiner leaving frees its port, for the next to start afresh.
-                joined--;
-                received[event.port].clear();
-                gone[event.port] = false;
-                std::printf("[netplay] port %d left: %s\n", event.port + 1, netplay::describe(event.reason));
+                // Before the start, a joiner leaving frees its ports, for the next to start afresh.
+                joined -= std::popcount(event.ports);
+                for (int port = 0; port < netplay::max_players; port++) {
+                    if ((event.ports & (1u << port)) != 0) {
+                        received[port].clear();
+                        gone[port] = false;
+                    }
+                }
+                std::printf("[netplay] %s left: %s\n", ports_text(event.ports).c_str(), netplay::describe(event.reason));
                 break;
             case Event::Type::welcomed:
-                own_port = event.port;
+                own_ports = event.ports;
                 match_players = event.players;
-                std::printf("[netplay] in, on port %d of %d: waiting for the others\n", own_port + 1, match_players);
+                std::printf("[netplay] in, on %s of %d: waiting for the others\n", ports_text(own_ports).c_str(), match_players);
                 break;
             case Event::Type::started:
                 match_started = true;
@@ -486,6 +530,10 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
             case Event::Type::ended:
                 std::printf("[netplay] couldn't join: %s (%s)\n", netplay::describe(event.reason), event.detail.c_str());
                 status = std::string("Couldn't join: ") + netplay::describe(event.reason) + ".";
+                // Full for this machine's players, not for one: fewer may fit.
+                if (event.reason == Reason::full && local_option > 1) {
+                    status += " Fewer players on this computer may fit.";
+                }
                 left = true;
                 cancel();
                 return Progress::failed;
@@ -495,8 +543,8 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
         }
     }
     if (match_started) {
-        std::printf("[netplay] the match starts: %d players, this is port %d, input delay %d reads%s\n", match_players,
-            own_port + 1, delay, match_own_view ? ", everyone sees only their own view" : "");
+        std::printf("[netplay] the match starts: %d players, this is %s, input delay %d reads%s\n", match_players,
+            ports_text(own_ports).c_str(), delay, match_own_view ? ", everyone sees only their own view" : "");
         status = "The match starts.";
         return Progress::started;
     }
@@ -509,12 +557,14 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
     if (hosting) {
         status = "Waiting for players: " + std::to_string(joined) + " of " + std::to_string(match_players) + " in.";
     }
-    else if (own_port < 0) {
+    else if (own_ports == 0) {
         status = "Connecting...";
     }
     else {
-        status = "In, as player " + std::to_string(own_port + 1) + " of " + std::to_string(match_players) +
-            ": waiting for the others.";
+        // "player 2", "players 2 and 3".
+        std::string as = ports_text(own_ports);
+        as.replace(0, 4, "player");
+        status = "In, as " + as + " of " + std::to_string(match_players) + ": waiting for the others.";
     }
     return Progress::waiting;
 }
@@ -559,7 +609,19 @@ bool conker::lockstep::connect(const netplay::Hello& me) {
 }
 
 int conker::lockstep::port() {
-    return own_port;
+    return own_ports == 0 ? -1 : std::countr_zero(own_ports);
+}
+
+uint8_t conker::lockstep::ports() {
+    return own_ports;
+}
+
+int conker::lockstep::local_players() {
+    return std::popcount(own_ports);
+}
+
+int conker::lockstep::port_of_local(int local) {
+    return nth_own_port(local);
 }
 
 int conker::lockstep::players() {
@@ -596,12 +658,16 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, net
             });
         }
         for (int r = 0; r < delay; r++) {
-            send_own((uint64_t)r, source((uint64_t)r, nullptr));
+            for (int local = 0; local < std::popcount(own_ports); local++) {
+                send_own((uint64_t)r, nth_own_port(local), source((uint64_t)r, nullptr, local));
+            }
         }
         initial_sent = true;
     }
     if (read + delay < UINT32_MAX - netplay::input_window) {
-        send_own(read + delay, source(read + delay, pads));
+        for (int local = 0; local < std::popcount(own_ports); local++) {
+            send_own(read + delay, nth_own_port(local), source(read + delay, pads, local));
+        }
     }
 
     if (read == desync_at) {

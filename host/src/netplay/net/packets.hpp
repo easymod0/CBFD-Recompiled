@@ -2,7 +2,7 @@
 // what arrives from the network. Each kind of packet has a fixed size and a version, and decode()
 // checks every field: anything else is refused whole.
 //
-// Peers send inputs only: each its own port's pads (the host passes them on to the others), the hashes
+// Peers send inputs only: each its own ports' pads (one port per player on that machine) (the host passes them on to the others), the hashes
 // of the game's memory for the desync check, and the handshake. Never files, mods or save states.
 //
 // The layout, little-endian: "CN", u16 version, u8 kind, then the kind's fields (see packets.cpp).
@@ -18,7 +18,7 @@
 
 namespace conker::netplay {
     // Changes whenever any packet's layout or meaning does: peers with another one are refused.
-    constexpr uint16_t protocol_version = 7;
+    constexpr uint16_t protocol_version = 8;
     // The game's controller ports.
     constexpr int max_players = 4;
     // The most reads an Inputs packet carries: a peer catching up can send several at once. (Inputs are
@@ -94,11 +94,13 @@ namespace conker::netplay {
         uint64_t profile = 0;   // hash of the netplay settings profile
         uint64_t mods = 0;      // hash of the mods on and their settings, texture packs aside (0: none)
         uint64_t key = 0;       // the match's key, from the join code (the host's own: its random key)
+        uint8_t players = 1;    // the players on the joiner's machine, each with a port of their own (1 to 3)
         bool operator==(const Hello&) const = default;
     };
-    // Host to joiner: accepted, on this port, in a match of this many players.
+    // Host to joiner: accepted, on these ports (bit n: port n; one for each of its players, never the
+    // host's port 0), in a match of this many players.
     struct Welcome {
-        uint8_t port = 0;
+        uint8_t ports = 0;
         uint8_t players = 0;
         bool operator==(const Welcome&) const = default;
     };
