@@ -68,6 +68,8 @@ def main():
 def header(ports, own_view, pairs=""):
     """The recording's header: magic, version, ports, the ROM's and profile's hashes (0: not checked), flags,
     and the ports shown two to a window (port numbers from 1, e.g. "12")."""
+    if any(p not in "1234"[:ports] for p in pairs) or len(set(pairs)) != len(pairs) or len(pairs) % 2:
+        raise SystemExit(f"view pairs {pairs!r}: an even number of different ports from 1 to {ports}")
     pair_bits = sum(1 << (int(p) - 1) for p in pairs)
     return MAGIC + struct.pack("<IIQQII", VERSION, ports, 0, 0, OWN_VIEW if own_view else 0, pair_bits)
 

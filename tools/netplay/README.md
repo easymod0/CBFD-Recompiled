@@ -100,7 +100,8 @@ same headless or on another machine:
 - **At their defaults:** the Camera tab's others (Invert Turning, Turning Speed, Lock-On), Conker's Detail, Cutscene Aspect Ratio (Expand) and the sound volumes (100%).
 - **Widescreen:** the culls and sprites are widened for 16:9 whatever the window (a wider window can
   lose a little at its sides). While the match's rule is that everyone sees only their own view (below),
-  each split-screen camera's culls are also made as tall as "my view only" draws it, on every machine.
+  each split-screen camera's culls are also made as tall and wide as "my view only" draws it, on every
+  machine.
 - **Save states** (F5, F7) are off. **Mods:** none, in netplay matches, recordings and replays: a mod
   is native code the other players would have to trust, and a recording doesn't say which were on.
   Netplay won't host or join with one on, and the handshake still carries a hash of each mod's file
@@ -124,7 +125,8 @@ A recording (version 4) holds the ROM's XXH3-64 and the profile's hash: a replay
 another profile is refused before the game starts. `make_inputs.py` writes 0 for both, which isn't
 checked. It holds each player's mouse and gyro movement and Controls beside their pad at each read,
 whether the match's rule was that everyone sees only their own view (`--own-view`), and which ports'
-views were shown two to a window (`--view-pairs`), which change the split screen's culls. Version 3 recordings (16-bit Controls, no rule) replay as split screen;
+views were shown two to a window (`--view-pairs`), which change the split screen's culls. Version 3
+recordings (16-bit Controls, no rule) replay as split screen;
 version 2 recordings (before the mouse) replay with no movement and the default settings;
 version 1 recordings (before the profile) are replayed unchecked.
 
@@ -209,7 +211,8 @@ Players on this computer) puts n players on this machine, each with a port of th
 ones, the host's from port 1 (so `--players 3 --local-players 2` on the host gives it players 1 and 2,
 and the one who joins is player 3). Each plays with this machine's controller of the same number: the
 frontend numbers the controllers in the order they first press a button, and the first has the keyboard,
-mouse and gyro too. With two players on a machine, "my view only" (below) shows both of their views,
+mouse and gyro too. The machine's settings that go with each read (its Controls: responses, inverts,
+field of view, Swap Sticks) are the same for all its players. With two players on a machine, "my view only" (below) shows both of their views,
 one across the top half of the window and one across the bottom, like the game's own 2-player split;
 with three, the whole split screen is shown.
 
@@ -230,12 +233,13 @@ others' (the Netplay menu's Screens, or `--split-screen` to let each player choo
 screen or `--my-view-only`). The rule reaches every peer with Start. It can't be enforced against a
 modified build, which could still show every view: it keeps honest players on the same footing.
 A view drawn this way shows more of the world than the game culled it for: a 2-player half across the
-window, twice as tall; a quarter across half the window, about 1.4 times as wide. So while the rule is
-on, every machine makes every camera's culls as much taller or wider (`own_view_scale` in
+window, about 1.6 times as tall (a 232 by 108 view across 292 by 216); a quarter across half the
+window, about 1.4 times as wide. So while the rule is on, every machine makes every camera's culls as much taller or wider (`own_view_scale` in
 `host/src/widescreen.cpp`). It changes the game's memory, so it goes by what every machine has: the
 match's rule, and the ports shown two to a window (each machine with two players'), which the host
 sends with Start. Never by a player's own choice: a player who chooses "my view only" in a split-screen
-match can still see the world cut off at the edges of their view.
+match can still see the world cut off at the edges of their view, as can a replay shown with
+`--my-view-ports` whose recording doesn't have those view pairs.
 
 With `--replay`, a peer's own pads come from its port in the recording instead: `lockstep.sh` plays two
 copies against each other on this machine (`--data` gives each its own folder) and checks that each

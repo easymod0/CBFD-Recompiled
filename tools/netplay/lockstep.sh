@@ -46,7 +46,7 @@ while [ $# -gt 0 ]; do
         --seed) SEED=$2; shift 2 ;;
         --timeout) TIMEOUT=$2; shift 2 ;;
         --out) OUT=$2; shift 2 ;;
-        -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -268,9 +268,11 @@ else
 fi
 
 echo "couch"
+# One at a time: finish counts a copy that quits after its last read, before the other's, as quitting early.
 pads=couch-solo12.pads start couch-solo12
+finish "was the last: quitting" couch-solo12 || exit 1
 pads=couch-solo23.pads start couch-solo23
-finish "was the last: quitting" couch-solo12 couch-solo23 || exit 1
+finish "was the last: quitting" couch-solo23 || exit 1
 pads=couch-12.pads start couch-host2 --netplay-host 27314 --netplay-address 127.0.0.1 --players 3 --local-players 2
 pads=couch-3.pads start couch-join1 --netplay-join "$(code_of couch-host2)"
 if finish "was the last: quitting" couch-host2 couch-join1; then

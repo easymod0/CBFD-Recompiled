@@ -25,11 +25,11 @@
 //                       without it). The keys' save states (F5, F7) don't work in that run
 //   --jitter <us>       sleeps at random, up to <us> microseconds, at the game's OS calls and in the
 //                       graphics thread: a test that the host's speed doesn't change the game
-//   --view-pairs <ports>  ...with these ports' views shown two to a window (e.g. 12: ports 1 and 2, as a
-//                       machine with two players), recorded too (not with --replay)
 //   --own-view          records or hashes as a match whose rule is that every player sees only their own
 //                       view (its culls, netplay/view.cpp), recorded in the recording; a replay goes by its
 //                       recording's rule instead (not with --replay)
+//   --view-pairs <ports>  ...with these ports' views shown two to a window (e.g. 12: ports 1 and 2, as a
+//                       machine with two players), recorded too (not with --replay; within --ports)
 //   --netplay-host, --netplay-join, ...  a netplay match in lockstep (lockstep.hpp)
 //
 // Controller reads are counted from the first, so read <n> of one run is read <n> of another. The pads
@@ -234,9 +234,9 @@ namespace {
             if (recorded_version == version) {
                 replay_flags = get_u32(replay.data() + 32);
                 const uint32_t pairs = get_u32(replay.data() + 36);
+                const uint32_t pair_ports = std::min<uint32_t>(get_u32(replay.data() + 12), max_pads);
                 // Its view pairs: ports it has, an even number of them.
-                if ((replay_flags & ~own_view_flag) != 0 || pairs > 0x0F || (pairs >> get_u32(replay.data() + 12)) != 0 ||
-                    std::popcount(pairs) % 2 != 0) {
+                if ((replay_flags & ~own_view_flag) != 0 || (pairs >> pair_ports) != 0 || std::popcount(pairs) % 2 != 0) {
                     std::fprintf(stderr, "[harness] %s has flags or view pairs this build doesn't know\n", replay_path.c_str());
                     return false;
                 }
@@ -711,6 +711,10 @@ bool conker::harness::prepare() {
     }
     if (!dump_at.empty() && hash_log_path.empty()) {
         std::fprintf(stderr, "[harness] --dump-at needs --hash-log (the dump is named after it)\n");
+        return false;
+    }
+    if ((view_pairs_option >> ports) != 0 && !conker::lockstep::active()) {
+        std::fprintf(stderr, "[harness] --view-pairs has a port past --ports (%d)\n", ports);
         return false;
     }
     if ((own_view_option || view_pairs_option != 0) && !replay_path.empty()) {
