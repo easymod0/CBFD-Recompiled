@@ -90,10 +90,10 @@ index f79adbf..e40a61d 100644
          int32_t uly;
 diff --git a/src/common/rt64_conker_view_focus.h b/src/common/rt64_conker_view_focus.h
 new file mode 100644
-index 0000000..c0697c9
+index 0000000..1d006a6
 --- /dev/null
 +++ b/src/common/rt64_conker_view_focus.h
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,183 @@
 +//
 +// RT64
 +//
@@ -132,18 +132,32 @@ index 0000000..c0697c9
 +        int count = 0;
 +        ConkerFocusView views[ConkerMaxFocusViews];
 +        float frameWidth = 0.0f, frameHeight = 0.0f;
++        uint32_t ownImages[2] = {};
 +    };
 +
 +    // Set by the game's host each frame (defined in rt64_vi_renderer.cpp): `count` views (1 or 2), each 8 floats in
-+    // `rects`, its rectangle in the split then where it's drawn (left, top, right, bottom).
-+    void setViewFocusRedraw(bool on, int count, const float *rects, float frameWidth, float frameHeight);
++    // `rects`, its rectangle in the split then where it's drawn (left, top, right, bottom). ownImages: the
++    // addresses of two images as wide as the frame that aren't it (0 for none), the game's own copies of it (the
++    // pause menu's picture, which is also the depth image: its clear covers the whole frame, left alone anyway).
++    void setViewFocusRedraw(bool on, int count, const float *rects, float frameWidth, float frameHeight,
++        uint32_t ownImage0, uint32_t ownImage1);
 +    ConkerViewFocus conkerViewFocus();
 +
 +    // Whether the focus applies to what's drawn now: only to the frame itself, an image as wide as the frame.
 +    // The game also draws into small images of its own (a shadow's silhouette, 64 pixels wide), which the
-+    // frame's views have nothing to do with.
-+    inline bool conkerFocusApplies(const ConkerViewFocus &f, uint16_t colorImageWidth) {
-+        return f.on && (f.count > 0) && (f.frameWidth > 0.0f) && (colorImageWidth == uint16_t(f.frameWidth));
++    // frame's views have nothing to do with, and into copies of the frame as wide as it (the pause menu's
++    // picture: tiles of the frame across all of it, which moved with the views, or left out, left the picture
++    // as it was in memory, stripes of colour behind the menu).
++    inline bool conkerFocusApplies(const ConkerViewFocus &f, uint16_t colorImageWidth, uint32_t colorImageAddress) {
++        if (!f.on || (f.count <= 0) || (f.frameWidth <= 0.0f) || (colorImageWidth != uint16_t(f.frameWidth))) {
++            return false;
++        }
++        for (uint32_t image : f.ownImages) {
++            if ((image != 0) && ((image & 0x00FFFFFF) == (colorImageAddress & 0x00FFFFFF))) {
++                return false;
++            }
++        }
++        return true;
 +    }
 +
 +    // A point of a focused view, where it goes in the frame: the view stretched to where it's drawn.
@@ -1231,7 +1245,7 @@ index e08b02c..084ccfd 100644
          struct External {
              ApplicationWindow *appWindow = nullptr;
 diff --git a/src/hle/rt64_rdp.cpp b/src/hle/rt64_rdp.cpp
-index a10c11a..e82a715 100644
+index a10c11a..f5faa49 100644
 --- a/src/hle/rt64_rdp.cpp
 +++ b/src/hle/rt64_rdp.cpp
 @@ -4,7 +4,10 @@
@@ -1252,7 +1266,7 @@ index a10c11a..e82a715 100644
 +
 +        // Conker: netplay's "my view only", drawn anew (rt64_conker_view_focus.h). The rectangle is in quarter pixels.
 +        const ConkerViewFocus focus = conkerViewFocus();
-+        if (conkerFocusApplies(focus, colorImage.width)) {
++        if (conkerFocusApplies(focus, colorImage.width, colorImage.address)) {
 +            int index = 0;
 +            const ConkerViewPart part = conkerViewPart(focus, scissorRect.ulx / 4.0f, scissorRect.uly / 4.0f, scissorRect.lrx / 4.0f, scissorRect.lry / 4.0f, index);
 +            if (part == ConkerViewPart::Focused) {
@@ -1287,7 +1301,7 @@ index a10c11a..e82a715 100644
  
 +        // Conker: netplay's "my view only", drawn anew (rt64_conker_view_focus.h): the view's 2D goes with it.
 +        const ConkerViewFocus focus = conkerViewFocus();
-+        if (conkerFocusApplies(focus, colorImage.width) && !conkerMoveRect(focus, usesFillMode, drawRect)) {
++        if (conkerFocusApplies(focus, colorImage.width, colorImage.address) && !conkerMoveRect(focus, usesFillMode, drawRect)) {
 +            return;
 +        }
 +
@@ -1759,7 +1773,7 @@ index 778e08b..f53d597 100644
          void updatePerspective(const hlslpp::float4x4 &prevTransform, const hlslpp::float4x4 &curTransform, uint8_t perspInterpolation);
  
 diff --git a/src/hle/rt64_rsp.cpp b/src/hle/rt64_rsp.cpp
-index 1da2550..1d7bd6f 100644
+index 1da2550..c0aeee5 100644
 --- a/src/hle/rt64_rsp.cpp
 +++ b/src/hle/rt64_rsp.cpp
 @@ -4,7 +4,11 @@
@@ -2087,7 +2101,7 @@ index 1da2550..1d7bd6f 100644
 +        float focusXScale = 1.0f;
 +        float focusYScale = 1.0f;
 +        const ConkerViewFocus focus = conkerViewFocus();
-+        if (conkerFocusApplies(focus, state->rdp->colorImage.width)) {
++        if (conkerFocusApplies(focus, state->rdp->colorImage.width, state->rdp->colorImage.address)) {
 +            const float halfWidth = std::fabs(viewport.scale.x);
 +            const float halfHeight = std::fabs(viewport.scale.y);
 +            int index = 0;
@@ -3648,10 +3662,10 @@ index 9131697..9c74131 100644
          void reloadReplacements(bool clearQueue, uint64_t exclusiveDbHash = 0);
          bool loadReplacementDirectory(const ReplacementDirectory &replacementDirectory);
 diff --git a/src/render/rt64_vi_renderer.cpp b/src/render/rt64_vi_renderer.cpp
-index b4ff4e9..24423a4 100644
+index b4ff4e9..cffd3a0 100644
 --- a/src/render/rt64_vi_renderer.cpp
 +++ b/src/render/rt64_vi_renderer.cpp
-@@ -4,10 +4,58 @@
+@@ -4,10 +4,62 @@
  
  #include "rt64_vi_renderer.h"
  
@@ -3681,7 +3695,9 @@ index b4ff4e9..24423a4 100644
 +    static std::mutex viewFocusMutex;
 +    static ConkerViewFocus viewFocus;
 +
-+    void setViewFocusRedraw(bool on, int count, const float *rects, float frameWidth, float frameHeight) {
++    void setViewFocusRedraw(bool on, int count, const float *rects, float frameWidth, float frameHeight,
++        uint32_t ownImage0, uint32_t ownImage1)
++    {
 +        ConkerViewFocus focus;
 +        focus.on = on && (count >= 1) && (count <= ConkerMaxFocusViews) && (rects != nullptr);
 +        focus.count = focus.on ? count : 0;
@@ -3698,6 +3714,8 @@ index b4ff4e9..24423a4 100644
 +        }
 +        focus.frameWidth = frameWidth;
 +        focus.frameHeight = frameHeight;
++        focus.ownImages[0] = ownImage0;
++        focus.ownImages[1] = ownImage1;
 +        std::scoped_lock lock(viewFocusMutex);
 +        viewFocus = focus;
 +    }
@@ -3710,7 +3728,7 @@ index b4ff4e9..24423a4 100644
      // VIRenderer
  
      VIRenderer::VIRenderer() { }
-@@ -108,6 +156,18 @@ namespace RT64 {
+@@ -108,6 +160,18 @@ namespace RT64 {
          hlslpp::float4 viViewRect = vi.viewRectangle() * sdSize.xyxy;
          hlslpp::float4 viCropRect = vi.cropRectangle() * sdSize.xyxy;
  
