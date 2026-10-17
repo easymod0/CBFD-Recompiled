@@ -22,6 +22,7 @@
 
 #include <array>
 #include <cstdint>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -115,6 +116,10 @@ namespace conker::netplay {
 
         void on_status_changed(const void* info);
         void handle(Peer& peer, const Packet& packet, std::vector<Event>& events);
+        // A message that arrived on `connection`: decoded and handled, or its peer dropped.
+        void take(uint32_t connection, std::span<const uint8_t> data, std::vector<Event>& events);
+        // Takes every message still unread from `connection` (a peer that closed it).
+        void drain(uint32_t connection, std::vector<Event>& events);
         void drop(Peer& peer, Reason reason, std::vector<Event>* events);
         void send_to(uint32_t connection, const Packet& packet);
         Peer* find(uint32_t connection);

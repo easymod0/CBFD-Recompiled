@@ -36,6 +36,8 @@
 
 #include <array>
 #include <cstdint>
+#include <cstdio>
+#include <filesystem>
 #include <functional>
 #include <string>
 
@@ -108,8 +110,10 @@ namespace conker::lockstep {
         // Each region's XXH3-64 (netplay::memory_region_size each), keeping a copy for a report (the last two).
         std::function<std::array<uint64_t, netplay::memory_regions>(uint64_t read)> keep;
         // Writes the copy kept at `read` to `path`, as --dump-at does (false: none, or it couldn't).
-        std::function<bool(uint64_t read, const std::string& path)> dump;
+        std::function<bool(uint64_t read, const std::filesystem::path& path)> dump;
     };
+    // Creates `path` to write (binary), whatever characters it has (on Windows too); null if it can't.
+    FILE* create_file(const std::filesystem::path& path);
     // At controller read `read`, on the game thread: sends this peer's players' input for read + delay, waits for
     // every player's for `read` and puts them in `pads` and `motions` (4 each), and compares the memory's
     // hashes (`memory` gives them every so often). False if the match has ended (a message was printed): the

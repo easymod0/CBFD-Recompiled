@@ -179,6 +179,12 @@ namespace {
         return "0x" + hex(start, 8) + "-0x" + hex(start + conker::netplay::memory_region_size - 1, 8);
     }
 
+    // A path as UTF-8, for the log and the player (what string() gives can't hold every character on Windows).
+    std::string path_text(const std::filesystem::path& path) {
+        const std::u8string text = path.u8string();
+        return std::string(text.begin(), text.end());
+    }
+
     // Writes this peer's desync report (lockstep.hpp) for a difference from `port`'s at `read`, and the memory
     // kept at that read beside it. Its path, or empty if it couldn't.
     std::string write_report(int port, uint32_t read, const OwnHash& own, const Hash& theirs, const std::vector<int>& regions) {
@@ -191,10 +197,10 @@ namespace {
         const std::string name = std::string("desync-") + stamp + "-read" + std::to_string(read) + "-port" +
             std::to_string(std::countr_zero(own_ports) + 1);
         const std::filesystem::path path = folder / (name + ".json");
-        const bool dumped = memory_now != nullptr && memory_now->dump(read, (folder / (name + ".bin")).string());
-        FILE* file = std::fopen(path.string().c_str(), "w");
+        const bool dumped = memory_now != nullptr && memory_now->dump(read, folder / (name + ".bin"));
+        FILE* file = conker::lockstep::create_file(path);
         if (file == nullptr) {
-            std::fprintf(stderr, "[netplay] %s: couldn't create the desync report\n", path.string().c_str());
+            std::fprintf(stderr, "[netplay] %s: couldn't create the desync report\n", path_text(path).c_str());
             return {};
         }
         std::fprintf(file, "{\n  \"report\": \"Conker netplay desync\",\n  \"version\": 1,\n");
@@ -235,11 +241,11 @@ namespace {
         }
         std::fprintf(file, "\n  ]\n}\n");
         if (std::fclose(file) != 0) {
-            std::fprintf(stderr, "[netplay] %s: couldn't write the desync report\n", path.string().c_str());
+            std::fprintf(stderr, "[netplay] %s: couldn't write the desync report\n", path_text(path).c_str());
             return {};
         }
-        std::printf("[netplay] desync report written to %s%s\n", path.string().c_str(), dumped ? " (and its memory)" : "");
-        return path.string();
+        std::printf("[netplay] desync report written to %s%s\n", path_text(path).c_str(), dumped ? " (and its memory)" : "");
+        return path_text(path);
     }
 
     // The game's memory at `read` isn't `port`'s: says where, writes the report, and ends the match.
@@ -863,6 +869,14 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, net
         motions[port] = input.motion;
     }
     return true;
+}
+
+FILE* conker::lockstep::create_file(const std::filesystem::path& path) {
+#if defined(_WIN32)
+    return _wfopen(path.c_str(), L"wb");
+#else
+    return std::fopen(path.c_str(), "wb");
+#endif
 }
 
 void conker::lockstep::end(netplay::Reason reason, const char* why) {

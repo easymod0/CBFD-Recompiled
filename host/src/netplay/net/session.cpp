@@ -296,6 +296,10 @@ namespace conker::netplay {
                 break;
             case k_ESteamNetworkingConnectionState_ClosedByPeer:
             case k_ESteamNetworkingConnectionState_ProblemDetectedLocally: {
+                // What the peer sent before closing is read first, in order: closing the connection would
+                // throw it away, and a peer's last words matter (after a desync, its Hash for that read, then
+                // its Bye). A Bye among them ends the peer itself.
+                drain(info->m_hConn, pending_events);
                 Peer* peer = find(info->m_hConn);
                 sockets->CloseConnection(info->m_hConn, 0, nullptr, false);
                 if (peer == nullptr) {
@@ -334,20 +338,7 @@ namespace conker::netplay {
                 taken += count;
                 for (int i = 0; i < count; i++) {
                     SteamNetworkingMessage_t* message = messages[i];
-                    Peer* peer = find(message->m_conn);
-                    if (peer != nullptr) {
-                        const std::span<const uint8_t> data((const uint8_t*)message->m_pData, (size_t)message->m_cbSize);
-                        std::optional<Packet> packet = decode(data);
-                        if (packet) {
-                            handle(*peer, *packet, events);
-                        }
-                        else {
-                            // Another protocol version is told so; anything else is a broken packet.
-                            const bool other_version = data.size() >= 4 && data[0] == 'C' && data[1] == 'N' &&
-                                (uint16_t)(data[2] | (data[3] << 8)) != protocol_version;
-                            drop(*peer, other_version ? Reason::version : Reason::protocol, &events);
-                        }
-                    }
+                    take(message->m_conn, { (const uint8_t*)message->m_pData, (size_t)message->m_cbSize }, events);
                     message->Release();
                 }
             }
@@ -364,6 +355,37 @@ namespace conker::netplay {
             }
         }
         return events;
+    }
+
+    void Session::take(uint32_t connection, std::span<const uint8_t> data, std::vector<Event>& events) {
+        Peer* peer = find(connection);
+        if (peer == nullptr) {
+            return;
+        }
+        std::optional<Packet> packet = decode(data);
+        if (packet) {
+            handle(*peer, *packet, events);
+        }
+        else {
+            // Another protocol version is told so; anything else is a broken packet.
+            const bool other_version = data.size() >= 4 && data[0] == 'C' && data[1] == 'N' &&
+                (uint16_t)(data[2] | (data[3] << 8)) != protocol_version;
+            drop(*peer, other_version ? Reason::version : Reason::protocol, &events);
+        }
+    }
+
+    void Session::drain(uint32_t connection, std::vector<Event>& events) {
+        ISteamNetworkingSockets* sockets = SteamNetworkingSockets();
+        SteamNetworkingMessage_t* messages[32];
+        int count;
+        // At most what the library buffers from a peer (recv_buffer_messages), and only while it's a peer.
+        for (int taken = 0; taken < recv_buffer_messages && find(connection) != nullptr &&
+            (count = sockets->ReceiveMessagesOnConnection(connection, messages, 32)) > 0; taken += count) {
+            for (int i = 0; i < count; i++) {
+                take(connection, { (const uint8_t*)messages[i]->m_pData, (size_t)messages[i]->m_cbSize }, events);
+                messages[i]->Release();
+            }
+        }
     }
 
     void Session::handle(Peer& peer, const Packet& packet, std::vector<Event>& events) {

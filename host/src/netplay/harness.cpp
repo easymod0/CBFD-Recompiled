@@ -322,10 +322,10 @@ namespace {
     }
 
     // Writes `memory` (game memory in the runtime's order) to `path`, with what's left out zeroed in `zero`.
-    bool write_memory(const std::string& path, const uint8_t* memory, const std::vector<Range>& zero) {
-        FILE* file = std::fopen(path.c_str(), "wb");
+    bool write_memory(const std::filesystem::path& path, const uint8_t* memory, const std::vector<Range>& zero) {
+        FILE* file = conker::lockstep::create_file(path);
         if (file == nullptr) {
-            std::fprintf(stderr, "[harness] %s: couldn't create it\n", path.c_str());
+            std::fprintf(stderr, "[harness] %s: couldn't create it\n", (const char*)path.u8string().c_str());
             return false;
         }
         // The runtime keeps each 32-bit word of game memory in the host's order; the dump has the N64's.
@@ -363,6 +363,10 @@ namespace {
     std::array<uint64_t, conker::netplay::memory_regions> keep_memory(uint64_t read) {
         static_assert((uint64_t)conker::netplay::memory_regions * conker::netplay::memory_region_size ==
             recomp::save_states::game_memory_size);
+        // Reads start again in another match: copies from before are no longer its.
+        for (Kept& old : kept) {
+            if (old.read != UINT64_MAX && old.read >= read) old.read = UINT64_MAX;
+        }
         Kept& copy = kept[next_kept];
         next_kept = (next_kept + 1) % kept.size();
         copy.read = read;
@@ -378,7 +382,7 @@ namespace {
         return regions;
     }
 
-    bool dump_kept(uint64_t read, const std::string& path) {
+    bool dump_kept(uint64_t read, const std::filesystem::path& path) {
         for (const Kept& copy : kept) {
             if (copy.read == read && !copy.memory.empty()) {
                 return write_memory(path, copy.memory.data(), {});
