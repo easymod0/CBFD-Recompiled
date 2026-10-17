@@ -57,6 +57,7 @@ namespace {
     int local_option = 1;           // the players on this machine
     bool host_own_view = true;      // hosting: the rule this peer will start the match with
     bool match_own_view = false;    // the rule of the match under way
+    uint8_t match_pairs = 0;        // ...and the ports shown two to a window (Start)
     // --input-delay's, or the menu's: the reads ahead, or auto (the host chooses from the round trips).
     constexpr int auto_delay = -1;
     int delay_option = auto_delay;
@@ -458,6 +459,7 @@ bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
     left = false;
     current_read = 0;
     match_own_view = false;
+    match_pairs = 0;
     why_over.clear();
     initial_sent = false;
     for (auto& pads : received) pads.clear();
@@ -502,6 +504,7 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
                     if (session->start(host_own_view, chosen)) {
                         match_started = true;
                         match_own_view = host_own_view;
+                        match_pairs = session->pairs();
                         delay = chosen;
                     }
                 }
@@ -525,6 +528,7 @@ conker::lockstep::Progress conker::lockstep::poll_connect(std::string& status) {
             case Event::Type::started:
                 match_started = true;
                 match_own_view = event.own_view;
+                match_pairs = event.pairs;
                 delay = event.delay;
                 break;
             case Event::Type::ended:
@@ -634,6 +638,10 @@ int conker::lockstep::input_delay() {
 
 bool conker::lockstep::own_view_for_everyone() {
     return match_started && match_own_view;
+}
+
+uint8_t conker::lockstep::view_pairs() {
+    return match_started ? match_pairs : 0;
 }
 
 bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, netplay::Motion* motions, const InputSource& source,

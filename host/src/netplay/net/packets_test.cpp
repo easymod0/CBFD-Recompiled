@@ -43,7 +43,7 @@ namespace {
         inputs.pads[0] = { 0x8000, -128, 127, 0 };
         inputs.pads[1] = { 0xFF3F, 5, -5, 0 };
         inputs.pads[2] = { 0, 0, 0, err_no_controller };
-        inputs.motions[0] = { -32768, 32767, 0x1234, -2, -128, 0x0305 };
+        inputs.motions[0] = { -32768, 32767, 0x1234, -2, -128, swap_sticks_bit | 0x0305 };
         inputs.motions[2] = { 1, 0, 0, 0, 3, controls_mask };
         return inputs;
     }
@@ -57,11 +57,12 @@ int main() {
     CHECK(round_trips(Welcome{ 0x08, 4 }, 7));
     CHECK(round_trips(Welcome{ 0x0E, 4 }, 7));      // three players on one machine
     CHECK(round_trips(Refuse{ Reason::rom }, 6));
-    CHECK(round_trips(some_inputs(), 139));
+    CHECK(round_trips(some_inputs(), 155));
     CHECK(round_trips(Hash{ 4000000000u, 0xFEDCBA9876543210ull }, 17));
     CHECK(round_trips(Bye{ Reason::desync }, 6));
-    CHECK(round_trips(Start{ 3, 0 }, 8));
-    CHECK(round_trips(Start{ 4, 1, max_delay }, 8));
+    CHECK(round_trips(Start{ 3, 0 }, 9));
+    CHECK(round_trips(Start{ 4, 1, max_delay }, 9));
+    CHECK(round_trips(Start{ 4, 1, 2, 0x0C }, 9));
 
     // The layout: header, then little-endian fields.
     const std::vector<uint8_t> hello = bytes_of(Hello{ 0x0807060504030201ull, 0, 0, 0x1112131415161718ull, 0x2122232425262728ull, 2 });
@@ -74,9 +75,9 @@ int main() {
     CHECK(inputs[11] == 0x00 && inputs[12] == 0x80 && inputs[13] == 0x80 && inputs[14] == 0x7F);  // pad 0
     CHECK(inputs[51] == 0x00 && inputs[52] == 0x80 && inputs[53] == 0xFF && inputs[54] == 0x7F &&  // motion 0
           inputs[55] == 0x34 && inputs[56] == 0x12 && inputs[57] == 0xFE && inputs[58] == 0xFF && inputs[59] == 0x80 &&
-          inputs[60] == 0x05 && inputs[61] == 0x03);
-    const std::vector<uint8_t> start = bytes_of(Start{ 2, 1, 3 });
-    CHECK(start.size() == 8 && start[5] == 2 && start[6] == 1 && start[7] == 3);
+          inputs[60] == 0x05 && inputs[61] == 0x03 && inputs[62] == 0x01 && inputs[63] == 0x00);
+    const std::vector<uint8_t> start = bytes_of(Start{ 3, 1, 3, 0x03 });
+    CHECK(start.size() == 9 && start[5] == 3 && start[6] == 1 && start[7] == 3 && start[8] == 0x03);
 
     // Out-of-range fields are neither sent nor accepted.
     CHECK(bytes_of(Welcome{ 0x04, 2 }).empty());    // a port not below players
@@ -90,6 +91,8 @@ int main() {
     CHECK(bytes_of(Start{ 5 }).empty());
     CHECK(bytes_of(Start{ 2, 2 }).empty());          // own view is 0 or 1
     CHECK(bytes_of(Start{ 2, 0, max_delay + 1 }).empty());
+    CHECK(bytes_of(Start{ 3, 1, 0, 0x08 }).empty()); // a pair past the players
+    CHECK(bytes_of(Start{ 4, 1, 0, 0x07 }).empty()); // an odd number of ports in pairs
 
     CHECK(bytes_of(Refuse{ (Reason)0 }).empty());
     CHECK(bytes_of(Bye{ (Reason)(last_reason + 1) }).empty());
@@ -119,8 +122,11 @@ int main() {
     bad.motions[1].controls = (fov_codes + 1) << fov_shift;  // a field of view past the codes
     CHECK(bytes_of(bad).empty());
     bad = some_inputs();
-    bad.motions[1].controls = (fov_codes << fov_shift) | controls_mask;  // the last code, every other bit: fine
+    bad.motions[1].controls = (fov_codes << fov_shift) | controls_mask | swap_sticks_bit;  // the last code, every other bit: fine
     CHECK(!bytes_of(bad).empty());
+    bad = some_inputs();
+    bad.motions[1].controls = swap_sticks_bit << 1;  // a bit past Swap Sticks
+    CHECK(bytes_of(bad).empty());
     bad = some_inputs();
     bad.first_read = UINT32_MAX - 1;                // its last read past 2^32 - 1
     CHECK(bytes_of(bad).empty());
@@ -146,13 +152,19 @@ int main() {
     data[11] |= 0x80;                               // pad 0's reserved button
     CHECK(!decodes(data));
     data = inputs;
-    data[51 + 11 * 7] = 1;                          // motion 7, unused
+    data[51 + 13 * 7] = 1;                          // motion 7, unused
     CHECK(!decodes(data));
     data = inputs;
-    data[51 + 11 * 1 + 10] = (uint8_t)(((fov_codes + 1) << fov_shift) >> 8);  // motion 1's field of view: past the codes
+    data[51 + 13 * 1 + 10] = (uint8_t)(((fov_codes + 1) << fov_shift) >> 8);  // motion 1's field of view: past the codes
+    CHECK(!decodes(data));
+    data = inputs;
+    data[51 + 13 * 1 + 12] = 0x01;                  // motion 1's top byte: past Swap Sticks
     CHECK(!decodes(data));
     data = start;
     data[7] = max_delay + 1;
+    CHECK(!decodes(data));
+    data = start;
+    data[8] = 0x0C;                                 // ports 3 and 4 in pairs, in a match of 3
     CHECK(!decodes(data));
 
     // Sizes, versions, kinds and the magic.

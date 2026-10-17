@@ -5,7 +5,8 @@ Writes a recording that plays from boot into a multiplayer match, for the determ
 moment of the same match. For trying multiplayer things (netplay's "my view only", split-screen rendering)
 without playing through the menus each time. Replay it with --fast, in a window with shot.sh.
 
-    make_match.py <out.pads> [--mode war] [--players 4] [--variant 0] [--pause] [--mouse] [--seed 1]
+    make_match.py <out.pads> [--mode war] [--players 4] [--variant 0] [--pause] [--mouse] [--seed 1] [--own-view]
+                  [--view-pairs 12]
 
 From boot: the intro (it can't be skipped), Start on the title, the main menu's MULTI, the mode's barrel in
 the cellar, its list's --variant'th entry (War's 1 is Colors, Race's 1 is Race B, Deathmatch's are maps),
@@ -13,7 +14,9 @@ every other player pressing Start once (twice takes them out again), then player
 some 30 seconds of it with nobody moving. --pause pauses it at the end. A Race is started with Start
 alone (more presses pause it and quit). --mouse has every player play in those 30 seconds instead: move
 and turn with the stick, hold R to aim at times, and move their mouse, gyro and scroll wheel (from
---seed, as make_inputs.py --mouse does), with settings (Controls) of their own.
+--seed, as make_inputs.py --mouse does), with settings (Controls) of their own. --own-view marks it as a match
+whose rule is that everyone sees only their own view (it changes the split screen's culls); --view-pairs, with
+the views of those ports (from 1) shown two to a window, as on a machine with two players.
 
 The recording's format is the harness's (see its header comment), with its ROM and settings profile hashes
 0 (not checked). The timings were measured with the US ROM on the timeline: a change to what the game does
@@ -23,10 +26,8 @@ import argparse
 import random
 import struct
 
-from make_inputs import NO_MOTION, Movement
+from make_inputs import NO_MOTION, Movement, header
 
-MAGIC = b"CBFDPADS"
-VERSION = 3
 R = 0x0010
 START, A = 0x1000, 0x8000
 NO_RESPONSE = 8
@@ -43,9 +44,11 @@ def main():
     parser.add_argument("--pause", action="store_true")
     parser.add_argument("--mouse", action="store_true")
     parser.add_argument("--seed", type=int, default=1)
+    parser.add_argument("--own-view", action="store_true")
+    parser.add_argument("--view-pairs", default="")
     args = parser.parse_args()
     rng = random.Random(args.seed)
-    motions = {}  # read: each port's 11 bytes
+    motions = {}  # read: each port's 13 bytes
 
     reads = []
 
@@ -110,7 +113,7 @@ def main():
         press(0, START); wait(200)
 
     with open(args.out, "wb") as f:
-        f.write(MAGIC + struct.pack("<IIQQ", VERSION, args.players, 0, 0))
+        f.write(header(args.players, args.own_view, args.view_pairs))
         for i, read in enumerate(reads):
             f.write(read + motions.get(i, NO_MOTION * 4))
     print(f"{args.out}: {len(reads)} reads, {args.mode} ({args.variant}), {args.players} players")

@@ -56,8 +56,8 @@ OUT=$(cd "$OUT" && pwd)
 
 if [ -n "$RECORDING" ]; then
     cp "$RECORDING" "$OUT/inputs.pads" || exit 2
-    # Its reads: the header (32 bytes), then 65 bytes a read in version 3 (21 in 2).
-    READS=$(python3 -c "import struct,sys; d=open(sys.argv[1],'rb').read(); v=struct.unpack_from('<I',d,8)[0]; print((len(d)-32)//(65 if v==3 else 21))" "$OUT/inputs.pads") || exit 2
+    # Its reads: the header (40 bytes in version 4, 32 in 2 and 3, 16 in 1), then 73 bytes a read in version 4 (65 in 3, 21 in 2).
+    READS=$(python3 -c "import struct,sys; d=open(sys.argv[1],'rb').read(); v=struct.unpack_from('<I',d,8)[0]; print((len(d)-{4: 40, 1: 16}.get(v, 32))//{4: 73, 3: 65}.get(v, 21))" "$OUT/inputs.pads") || exit 2
 else
     python3 tools/netplay/make_inputs.py "$OUT/inputs.pads" --reads "$READS" --seed "$SEED" $MOUSE || exit 2
 fi

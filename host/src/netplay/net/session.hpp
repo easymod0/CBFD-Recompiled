@@ -43,6 +43,7 @@ namespace conker::netplay {
         int players = 0;
         bool own_view = false;  // started: the host's rule that every player sees only their own view
         int delay = 0;          // started: the match's input delay
+        uint8_t pairs = 0;      // started: the ports shown two to a window (each machine with two players')
         Reason reason = Reason::quit;
         std::string detail;     // the library's account of a closed connection, for the log
         Packet packet;
@@ -80,6 +81,9 @@ namespace conker::netplay {
         std::vector<int> round_trips_ms() const;
         // Host: the joiners in (machines, not players: one may have several ports).
         int joiners() const;
+        // Host: the ports whose views are shown two to a window (each machine with two players', the host's too),
+        // sent with Start.
+        uint8_t pairs() const;
 
         // What has happened since the last poll.
         std::vector<Event> poll();

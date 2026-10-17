@@ -7,18 +7,20 @@
 //   2 Welcome  u8 ports (bits: some, none at or past players, not port 0),             7 bytes
 //              u8 players (2 to 4)
 //   3 Refuse   u8 reason                                                               6 bytes
-//   4 Inputs   u8 port (< 4), u32 first read, u8 count (1 to 8), 8 pads of 5 bytes  139 bytes
-//              (u16 buttons, s8 stick x, s8 stick y, u8 err_no), then 8 motions of 11
-//              (s16 mouse x, y, s16 gyro x, y, s8 wheel, u16 controls: only
-//              valid_controls: a field of view code up to fov_codes); the unused ones zero, and the last read not past
+//   4 Inputs   u8 port (< 4), u32 first read, u8 count (1 to 8), 8 pads of 5 bytes  155 bytes
+//              (u16 buttons, s8 stick x, s8 stick y, u8 err_no), then 8 motions of 13
+//              (s16 mouse x, y, s16 gyro x, y, s8 wheel, u32 controls: only
+//              valid_controls: a field of view code up to fov_codes, no bit past 16); the unused ones zero, and the last read not past
 //              2^32 - 1
 //   5 Hash     u32 read, u64 hash                                                     17 bytes
 //   6 Bye      u8 reason                                                               6 bytes
-//   7 Start    u8 players (2 to 4), u8 own view (0 or 1), u8 delay (0 to 8)            8 bytes
+//   7 Start    u8 players (2 to 4), u8 own view (0 or 1), u8 delay (0 to 8), u8 pairs  9 bytes
+//              (ports below players, an even number of them)
 // A packet of any other size, version or kind, or with any field out of range, is refused.
 
 #include "packets.hpp"
 
+#include <bit>
 #include <type_traits>
 
 namespace conker::netplay {
@@ -26,7 +28,7 @@ namespace conker::netplay {
         enum Kind : uint8_t { hello = 1, welcome, refuse, inputs, hash, bye, start };
         constexpr size_t header_size = 5;
         constexpr size_t pad_size = 5;
-        constexpr size_t motion_size = 11;
+        constexpr size_t motion_size = 13;
 
         constexpr size_t size_of(uint8_t kind) {
             switch (kind) {
@@ -36,7 +38,7 @@ namespace conker::netplay {
                 case inputs: return header_size + 6 + input_window * (pad_size + motion_size);
                 case hash: return header_size + 12;
                 case bye: return header_size + 1;
-                case start: return header_size + 3;
+                case start: return header_size + 4;
             }
             return 0;
         }
@@ -78,7 +80,8 @@ namespace conker::netplay {
             return valid_reason(p.reason);
         }
         bool valid_fields(const Start& p) {
-            return p.players >= 2 && p.players <= max_players && p.own_view <= 1 && p.delay <= max_delay;
+            return p.players >= 2 && p.players <= max_players && p.own_view <= 1 && p.delay <= max_delay &&
+                (p.pairs >> p.players) == 0 && std::popcount(p.pairs) % 2 == 0;
         }
 
         bool valid_packet(const Packet& packet) {
@@ -169,7 +172,7 @@ namespace conker::netplay {
                     w.u16((uint16_t)m.gyro_x);
                     w.u16((uint16_t)m.gyro_y);
                     w.u8((uint8_t)m.wheel);
-                    w.u16(m.controls);
+                    w.u32(m.controls);
                 }
             }
             else if constexpr (std::is_same_v<T, Hash>) {
@@ -180,6 +183,7 @@ namespace conker::netplay {
                 w.u8(p.players);
                 w.u8(p.own_view);
                 w.u8(p.delay);
+                w.u8(p.pairs);
             }
         }, packet);
         return (size_t)(w.at - out.data());
@@ -235,7 +239,7 @@ namespace conker::netplay {
                     m.gyro_x = (int16_t)r.u16();
                     m.gyro_y = (int16_t)r.u16();
                     m.wheel = (int8_t)r.u8();
-                    m.controls = r.u16();
+                    m.controls = r.u32();
                 }
                 packet = p;
                 break;
@@ -256,6 +260,7 @@ namespace conker::netplay {
                     p.players = r.u8();
                     p.own_view = r.u8();
                     p.delay = r.u8();
+                    p.pairs = r.u8();
                     packet = p;
                 }
                 break;

@@ -4,16 +4,19 @@
 // reader checks conker::netplay_profile::active() and uses the profile's value:
 //
 //   Each player's own: the mouse and gyro in R-Look, the aiming modes and the orbit camera, and the
-//     settings that change what they and the stick do there (responses, inverts, Mouse: Turn the Camera):
-//     their movement is part of each read's input, with their settings (their Controls) as they are at
-//     that read (motion.cpp). Not part of the profile.
-//   Off: Right Stick: Free Camera, Aiming: Swap Sticks and the mouse in the bank's leaps (look_aim.cpp,
-//     mouse_camera.cpp): single player's, and the first two go by the time between frames.
+//     settings that change what they and the stick do there (responses, inverts, Mouse: Turn the Camera,
+//     Camera: Field of View, Aiming: Swap Sticks): their movement is part of each read's input, with their
+//     settings (their Controls) as they are at that read (motion.cpp). Swap Sticks counts a player as aiming
+//     by reads, not by the time between frames. Not part of the profile.
+//   Off: Right Stick: Free Camera and the mouse in the bank's leaps (look_aim.cpp, mouse_camera.cpp): single
+//     player's, and the first goes by the time between frames.
 //   At their defaults (as headless, which has no settings): the Camera tab's others (Field of View, Invert
 //     Turning, Turning Speed, Lock-On), Conker's Detail (Always Highest), Cutscene Aspect Ratio (Expand),
 //     and the sound volumes (100%, as they're set in the game's synthesizer).
 //   Widescreen: the culls and sprites are widened for 16:9, whatever the window's size and the aspect
-//     ratio setting (widescreen.cpp). A wider window can lose a little at its sides.
+//     ratio setting (widescreen.cpp). A wider window can lose a little at its sides. While the match's rule
+//     is that everyone sees only their own view, the split screen's culls are as tall and wide as it's drawn
+//     then (by the match's view pairs too).
 //   Save states (F5, F7): off.
 //   Mods: none, in netplay matches, recordings and replays (check_mods; lockstep::begin): a mod is native
 //     code the other players would have to trust, and a recording doesn't say which were on. The handshake
@@ -57,10 +60,10 @@ namespace {
     bool on = false;
 
     constexpr const char* profile_text =
-        "conker netplay profile 3\n"
-        "mouse, gyro and their settings each player's own; stick free camera off; swap sticks off\n"
+        "conker netplay profile 4\n"
+        "mouse, gyro and their settings each player's own, swap sticks too, by reads; stick free camera off\n"
         "camera tab defaults; conker detail always highest; cutscene aspect expand; volumes 100\n"
-        "widescreen culls 16:9\n"
+        "widescreen culls 16:9; own view rule: split screen culls as tall and wide as drawn\n"
         "save states off; mods off, texture packs free\n"
         "renderer writes nothing to game memory\n";
 }

@@ -110,6 +110,8 @@ namespace {
     // mode, from the game thread (steady clock ticks), for the input thread (swap_sticks_now). Like the reticle's,
     // it counts as aiming a little over two game frames after, so a frame the game takes longer over doesn't swap
     // the sticks back for a poll. Each player's, so in split screen each controller swaps as its player aims.
+    // While the harness is used, by reads instead (motion.cpp), and with each player's own setting (their
+    // Controls): what the swap writes into game memory (conker_look_targets) is then the same on every machine.
     constexpr int aim_players = 4;
     std::atomic<int64_t> last_aim_ticks[aim_players] = {};
     // The aim's yaw for each player's view this frame, from the look mode (conker_look_currents), while swapped.
@@ -127,6 +129,7 @@ namespace {
     void note_aiming(uint8_t* rdram, gpr camera, int player) {
         if (player >= 0 && player < aim_players) {
             last_aim_ticks[player] = std::chrono::steady_clock::now().time_since_epoch().count();
+            conker::motion::note_aim(player);
             const gpr character = (gpr)(int32_t)MEM_W(0x3D0, camera);
             shotgun_aiming[player] = (((uint32_t)character & 0xFF000000u) == 0x80000000u) && (MEM_BU(0x4, character) == shotgun_aim_state);
         }
@@ -329,7 +332,7 @@ void conker::look_aim::add_camera_options(recomp::config::Config& config) {
         reticle_sizes, ReticleSize::Medium);
     config.add_enum_option(options::aim_swap_sticks, "Aiming: Swap Sticks",
         "Controls aiming like a third-person shooter: while you aim, the right stick aims and the left stick moves, as "
-        "the C-buttons do (e.g. the shotgun, the slingshot, the sniper scope, R-Look), in single player. "
+        "the C-buttons do (e.g. the shotgun, the slingshot, the sniper scope, R-Look), in single player and netplay matches. "
         "Conker keeps facing where you aim and walks the way you push, sideways and back too. With the mouse, the keys "
         "bound to the stick (W, A, S, D) move. With the "
         "shotgun, holding R alone shows the laser sight, so you can move and strafe with it; holding Z as well, the left "
@@ -389,18 +392,19 @@ void conker::look_aim::add_mouse_gyro_options(recomp::config::Config& config) {
 }
 #endif
 
-uint16_t conker::motion::local_controls() {
-    uint16_t c = 0;
+uint32_t conker::motion::local_controls() {
+    uint32_t c = 0;
 #if defined(CONKER_RT64)
     if (own_option(options::mouse_response, Response::Smooth) == Response::Direct) c |= 0x1;
     if (own_option(options::gyro_response, Response::Smooth) == Response::Direct) c |= 0x2;
     if (own_option(options::stick_response, Response::Smooth) == Response::Direct) c |= 0x4;
     if (own_option(options::mouse_camera, Toggle::On) == Toggle::Off) c |= 0x8;
-    c |= (uint16_t)((uint32_t)own_option(options::mouse_invert, Invert::None) << 4);
-    c |= (uint16_t)((uint32_t)own_option(options::gyro_invert, Invert::None) << 6);
-    c |= (uint16_t)((uint32_t)own_option(options::stick_invert, Invert::Y) << 8);
+    c |= (uint32_t)own_option(options::mouse_invert, Invert::None) << 4;
+    c |= (uint32_t)own_option(options::gyro_invert, Invert::None) << 6;
+    c |= (uint32_t)own_option(options::stick_invert, Invert::Y) << 8;
     c &= 0x03FF;    // only Controls' bits (a value out of range in the config would make the others refuse the packet)
-    c |= (uint16_t)(conker::motion::field_of_view_code(own_number(options::camera_fov, 0.0)) << 10);
+    c |= conker::motion::field_of_view_code(own_number(options::camera_fov, 0.0)) << 10;
+    if (own_option(options::aim_swap_sticks, Toggle::Off) == Toggle::On) c |= 0x10000;
 #endif
     return c;
 }
@@ -467,9 +471,10 @@ extern "C" void conker_aim_lock_on(uint8_t* rdram, recomp_context* ctx) {
 //   alone's walk is 0x224 (func_15064B94, its case for state 0x3B, 0x15065184; 0x223 below speed 20).
 namespace {
     // Player 1 aiming with R and not Z, the sticks swapped (single player: D_800CC290 is theirs). Only the shotgun's
-    // state (0x3B) runs these hooks and reads what's set.
+    // state (0x3B) runs these hooks and reads what's set. Not while the harness is used (netplay's multiplayer): which
+    // player's character runs them isn't known here, and player 1's setting and buttons would decide for every one.
     bool shotgun_laser_on_r(uint8_t* rdram) {
-        if (!conker::look_aim::swap_sticks_now(0)) {
+        if (conker::netplay_profile::active() || !conker::look_aim::swap_sticks_now(0)) {
             return false;
         }
         const uint32_t held = (uint32_t)MEM_W(0, (gpr)(int32_t)0x800CC290);
@@ -529,16 +534,20 @@ extern "C" void conker_look_view(uint8_t* rdram, recomp_context* ctx) {
     const float aim_yaw = swap_view_yaw_set[player] ? swap_view_yaw[player] : read_float(rdram, camera, current_yaw);
     swap_view_yaw_set[player] = false;
     const float yaw = (270.0f - aim_yaw) * degrees_to_radians;
-    write_float(rdram, camera, 0x2E0, ex + std::cos(yaw) * across);
-    write_float(rdram, camera, 0x2E8, ez + std::sin(yaw) * across);
+    // game_trig's: in netplay the same on every platform, as the C library's rounds some last bits differently.
+    write_float(rdram, camera, 0x2E0, ex + conker::game_trig::cos(yaw) * across);
+    write_float(rdram, camera, 0x2E8, ez + conker::game_trig::sin(yaw) * across);
 #endif
 }
 
 bool conker::look_aim::swap_sticks_now(int player) {
-    if (option<Toggle>(options::aim_swap_sticks) != Toggle::On || !recompinput::players::is_single_player_mode()) {
+    if (player < 0 || player >= aim_players) {
         return false;
     }
-    if (player < 0 || player >= aim_players) {
+    if (per_player()) {
+        return conker::motion::swap_sticks(conker::motion::controls(player)) && conker::motion::aimed_lately(player);
+    }
+    if (option<Toggle>(options::aim_swap_sticks) != Toggle::On || !recompinput::players::is_single_player_mode()) {
         return false;
     }
     const int64_t since = std::chrono::steady_clock::now().time_since_epoch().count() - last_aim_ticks[player].load();
@@ -679,18 +688,33 @@ extern "C" void conker_camera_turn_invert(uint8_t* rdram, recomp_context* ctx) {
 }
 
 #if defined(CONKER_RT64)
+// The mouse aiming's remainders, then Swap Sticks' view yaw for each player and whether it's set (bit per player):
+// the look mode sets it and the view takes it, and a state can fall between them.
 std::vector<uint32_t> conker::look_aim::state() {
-    std::vector<uint32_t> words(4);
+    std::vector<uint32_t> words(9);
     std::memcpy(words.data(), aim_remainder, sizeof(aim_remainder));
+    std::memcpy(words.data() + 4, swap_view_yaw, sizeof(swap_view_yaw));
+    for (int i = 0; i < aim_players; i++) {
+        words[8] |= swap_view_yaw_set[i] ? (1u << i) : 0u;
+    }
     return words;
 }
 
 void conker::look_aim::set_state(const std::vector<uint32_t>& words) {
+    std::fill(std::begin(swap_view_yaw), std::end(swap_view_yaw), 0.0f);
+    std::fill(std::begin(swap_view_yaw_set), std::end(swap_view_yaw_set), false);
     if (words.size() < 4) {
         std::fill(std::begin(aim_remainder), std::end(aim_remainder), 0.0f);
         return;
     }
     std::memcpy(aim_remainder, words.data(), sizeof(aim_remainder));
+    // States from before have the remainders alone.
+    if (words.size() >= 9) {
+        std::memcpy(swap_view_yaw, words.data() + 4, sizeof(swap_view_yaw));
+        for (int i = 0; i < aim_players; i++) {
+            swap_view_yaw_set[i] = (words[8] & (1u << i)) != 0;
+        }
+    }
 }
 
 float conker::look_aim::camera_turn_speed() {

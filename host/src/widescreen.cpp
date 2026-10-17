@@ -103,6 +103,80 @@ namespace {
         return off && !conker::netplay_profile::active();
     }
 
+    // Netplay's "my view only" (netplay/view.cpp): RT64 draws a machine's players' views of the split screen anew,
+    // one across the whole frame, or two across its top and bottom halves, each with its projection scaled so it
+    // isn't stretched (rt64.patch's conkerFocusScale). A view made relatively taller shows the world above and
+    // below where the game culled it, one made relatively wider (a quarter across a half) the world at its sides,
+    // which went missing while on screen. While the match's rule is that everyone sees only their own view
+    // (harness::own_view_rule), every camera's culls are made as much taller and wider as its view is drawn, on
+    // every machine: it changes the game's memory, so it goes by what every machine has, the rule and which
+    // ports are shown two to a window (harness::view_pairs, the match's Start), never by this machine's own
+    // choice. From the cameras' views on the frame (D_800BE628, view.cpp's): 1 while player 1's view is the
+    // whole frame (not split).
+    struct ViewScale {
+        float wider = 1.0f;
+        float taller = 1.0f;
+    };
+    ViewScale own_view_scale(uint8_t* rdram, gpr camera) {
+#if defined(CONKER_NETPLAY)
+        if (!conker::harness::own_view_rule()) {
+            return {};
+        }
+        constexpr float frame_height = 216.0f;
+        constexpr uint32_t camera_size = 0x180;
+        const uint32_t cameras = (uint32_t)MEM_W(0, (gpr)(int32_t)0x800BE628);
+        const float frame_width = (float)MEM_W(0, (gpr)(int32_t)0x800BE620);
+        const uint32_t offset = (uint32_t)camera - cameras;
+        if (cameras < 0x80000000u || cameras >= 0x80800000u || frame_width < 16.0f || frame_width > 640.0f ||
+            offset % camera_size != 0 || offset / camera_size >= 4) {
+            return {};
+        }
+        const int port = (int)(offset / camera_size);
+        // Its left, top, right and bottom (+0x2C, +0x24, +0x30, +0x28), in pixels of the frame.
+        auto view = [&](gpr c, float out[4]) {
+            out[0] = read_float(rdram, c, 0x2C);
+            out[1] = read_float(rdram, c, 0x24);
+            out[2] = read_float(rdram, c, 0x30);
+            out[3] = read_float(rdram, c, 0x28);
+            for (int i = 0; i < 4; i++) {
+                if (!std::isfinite(out[i])) out[i] = 0.0f;
+            }
+        };
+        float first[4], own[4];
+        view((gpr)(int32_t)cameras, first);
+        if (first[0] < 0.03f * frame_width && first[1] < 0.03f * frame_height && first[2] > 0.97f * frame_width &&
+            first[3] > 0.97f * frame_height) {
+            return {};
+        }
+        view(camera, own);
+        const float wide = own[2] - own[0], high = own[3] - own[1];
+        if (wide < 0.05f * frame_width || high < 0.05f * frame_height) {
+            return {};
+        }
+        // Where it's drawn: the whole frame, or a half of it (view.cpp's halves, a pixel short of the middle).
+        const bool paired = (conker::harness::view_pairs() & (1u << port)) != 0;
+        const float drawn_high = paired ? frame_height / 2.0f - 1.0f : frame_height;
+        // How much more it's stretched across than down. Alone, or not wider for it, the scene's width stays and
+        // the height shown grows by 1/k; two, and wider for it, meet halfway: the width shown grows by the root.
+        const float k = (frame_width / wide) / (drawn_high / high);
+        ViewScale scale;
+        if (!std::isfinite(k) || k <= 0.0f) {
+            return {};
+        }
+        if (paired && k > 1.0f) {
+            scale.wider = std::sqrt(k);
+        }
+        else if (k < 1.0f) {
+            scale.taller = 1.0f / k;
+        }
+        scale.wider = std::clamp(scale.wider, 1.0f, 4.0f);
+        scale.taller = std::clamp(scale.taller, 1.0f, 4.0f);
+        return scale;
+#else
+        return {};
+#endif
+    }
+
     // How far past each 4:3 edge sprites are kept, in N64 screen pixels: as far as
     // the window reaches past it (half the frame's width, D_800BE620, for each 4:3
     // width more), and a little more. A fixed 160 fell short on 32:9 screens.
@@ -674,14 +748,31 @@ extern "C" void conker_iris_end(uint8_t* rdram, recomp_context* ctx) {
 // camera), rebuild the left and right planes from the horizontal field of view
 // as wide as the window shows it: tan(half angle) grows with the aspect ratio.
 extern "C" void conker_widen_frustum(uint8_t* rdram, recomp_context* ctx) {
+    const gpr camera = ctx->r16;
+    constexpr float degrees_to_radians = 3.14159265358979f / 180.0f;
+    // And the top and bottom planes, from the vertical field of view (+0x78), as tall as netplay's "my view
+    // only" draws it (own_view_scale).
+    const ViewScale scale = own_view_scale(rdram, camera);
+    const float taller = scale.taller;
+    if (taller > 1.0f) {
+        const float half_y = read_float(rdram, camera, 0x78) * 0.5f * degrees_to_radians;
+        const float tall_half_y = std::min(conker::game_trig::atan(conker::game_trig::tan(half_y) * taller), 1.5f);
+        const float c = conker::game_trig::cos(tall_half_y);
+        const float s = conker::game_trig::sin(tall_half_y);
+        // (0, -cos, -sin) and (0, cos, -sin), as the game writes them.
+        write_float(rdram, camera, 0xA0, 0.0f);
+        write_float(rdram, camera, 0xA4, -c);
+        write_float(rdram, camera, 0xA8, -s);
+        write_float(rdram, camera, 0xAC, 0.0f);
+        write_float(rdram, camera, 0xB0, c);
+        write_float(rdram, camera, 0xB4, -s);
+    }
     const float ratio = widescreen_ratio();
     if (ratio <= 1.0f || no_cull_widen()) {
         return;
     }
-    const gpr camera = ctx->r16;
-    constexpr float degrees_to_radians = 3.14159265358979f / 180.0f;
     const float half_x = read_float(rdram, camera, 0x74) * 0.5f * degrees_to_radians;
-    const float wide_half_x = std::min(conker::game_trig::atan(conker::game_trig::tan(half_x) * ratio * cull_extra()), 1.5f);
+    const float wide_half_x = std::min(conker::game_trig::atan(conker::game_trig::tan(half_x) * ratio * cull_extra() * scale.wider), 1.5f);
     const float c = conker::game_trig::cos(wide_half_x);
     const float s = conker::game_trig::sin(wide_half_x);
     // Left (cos, 0, -sin) and right (-cos, 0, -sin), as the game writes them.
@@ -716,16 +807,23 @@ extern "C" void conker_camera_background_fill(uint8_t* rdram, recomp_context* ct
 // pieces among them: func_150A5378, func_150A6210, func_1510AEE0) multiply a
 // view-space x by before comparing it with the depth: a point is kept while
 // |x| * scale <= depth, the 4:3 view. At its return, divide it by how much wider
-// the window is, so they keep what the widened view shows.
+// the window is, so they keep what the widened view shows. The y scale (the next float) likewise, by how much
+// taller netplay's "my view only" draws the view, and the x scale by as much wider (own_view_scale).
 extern "C" void conker_widen_cull_scale(uint8_t* rdram, recomp_context* ctx) {
     // Camera: Field of View first ($v0 is the camera).
     conker::field_of_view::adjust_cull_scales(rdram, ctx->r2);
+    const ViewScale scale = own_view_scale(rdram, ctx->r2);
+    const float taller = scale.taller;
+    if (taller > 1.0f) {
+        const gpr cull_scale_y = (gpr)(int32_t)0x800D35E4; // the y scale, after cullScaleX_800D35E0
+        write_float(rdram, cull_scale_y, 0, read_float(rdram, cull_scale_y, 0) / taller);
+    }
     const float ratio = widescreen_ratio();
     if (ratio <= 1.0f || no_cull_widen()) {
         return;
     }
     const gpr cull_scale_x = (gpr)(int32_t)0x800D35E0; // cullScaleX_800D35E0
-    write_float(rdram, cull_scale_x, 0, read_float(rdram, cull_scale_x, 0) / (ratio * cull_extra()));
+    write_float(rdram, cull_scale_x, 0, read_float(rdram, cull_scale_x, 0) / (ratio * cull_extra() * scale.wider));
 }
 
 // Some levels' backdrop (sky and distant scenery) is a grid of cells: func_15110CFC splits
@@ -754,7 +852,8 @@ extern "C" void conker_widen_backdrop_buffers(uint8_t* rdram, recomp_context* ct
 // it takes in nearly all of them. So the outermost sectors weren't drawn, and the sky's
 // edges showed at the sides. At 0x15111BC4, just after $f0 is set, let in every sector
 // the view's corners can reach: from the window's horizontal field of view, the
-// camera's vertical one and how far it looks up or down (its view matrix, D_800D9C10).
+// camera's vertical one (each as wide and tall as netplay's "my view only" draws it) and how far it
+// looks up or down (its view matrix, D_800D9C10).
 extern "C" void conker_widen_backdrop_sectors(uint8_t* rdram, recomp_context* ctx) {
     const float ratio = widescreen_ratio();
     if (ratio <= 1.0f) {
@@ -765,8 +864,12 @@ extern "C" void conker_widen_backdrop_sectors(uint8_t* rdram, recomp_context* ct
     const uint32_t camera_index = (uint32_t)MEM_W(0, (gpr)(int32_t)0x80082FA4); // D_80082FA4
     const gpr camera = (gpr)(int32_t)MEM_W(0, (gpr)(int32_t)0x800BE628) + (gpr)(int32_t)(camera_index * 0x180);
     const gpr view = (gpr)(int32_t)(0x800D9C10 + camera_index * 0x40);
-    const float half_x = conker::game_trig::atan(conker::game_trig::tan(read_float(rdram, camera, 0x74) * 0.5f * degrees_to_radians) * ratio);
-    const float half_y = read_float(rdram, camera, 0x78) * 0.5f * degrees_to_radians;
+    const ViewScale scale = own_view_scale(rdram, camera);
+    const float half_x = conker::game_trig::atan(conker::game_trig::tan(read_float(rdram, camera, 0x74) * 0.5f * degrees_to_radians) * ratio * scale.wider);
+    float half_y = read_float(rdram, camera, 0x78) * 0.5f * degrees_to_radians;
+    if (scale.taller > 1.0f) {
+        half_y = conker::game_trig::atan(conker::game_trig::tan(half_y) * scale.taller);
+    }
     // The camera looks along -z of its view: the y part of that is its pitch.
     const float pitch = conker::game_trig::asin(std::clamp(-read_float(rdram, view, 0x18), -1.0f, 1.0f));
     const float corner_pitch = std::fabs(pitch) + half_y;

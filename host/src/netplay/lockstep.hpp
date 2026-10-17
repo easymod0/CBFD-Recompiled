@@ -75,6 +75,9 @@ namespace conker::lockstep {
     // host's choice, sent with Start), once connected. Not enforceable: every machine draws every view,
     // so a modified build could show them; it keeps honest players on the same footing.
     bool own_view_for_everyone();
+    // The ports whose views are shown two to a window in "my view only" (bit n: port n; each machine with two
+    // players'), the same for every peer (Start), once connected.
+    uint8_t view_pairs();
     // This peer's first port, all of them (bit n: port n), how many, and the match's players, once
     // connected.
     int port();

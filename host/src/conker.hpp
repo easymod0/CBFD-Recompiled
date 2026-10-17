@@ -105,29 +105,31 @@ namespace conker {
             int wheel = 0;
         };
         // Controls' bits.
-        inline bool mouse_direct(uint16_t c) { return (c & 0x1) != 0; }
-        inline bool gyro_direct(uint16_t c) { return (c & 0x2) != 0; }
-        inline bool stick_direct(uint16_t c) { return (c & 0x4) != 0; }
-        inline bool mouse_turns_camera(uint16_t c) { return (c & 0x8) == 0; }
+        inline bool mouse_direct(uint32_t c) { return (c & 0x1) != 0; }
+        inline bool gyro_direct(uint32_t c) { return (c & 0x2) != 0; }
+        inline bool stick_direct(uint32_t c) { return (c & 0x4) != 0; }
+        inline bool mouse_turns_camera(uint32_t c) { return (c & 0x8) == 0; }
         // 0 none, 1 X, 2 Y, 3 both.
-        inline int mouse_invert(uint16_t c) { return (c >> 4) & 3; }
-        inline int gyro_invert(uint16_t c) { return (c >> 6) & 3; }
-        inline int stick_invert(uint16_t c) { return (c >> 8) & 3; }
+        inline int mouse_invert(uint32_t c) { return (c >> 4) & 3; }
+        inline int gyro_invert(uint32_t c) { return (c >> 6) & 3; }
+        inline int stick_invert(uint32_t c) { return (c >> 8) & 3; }
+        // Aiming: Swap Sticks.
+        inline bool swap_sticks(uint32_t c) { return (c & 0x10000) != 0; }
         // Their camera's field of view in degrees (vertical), or 0 for the game's own (packets.hpp's codes).
-        inline float field_of_view(uint16_t c) {
-            const int code = c >> 10;
+        inline float field_of_view(uint32_t c) {
+            const int code = (c >> 10) & 0x3F;
             return code == 0 ? 0.0f : (float)(34 + (code < 46 ? code : 46));
         }
         // The code for a setting in degrees (0 for none).
-        inline uint16_t field_of_view_code(double degrees) {
+        inline uint32_t field_of_view_code(double degrees) {
             if (!(degrees > 0.0)) return 0;
             const double clamped = degrees < 35.0 ? 35.0 : degrees > 80.0 ? 80.0 : degrees;
-            return (uint16_t)((int)(clamped + 0.5) - 34);
+            return (uint32_t)((int)(clamped + 0.5) - 34);
         }
         // Every setting's default (the stick's Invert Y), for a port with no player and recordings from before.
-        constexpr uint16_t default_controls = 0x0200;
+        constexpr uint32_t default_controls = 0x0200;
         // This machine's player's (look_aim.cpp, from their settings).
-        uint16_t local_controls();
+        uint32_t local_controls();
 #if defined(CONKER_NETPLAY)
         // From the input thread, after each poll: adds its movement for the next read.
         void on_input_poll();
@@ -141,14 +143,24 @@ namespace conker {
         bool take_aim(int port, Turn& out);
         bool take_orbit(int port, Turn& out);
         // A port's Controls at the current read (the defaults for a port with no player).
-        uint16_t controls(int port);
+        uint32_t controls(int port);
+        // Aiming: Swap Sticks (look_aim.cpp): a port's camera ran an aiming mode (game thread); whether it did at
+        // this read or the two before (any thread).
+        void note_aim(int port);
+        bool aimed_lately(int port);
+        // The port this machine's controller `controller` (0 to 3) plays: its player's in a netplay match (-1 for
+        // none), otherwise its own.
+        int local_port(int controller);
         // For save states (host_state.cpp): the current read's movement and what took it.
         std::vector<uint32_t> state();
         void set_state(const std::vector<uint32_t>& words);
 #else
         inline bool take_aim(int, Turn&) { return false; }
         inline bool take_orbit(int, Turn&) { return false; }
-        inline uint16_t controls(int) { return default_controls; }
+        inline uint32_t controls(int) { return default_controls; }
+        inline void note_aim(int) {}
+        inline bool aimed_lately(int) { return false; }
+        inline int local_port(int controller) { return controller; }
 #endif
     }
 
@@ -171,6 +183,12 @@ namespace conker {
         void start(uint8_t* rdram);
         void finish();
         bool replaying();
+        // Whether every player sees only their own view of the split screen: a match's rule (the host's), a
+        // replay's (its recording's), or --own-view's. It changes the game's culls (netplay/view.cpp).
+        bool own_view_rule();
+        // The ports whose views are shown two to a window under that rule (bit n: port n; each machine with two
+        // players'): a match's (Start), a replay's, or --view-pairs'. It changes their culls too.
+        uint8_t view_pairs();
         // While recording, replaying or hashing, the game sees fixed controllers (--ports, no paks).
         bool fixes_ports();
         ultramodern::input::connected_device_info_t connected_device_info(int controller_num);
@@ -263,7 +281,8 @@ namespace conker {
         // Aiming: Swap Sticks (issue #84): whether a player (0 to 3) is aiming now (either aiming mode
         // ran for their camera in the last few frames) with the setting on, so their controller's sticks
         // are swapped (frontend.cpp): the right stick aims and the left moves. Not with recompinput's own
-        // multiplayer mode (players assigned in its menus), which maps each controller itself.
+        // multiplayer mode (players assigned in its menus), which maps each controller itself. While the harness
+        // is used, by each player's own setting (their Controls) and the reads since they aimed (motion.cpp).
         bool swap_sticks_now(int player = 0);
         // Whether the player's character is aiming the shotgun (state 0x3B), where Z (the laser sight) makes
         // C-Left and C-Right turn the aim: the swapped left stick leaves them out while Z is held (frontend.cpp).
