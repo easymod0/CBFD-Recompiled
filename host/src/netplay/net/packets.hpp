@@ -18,14 +18,14 @@
 
 namespace conker::netplay {
     // Changes whenever any packet's layout or meaning does: peers with another one are refused.
-    constexpr uint16_t protocol_version = 9;
+    constexpr uint16_t protocol_version = 10;
     // The game's controller ports.
     constexpr int max_players = 4;
     // The most reads an Inputs packet carries: a peer catching up can send several at once. (Inputs are
     // sent reliably, so none is lost: lockstep can't go on without every one.)
     constexpr int input_window = 8;
     // The largest packet, to size buffers.
-    constexpr size_t max_packet_size = 160;
+    constexpr size_t max_packet_size = 288;
     // The most reads a peer's own pads are sent ahead of the game (the input delay).
     constexpr int max_delay = 8;
 
@@ -120,10 +120,16 @@ namespace conker::netplay {
         std::array<Motion, input_window> motions{};
         bool operator==(const Inputs&) const = default;
     };
-    // The XXH3-64 of the game's memory as the sender made read `read`.
+    // The game's memory in regions of this size for the desync check: a Hash names the regions, so a desync
+    // says where the games went different ways (8 MB in 128).
+    constexpr uint32_t memory_region_size = 64 * 1024;
+    constexpr int memory_regions = 128;
+    // The XXH3-64 of the game's memory as the sender made read `read`, and each region's, cut to its low 16
+    // bits (enough to tell which differ, once the whole hash says something does).
     struct Hash {
         uint32_t read = 0;
         uint64_t hash = 0;
+        std::array<uint16_t, memory_regions> regions{};
         bool operator==(const Hash&) const = default;
     };
     // Host to everyone, once every port is taken: the match starts, with this many players, whether every

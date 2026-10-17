@@ -58,7 +58,12 @@ int main() {
     CHECK(round_trips(Welcome{ 0x0E, 4 }, 7));      // three players on one machine
     CHECK(round_trips(Refuse{ Reason::rom }, 6));
     CHECK(round_trips(some_inputs(), 155));
-    CHECK(round_trips(Hash{ 4000000000u, 0xFEDCBA9876543210ull }, 17));
+    CHECK(round_trips(Hash{ 4000000000u, 0xFEDCBA9876543210ull }, 273));
+    Hash regions{ 30, 1 };
+    for (int i = 0; i < memory_regions; i++) regions.regions[i] = (uint16_t)(0x0101 * i + 7);
+    CHECK(round_trips(regions, 273));
+    const std::vector<uint8_t> hash = bytes_of(regions);
+    CHECK(hash[17] == 7 && hash[18] == 0 && hash[19] == 8 && hash[20] == 1 && hash[271] == 0x86 && hash[272] == 0x7F);
     CHECK(round_trips(Bye{ Reason::desync }, 6));
     CHECK(round_trips(Start{ 3, 0 }, 9));
     CHECK(round_trips(Start{ 4, 1, max_delay }, 9));

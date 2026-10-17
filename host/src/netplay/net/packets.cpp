@@ -12,7 +12,7 @@
 //              (s16 mouse x, y, s16 gyro x, y, s8 wheel, u32 controls: only
 //              valid_controls: a field of view code up to fov_codes, no bit past 16); the unused ones zero, and the last read not past
 //              2^32 - 1
-//   5 Hash     u32 read, u64 hash                                                     17 bytes
+//   5 Hash     u32 read, u64 hash, 128 u16 region hashes                             273 bytes
 //   6 Bye      u8 reason                                                               6 bytes
 //   7 Start    u8 players (2 to 4), u8 own view (0 or 1), u8 delay (0 to 8), u8 pairs  9 bytes
 //              (ports below players, an even number of them)
@@ -36,13 +36,13 @@ namespace conker::netplay {
                 case welcome: return header_size + 2;
                 case refuse: return header_size + 1;
                 case inputs: return header_size + 6 + input_window * (pad_size + motion_size);
-                case hash: return header_size + 12;
+                case hash: return header_size + 12 + 2 * memory_regions;
                 case bye: return header_size + 1;
                 case start: return header_size + 4;
             }
             return 0;
         }
-        static_assert(size_of(inputs) <= max_packet_size);
+        static_assert(size_of(inputs) <= max_packet_size && size_of(hash) <= max_packet_size);
 
         bool valid_reason(Reason reason) {
             return (uint8_t)reason >= 1 && (uint8_t)reason <= last_reason;
@@ -178,6 +178,9 @@ namespace conker::netplay {
             else if constexpr (std::is_same_v<T, Hash>) {
                 w.u32(p.read);
                 w.u64(p.hash);
+                for (uint16_t region : p.regions) {
+                    w.u16(region);
+                }
             }
             else if constexpr (std::is_same_v<T, Start>) {
                 w.u8(p.players);
@@ -248,6 +251,9 @@ namespace conker::netplay {
                 Hash p;
                 p.read = r.u32();
                 p.hash = r.u64();
+                for (uint16_t& region : p.regions) {
+                    region = r.u16();
+                }
                 packet = p;
                 break;
             }

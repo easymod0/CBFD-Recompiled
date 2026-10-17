@@ -18,14 +18,18 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <filesystem>
 #include <map>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
 
+#include "librecomp/game.hpp"
 #include "librecomp/save_states.hpp"
 
+#include "hello.hpp"
 #include "net/session.hpp"
 
 // The runtime's flag for the program quitting (ultramodern::quit), set before it waits for the game's
@@ -70,6 +74,7 @@ namespace {
     conker::netplay::Session* session = nullptr;
     uint8_t own_ports = 0;          // bit n: port n
     int match_players = 0;
+    conker::netplay::Hello sent;    // what this peer said in the handshake (begin's)
     bool initial_sent = false;
     bool ended = false;         // the match is over for this peer: nothing more is sent
     bool left = false;
@@ -96,10 +101,18 @@ namespace {
     // ended every game thread, and by then the others have long given up on this peer (the game thread
     // may be waiting in on_read for pads that won't come, as they're waiting for this one's).
     std::thread quit_watcher;
-    // This peer's hashes, and those of the others (the host's for a joiner, every joiner's for the host),
-    // until they're compared.
-    std::map<uint32_t, uint64_t> own_hashes;
-    std::map<std::pair<int, uint32_t>, uint64_t> their_hashes;
+    // This peer's hashes (the memory's, and each region's), and those of the others (the host's for a
+    // joiner, every joiner's for the host), until they're compared.
+    struct OwnHash {
+        uint64_t hash = 0;
+        std::array<uint64_t, conker::netplay::memory_regions> regions{};
+    };
+    std::map<uint32_t, OwnHash> own_hashes;
+    std::map<std::pair<int, uint32_t>, Hash> their_hashes;
+    // on_read's, while it runs: the memory kept for a desync report.
+    const conker::lockstep::Memory* memory_now = nullptr;
+    // A desync report holds each player's inputs for this many reads up to the desync's.
+    constexpr uint32_t report_reads = 120;
 
     double now() {
         using namespace std::chrono;
@@ -143,6 +156,111 @@ namespace {
         ended = true;
     }
 
+    std::string hex(uint64_t value, int digits = 16) {
+        char text[17];
+        std::snprintf(text, sizeof(text), "%0*llx", digits, (unsigned long long)value);
+        return text;
+    }
+
+    // The regions of memory whose hashes differ (by the 16 bits a Hash carries).
+    std::vector<int> differing_regions(const OwnHash& own, const Hash& theirs) {
+        std::vector<int> regions;
+        for (int i = 0; i < conker::netplay::memory_regions; i++) {
+            if ((uint16_t)own.regions[i] != theirs.regions[i]) {
+                regions.push_back(i);
+            }
+        }
+        return regions;
+    }
+
+    // The game's addresses a region covers, as "0x80400000-0x8040FFFF".
+    std::string region_addresses(int region) {
+        const uint32_t start = 0x80000000u + (uint32_t)region * conker::netplay::memory_region_size;
+        return "0x" + hex(start, 8) + "-0x" + hex(start + conker::netplay::memory_region_size - 1, 8);
+    }
+
+    // Writes this peer's desync report (lockstep.hpp) for a difference from `port`'s at `read`, and the memory
+    // kept at that read beside it. Its path, or empty if it couldn't.
+    std::string write_report(int port, uint32_t read, const OwnHash& own, const Hash& theirs, const std::vector<int>& regions) {
+        std::error_code error;
+        const std::filesystem::path folder = recomp::get_config_path() / "netplay-desyncs";
+        std::filesystem::create_directories(folder, error);
+        char stamp[32];
+        const std::time_t time = std::time(nullptr);
+        std::strftime(stamp, sizeof(stamp), "%Y%m%d-%H%M%S", std::localtime(&time));
+        const std::string name = std::string("desync-") + stamp + "-read" + std::to_string(read) + "-port" +
+            std::to_string(std::countr_zero(own_ports) + 1);
+        const std::filesystem::path path = folder / (name + ".json");
+        const bool dumped = memory_now != nullptr && memory_now->dump(read, (folder / (name + ".bin")).string());
+        FILE* file = std::fopen(path.string().c_str(), "w");
+        if (file == nullptr) {
+            std::fprintf(stderr, "[netplay] %s: couldn't create the desync report\n", path.string().c_str());
+            return {};
+        }
+        std::fprintf(file, "{\n  \"report\": \"Conker netplay desync\",\n  \"version\": 1,\n");
+        std::fprintf(file, "  \"read\": %u,\n  \"ports\": [", read);
+        for (int p = 0, n = 0; p < conker::netplay::max_players; p++) {
+            if ((own_ports & (1u << p)) != 0) std::fprintf(file, "%s%d", n++ == 0 ? "" : ", ", p + 1);
+        }
+        std::fprintf(file, "],\n  \"compared_with_port\": %d,\n", port + 1);
+        std::fprintf(file, "  \"build_id\": \"%s\",\n  \"build\": \"%s\",\n  \"rom\": \"%s\",\n  \"profile\": \"%s\",\n  \"mods\": \"%s\",\n",
+            conker::netplay::build_id(), hex(sent.build).c_str(), hex(sent.rom).c_str(), hex(sent.profile).c_str(), hex(sent.mods).c_str());
+        std::fprintf(file, "  \"players\": %d,\n  \"input_delay\": %d,\n  \"own_view\": %s,\n  \"view_pairs\": %u,\n",
+            match_players, delay, match_own_view ? "true" : "false", match_pairs);
+        std::fprintf(file, "  \"hash\": \"%s\",\n  \"their_hash\": \"%s\",\n  \"differing_regions\": [",
+            hex(own.hash).c_str(), hex(theirs.hash).c_str());
+        for (size_t i = 0; i < regions.size(); i++) std::fprintf(file, "%s%d", i == 0 ? "" : ", ", regions[i]);
+        std::fprintf(file, "],\n  \"region_size\": %u,\n  \"regions\": [", conker::netplay::memory_region_size);
+        for (int i = 0; i < conker::netplay::memory_regions; i++) {
+            std::fprintf(file, "%s\"%s\"", i == 0 ? "" : i % 4 == 0 ? ",\n    " : ", ", hex(own.regions[i]).c_str());
+        }
+        std::fprintf(file, "],\n  \"their_regions\": [");
+        for (int i = 0; i < conker::netplay::memory_regions; i++) {
+            std::fprintf(file, "%s\"%s\"", i == 0 ? "" : i % 8 == 0 ? ",\n    " : ", ", hex(theirs.regions[i], 4).c_str());
+        }
+        std::fprintf(file, "],\n  \"memory\": %s,\n", dumped ? ("\"" + name + ".bin\"").c_str() : "null");
+        // Each player's input for the reads up to the desync's (the reads before it made the memory compared;
+        // the read's own is given after): [buttons, stick x, stick y, mouse x, y, gyro x, y, wheel, Controls].
+        const uint32_t first = read > report_reads ? read - report_reads : 0;
+        std::fprintf(file, "  \"inputs_from_read\": %u,\n  \"inputs\": [", first);
+        for (int p = 0; p < match_players; p++) {
+            std::fprintf(file, "%s\n    [", p == 0 ? "" : ",");
+            for (uint32_t r = first; r <= read && r < received[p].size(); r++) {
+                const Input& in = received[p][r];
+                std::fprintf(file, "%s[%u, %d, %d, %d, %d, %d, %d, %d, %u]", r == first ? "" : (r - first) % 4 == 0 ? ",\n     " : ", ",
+                    in.pad.buttons, in.pad.stick_x, in.pad.stick_y, in.motion.mouse_x, in.motion.mouse_y,
+                    in.motion.gyro_x, in.motion.gyro_y, in.motion.wheel, in.motion.controls);
+            }
+            std::fprintf(file, "]");
+        }
+        std::fprintf(file, "\n  ]\n}\n");
+        if (std::fclose(file) != 0) {
+            std::fprintf(stderr, "[netplay] %s: couldn't write the desync report\n", path.string().c_str());
+            return {};
+        }
+        std::printf("[netplay] desync report written to %s%s\n", path.string().c_str(), dumped ? " (and its memory)" : "");
+        return path.string();
+    }
+
+    // The game's memory at `read` isn't `port`'s: says where, writes the report, and ends the match.
+    void desync(int port, uint32_t read, const OwnHash& own, const Hash& theirs) {
+        const std::vector<int> regions = differing_regions(own, theirs);
+        std::string where;
+        for (size_t i = 0; i < regions.size() && i < 8; i++) {
+            where += (i == 0 ? "" : ", ") + std::to_string(regions[i]) + " (" + region_addresses(regions[i]) + ")";
+        }
+        if (regions.size() > 8) where += " and " + std::to_string(regions.size() - 8) + " more";
+        std::printf("[netplay] desync at read %u: port %d's game memory isn't this one's (%016llx, here %016llx), in %s\n",
+            read, port + 1, (unsigned long long)theirs.hash, (unsigned long long)own.hash,
+            regions.empty() ? "no region the region hashes tell apart" : ((regions.size() == 1 ? "region " : "regions ") + where).c_str());
+        const std::string report = write_report(port, read, own, theirs, regions);
+        std::string why = "the games went different ways (a desync)";
+        if (!report.empty()) {
+            why += ". A report is in " + report + ": please send it, with the other players' reports, when you report the problem";
+        }
+        end_match(Reason::desync, why.c_str());
+    }
+
     // Compares every hash that both sides have for the same read. Peers are never more than the input
     // delay apart, so this peer's own are kept only for the last few comparisons.
     void compare_hashes() {
@@ -152,16 +270,23 @@ namespace {
                 ++it;
                 continue;
             }
-            if (own->second != it->second) {
-                std::printf("[netplay] desync at read %u: port %d's game memory isn't this one's (%016llx, here %016llx)\n",
-                    it->first.second, it->first.first + 1, (unsigned long long)it->second, (unsigned long long)own->second);
-                end_match(Reason::desync, "the games went different ways (a desync)");
+            if (own->second.hash != it->second.hash) {
+                desync(it->first.first, own->first, own->second, it->second);
                 return;
             }
             it = their_hashes.erase(it);
         }
         while (own_hashes.size() > 8) {
             own_hashes.erase(own_hashes.begin());
+        }
+    }
+
+    // A peer found a desync. Its hash for that read came before its goodbye, so if this peer's game is the
+    // one it differs from, the comparison finds it here too (and writes this peer's report).
+    void other_desynced() {
+        compare_hashes();
+        if (!ended) {
+            end_match(Reason::desync, "a player's game went a different way (a desync)");
         }
     }
 
@@ -178,7 +303,7 @@ namespace {
                 }
                 gone_silently = gone_silently || event.reason == Reason::timeout;
                 if (event.reason == Reason::desync) {
-                    end_match(Reason::desync, "a player's game went a different way (a desync)");
+                    other_desynced();
                 }
                 break;
             case Event::Type::ended:
@@ -193,7 +318,7 @@ namespace {
                 gone_silently = gone_silently || event.reason == Reason::timeout;
                 left = true;
                 if (event.reason == Reason::desync) {
-                    end_match(Reason::desync, "a player's game went a different way (a desync)");
+                    other_desynced();
                 }
                 break;
             case Event::Type::packet:
@@ -216,7 +341,7 @@ namespace {
                         return;
                     }
                     if (own_hashes.empty() || hash->read >= own_hashes.begin()->first) {
-                        their_hashes[{ event.port, hash->read }] = hash->hash;
+                        their_hashes[{ event.port, hash->read }] = *hash;
                     }
                 }
                 break;
@@ -421,7 +546,6 @@ namespace {
     int joined = 0;             // host: the players in so far, the host too
     double connecting_since = 0;
     bool match_started = false;
-    conker::netplay::Hello sent;
 }
 
 bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
@@ -645,8 +769,12 @@ uint8_t conker::lockstep::view_pairs() {
 }
 
 bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, netplay::Motion* motions, const InputSource& source,
-    const std::function<uint64_t()>& hash, uint8_t* rdram) {
+    const Memory& memory, uint8_t* rdram) {
     std::unique_lock lock(session_mutex);
+    struct MemoryNow {
+        MemoryNow(const Memory& memory) { memory_now = &memory; }
+        ~MemoryNow() { memory_now = nullptr; }
+    } memory_while_here(memory);
     if (ended || stopping) {
         return false;
     }
@@ -683,9 +811,14 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, net
         std::printf("[netplay] read %llu: game memory changed, as --netplay-desync-at asked\n", (unsigned long long)read);
     }
     if (read % hash_every == 0) {
-        const uint64_t h = hash();
-        own_hashes[(uint32_t)read] = h;
-        session->send(Hash{ (uint32_t)read, h });
+        OwnHash& own = own_hashes[(uint32_t)read];
+        own.hash = memory.hash();
+        own.regions = memory.keep(read);
+        Hash sent_hash{ (uint32_t)read, own.hash };
+        for (int i = 0; i < netplay::memory_regions; i++) {
+            sent_hash.regions[i] = (uint16_t)own.regions[i];
+        }
+        session->send(sent_hash);
     }
 
     const double since = now();

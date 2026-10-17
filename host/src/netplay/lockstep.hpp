@@ -2,7 +2,10 @@
 // it every player's pad for that read, so the same inputs give each the same game. A peer's own pad is
 // sent a few reads ahead (the input delay) to hide the time it takes to arrive; the game waits at a read
 // until every pad for it is there. Every so often the peers compare hashes of the game's memory, and a
-// difference ends the match (a desync).
+// difference ends the match (a desync). Each peer that finds one writes a report, to find its cause: in
+// netplay-desyncs/ in the game's data folder, desync-<date>-<time>-read<n>-port<p>.json (the read, the
+// regions of memory that differ, the build, settings and the last inputs; tools/netplay/compare_desyncs.py
+// compares two peers') and its memory at that read beside it (.bin, as the harness's --dump-at writes it).
 //
 // Part of the harness (harness.cpp), which gives it the deterministic timeline, the settings profile
 // and an empty save on each peer. For now it's started from the command line (the menu is #9):
@@ -22,8 +25,8 @@
 //   --input-delay <reads|auto>   (hosting) how many reads ahead each peer's own pads are sent, 0 to 8, or
 //                                auto (the default): chosen from the round trips to the players as the
 //                                match starts. The host tells everyone (Start)
-//   --netplay-desync-at <read>   (a test) changes a byte of game memory at that read, which the next
-//                                hash comparison must catch
+//   --netplay-desync-at <read>   (a test) changes a byte of game memory at that read (in region 64,
+//                                0x80400003), which the next hash comparison must catch
 //
 // The game waits at its start for every player to join. With --replay, each peer's own pads come from
 // its ports in the recording instead of its controllers: peers replaying the same recording give the
@@ -98,12 +101,21 @@ namespace conker::lockstep {
     // the controllers give now, or is null for the reads before the first (sent at the start, as nobody has
     // played yet).
     using InputSource = std::function<Input(uint64_t for_read, const ultramodern::input::Pad* live, int local)>;
+    // The game's memory as a read is made (the harness's), for the desync check.
+    struct Memory {
+        // Its XXH3-64.
+        std::function<uint64_t()> hash;
+        // Each region's XXH3-64 (netplay::memory_region_size each), keeping a copy for a report (the last two).
+        std::function<std::array<uint64_t, netplay::memory_regions>(uint64_t read)> keep;
+        // Writes the copy kept at `read` to `path`, as --dump-at does (false: none, or it couldn't).
+        std::function<bool(uint64_t read, const std::string& path)> dump;
+    };
     // At controller read `read`, on the game thread: sends this peer's players' input for read + delay, waits for
-    // every player's for `read` and puts them in `pads` and `motions` (4 each), and compares the memory hash
-    // (`hash` is called for it every so often). False if the match has ended (a message was printed): the
+    // every player's for `read` and puts them in `pads` and `motions` (4 each), and compares the memory's
+    // hashes (`memory` gives them every so often). False if the match has ended (a message was printed): the
     // game can't go on.
     bool on_read(uint64_t read, ultramodern::input::Pad* pads, netplay::Motion* motions, const InputSource& source,
-        const std::function<uint64_t()>& hash, uint8_t* rdram);
+        const Memory& memory, uint8_t* rdram);
     // Ends the match for `reason`, saying `why` (the reason is the peers').
     void end(netplay::Reason reason, const char* why);
     // Why the match ended, in a sentence for the player (after on_read returned false).

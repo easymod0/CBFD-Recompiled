@@ -24,7 +24,9 @@
 #              of a match of two must match its solo replay
 #   jittery    the same with input delay 0 and random sleeps (--jitter 500) on the joiner, so the two
 #              are out of step and wait for each other all the time
-#   desync     the host changes a byte of its memory at read 300: both must stop for a desync
+#   desync     the host changes a byte of its memory at read 300: both must stop for a desync, and each
+#              write a desync report naming the region changed (64, at 0x80400000) with its memory, which
+#              compare_desyncs.py must find the byte in
 # It exits 0 if all is as it should be, 1 if not. The logs are kept in --out; without it they're in a
 # temporary folder, deleted if all passed. The data folders it makes for the copies (about 1 GB in all) are
 # always deleted. As in check.sh, a run is judged by what it prints and then stopped. It uses UDP ports
@@ -322,7 +324,25 @@ if finish "the netplay match is over" desync-host desync-join; then
             echo "  $name stopped, but not for a desync"
             failed=1
         fi
+        # Its report: the changed byte is half way into game memory, region 64.
+        report=$(ls "$OUT/data-$name/netplay-desyncs/"desync-*.json 2>/dev/null | head -n 1)
+        if [ -z "$report" ]; then
+            echo "  $name wrote no desync report"
+            failed=1
+        elif ! python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); sys.exit(r["differing_regions"] != [64] or not r["memory"])' "$report"; then
+            echo "  $name's report doesn't name region 64 alone, or has no memory: $report"
+            failed=1
+        fi
     done
+    reports=$(ls "$OUT"/data-desync-host/netplay-desyncs/desync-*.json "$OUT"/data-desync-join/netplay-desyncs/desync-*.json 2>/dev/null)
+    # shellcheck disable=SC2086
+    if python3 tools/netplay/compare_desyncs.py $reports > "$OUT/desync-compare.out" 2>&1 &&
+        grep -q '^regions that differ: 1$' "$OUT/desync-compare.out" && grep -q '^  0x80400003-0x80400003 (' "$OUT/desync-compare.out"; then
+        echo "  the reports compare: $(grep -A1 '^ranges of memory that differ' "$OUT/desync-compare.out" | tail -n 1 | sed 's/^ *//')"
+    else
+        echo "  the reports don't compare as they should (desync-compare.out)"
+        failed=1
+    fi
 else
     failed=1
 fi

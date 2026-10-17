@@ -200,6 +200,20 @@ this player's own, which matters for the mouse. Every
 30 reads the peers compare hashes of the game's memory, and a difference ends the match as a desync.
 Each peer starts from boot with an empty save, on the timeline and with the settings profile.
 
+**Desync reports.** The hash a peer sends comes with a hash of each 64 KB region of memory (128 of them,
+16 bits each), so a desync names the regions that differ. Each peer whose game differs from another's
+writes a report to `netplay-desyncs/` in the game's data folder, and tells the player where:
+`desync-<date>-<time>-read<n>-port<p>.json` holds the read, the regions, the build, ROM, settings profile
+and match settings, every region's full hash, and each player's last 120 reads of input (pads, movement
+and Controls); `.bin` beside it is the game's memory at that read (8 MB, as `--dump-at` writes it). With
+the other player's report, `compare_desyncs.py` checks they're comparable (same build, read and inputs)
+and names the ranges of memory that differ:
+
+    tools/netplay/compare_desyncs.py desync-...-port1.json desync-...-port2.json
+
+In a match of three or four the joiners only compare with the host, so the reports come from the host
+and the player whose game went another way.
+
     ConkerRecomp --netplay-host 27015 --netplay-address 203.0.113.7 --players 2   (prints the join code)
     ConkerRecomp --netplay-join SC07-21V9-GW0J-6HB7-H6NW-VVTT                    (the host's code)
 
@@ -247,15 +261,17 @@ gets exactly the game a replay alone does (each copy's recording has the other's
 only does if the pads came over the network), with input delay 0 and `--jitter` on one side too; a
 3-player Deathmatch where everyone moves their mouse and aims, at the automatic delay (through the
 host's relay); the same match with two players on one copy (the host's, then a joiner's); and that a
-desync (`--netplay-desync-at <read>`) is caught. About 50 s.
+desync (`--netplay-desync-at <read>`, which changes a byte in region 64) is caught, with reports that name
+the region and compare to that byte. About 60 s.
 
 ## The scripts
 
 | Script | |
 |---|---|
 | `check.sh` | the determinism check: replays a made-up recording headless twice, with `--jitter` and with `--state-test`, and fails unless all four give the same hashes (about 30 s; the CI runs it, `.github/workflows/netplay.yml`) |
-| `lockstep.sh` | the lockstep check: copies in a match over loopback give the same game as a replay alone (2 players, 3 with the mouse, and 3 with two on one copy), and a desync is caught (about 50 s) |
+| `lockstep.sh` | the lockstep check: copies in a match over loopback give the same game as a replay alone (2 players, 3 with the mouse, and 3 with two on one copy), and a desync is caught and reported (about 60 s) |
 | `compare_hashes.py` | the first read two hash logs differ at (it exits 1 if they differ); with dumps, the ranges that differ, by data symbol |
+| `compare_desyncs.py` | two peers' desync reports: whether they're comparable, the regions and (with their memory) the ranges that differ, by data symbol |
 | `make_match.py` | a recording that plays from boot into a multiplayer match (`--mode`, `--players`, `--variant`, `--pause`; `--mouse` has everyone move, aim and use their mouse and gyro), the same every time: for looking at multiplayer (split screen, "my view only") without the menus |
 | `shot.sh` | replays a recording in a window as fast as it goes and saves a screenshot of its end (X11; `SDL_VIDEODRIVER=x11` under Wayland), e.g. `make_match.py heist.pads --mode heist && shot.sh heist.pads heist.png --my-view-only` |
 | `xwin.py` | drives a game window from a script: screenshots, clicks, keys (X11, python-xlib) |
