@@ -64,6 +64,7 @@ namespace {
         int players = 2;
         bool hosting = false;               // a match is hosted (connecting, as the host)
         bool own_view_for_everyone = true;  // hosting: the match's screens rule
+        int input_delay = -1;               // hosting: reads, or -1 for auto
         std::string port_text = std::to_string(default_port);
         std::string address_text;
         std::string join_text;
@@ -167,7 +168,7 @@ namespace {
                 set_state(State::idle, "Give your address first: the join code is made from it.");
                 return;
             }
-            conker::lockstep::set_host(port, players, own_view_for_everyone);
+            conker::lockstep::set_host(port, players, own_view_for_everyone, input_delay);
             hosting = true;
             begin();
             show_code();
@@ -270,6 +271,18 @@ namespace {
             screens_radio->add_option("Players choose");
             screens_radio->set_index(0);
             screens_radio->add_index_changed_callback([this](uint32_t index) { own_view_for_everyone = index == 0; });
+            recompui::Element* delay_row = row(host);
+            text(delay_row, "Input delay", Typography::LabelMD);
+            recompui::Radio* delay_radio = context.create_element<recompui::Radio>(delay_row);
+            delay_radio->add_option("Auto");
+            for (int reads = 0; reads <= 4; reads++) {
+                delay_radio->add_option(std::to_string(reads));
+            }
+            delay_radio->set_index(0);
+            delay_radio->add_index_changed_callback([this](uint32_t index) { input_delay = (int)index - 1; });
+            text(host, "Input delay: how many frames late everyone's input (the mouse too) reaches the game, so it "
+                "arrives in time. Auto picks it from how far away the players are as the match starts: 0 on a "
+                "local network. Raise it if the game stutters waiting for a player.", Typography::Body, color::TextDim);
             recompui::Element* code_row = row(host);
             code_label = text(code_row, "", Typography::LabelMD);
             copy_button = context.create_element<recompui::Button>(code_row, "Copy", recompui::ButtonStyle::Tertiary);

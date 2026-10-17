@@ -209,18 +209,32 @@ namespace conker::netplay {
         return true;
     }
 
-    bool Session::start(bool own_view) {
+    bool Session::start(bool own_view, int delay) {
         const int joined = (int)std::count_if(peers.begin(), peers.end(), [](const Peer& p) { return p.port >= 0; });
-        if (!is_host || !entry_open || joined + 1 != match_players) {
+        if (!is_host || !entry_open || joined + 1 != match_players || delay < 0 || delay > max_delay) {
             return false;
         }
         entry_open = false;
+        const Start start{ (uint8_t)match_players, (uint8_t)(own_view ? 1 : 0), (uint8_t)delay };
         for (const Peer& peer : peers) {
             if (peer.port >= 0) {
-                send_to(peer.connection, Start{ (uint8_t)match_players, (uint8_t)(own_view ? 1 : 0) });
+                send_to(peer.connection, start);
             }
         }
         return true;
+    }
+
+    std::vector<int> Session::round_trips_ms() const {
+        std::vector<int> out;
+        for (const Peer& peer : peers) {
+            SteamNetConnectionRealTimeStatus_t status;
+            if (peer.port >= 0 &&
+                SteamNetworkingSockets()->GetConnectionRealTimeStatus(peer.connection, &status, 0, nullptr) == k_EResultOK &&
+                status.m_nPing >= 0) {
+                out.push_back(status.m_nPing);
+            }
+        }
+        return out;
     }
 
     std::string Session::join_code(const std::string& address) const {
@@ -452,6 +466,7 @@ namespace conker::netplay {
             started = true;
             Event event{ Event::Type::started };
             event.own_view = start->own_view != 0;
+            event.delay = start->delay;
             events.push_back(std::move(event));
         }
         else if (const Inputs* inputs = std::get_if<Inputs>(&packet); inputs != nullptr) {

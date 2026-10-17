@@ -3,12 +3,15 @@
 // so that two runs on two machines, or in a window and headless, are given the same game. Each setting's
 // reader checks conker::netplay_profile::active() and uses the profile's value:
 //
-//   Off: the mouse and gyro (in R-Look, the aiming modes, the free camera and the bank's leaps), Mouse:
-//     Turn the Camera, Right Stick: Free Camera, Aiming: Swap Sticks (look_aim.cpp, mouse_camera.cpp):
-//     they move the camera in the game's memory from input the recording doesn't hold, or by the time.
-//   At their defaults (as headless, which has no settings): the Camera tab's (Field of View, Invert
-//     Turning, Turning Speed, the stick's aiming, Lock-On), Conker's Detail (Always Highest), Cutscene
-//     Aspect Ratio (Expand), and the sound volumes (100%, as they're set in the game's synthesizer).
+//   Each player's own: the mouse and gyro in R-Look, the aiming modes and the orbit camera, and the
+//     settings that change what they and the stick do there (responses, inverts, Mouse: Turn the Camera):
+//     their movement is part of each read's input, with their settings (their Controls) as they are at
+//     that read (motion.cpp). Not part of the profile.
+//   Off: Right Stick: Free Camera, Aiming: Swap Sticks and the mouse in the bank's leaps (look_aim.cpp,
+//     mouse_camera.cpp): single player's, and the first two go by the time between frames.
+//   At their defaults (as headless, which has no settings): the Camera tab's others (Field of View, Invert
+//     Turning, Turning Speed, Lock-On), Conker's Detail (Always Highest), Cutscene Aspect Ratio (Expand),
+//     and the sound volumes (100%, as they're set in the game's synthesizer).
 //   Widescreen: the culls and sprites are widened for 16:9, whatever the window's size and the aspect
 //     ratio setting (widescreen.cpp). A wider window can lose a little at its sides.
 //   Save states (F5, F7): off.
@@ -54,8 +57,8 @@ namespace {
     bool on = false;
 
     constexpr const char* profile_text =
-        "conker netplay profile 2\n"
-        "mouse off; gyro off; mouse camera off; stick free camera off; swap sticks off\n"
+        "conker netplay profile 3\n"
+        "mouse, gyro and their settings each player's own; stick free camera off; swap sticks off\n"
         "camera tab defaults; conker detail always highest; cutscene aspect expand; volumes 100\n"
         "widescreen culls 16:9\n"
         "save states off; mods off, texture packs free\n"

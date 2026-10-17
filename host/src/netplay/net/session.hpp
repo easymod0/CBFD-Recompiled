@@ -6,17 +6,20 @@
 // buffers little from each peer.
 //
 // The handshake: a joiner sends Hello (the match's key, then build, ROM, settings profile and mods
-// hashes) within 3 s. The host closes a wrong key at once, telling it nothing else; then it refuses any
-// other difference, or a full or started match, and otherwise gives it the lowest free port (the host is
-// port 0) with Welcome. Once every port is taken, the host starts the match (Start). Then each peer sends its own port's pads (Inputs) and memory hashes (Hash) to
-// the host, which passes Inputs on to the others: the host is the hub, so joiners only ever connect to
-// it. A peer that sends anything else (another port's inputs, a second Hello) is dropped.
+// hashes) within 3 s. The host closes a wrong key at once, telling it nothing
+// else; then it refuses any other difference, or a full or started match, and otherwise gives it the
+// lowest free port (the host is port 0) with Welcome. Once every port is taken, the host starts the match
+// (Start: with the input delay). Then each peer sends its own port's pads and
+// movement (Inputs) and memory hashes (Hash) to the host, which passes Inputs on to the others: the host is
+// the hub, so joiners only ever connect to it. A peer that sends anything else (another port's inputs, a
+// second Hello) is dropped.
 //
 // Single-threaded: call poll() often (each controller read, or in a loop) from one thread; it runs the
 // library's callbacks and returns what happened.
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -37,6 +40,7 @@ namespace conker::netplay {
         int port = -1;
         int players = 0;
         bool own_view = false;  // started: the host's rule that every player sees only their own view
+        int delay = 0;          // started: the match's input delay
         Reason reason = Reason::quit;
         std::string detail;     // the library's account of a closed connection, for the log
         Packet packet;
@@ -65,8 +69,12 @@ namespace conker::netplay {
         // Joins the host by its join code (`me`'s key is the code's).
         bool join(const std::string& code, const Hello& me, std::string& error);
         // Host: once every port is taken (false until then), starts the match: tells the joiners, and
-        // refuses any more. `own_view`: every player sees only their own view (the match's rule).
-        bool start(bool own_view = false);
+        // refuses any more. `own_view`: every player sees only their own view (the match's rule); `delay`:
+        // the input delay everyone uses.
+        bool start(bool own_view = false, int delay = 2);
+        // Host: the round trip to each joiner, in milliseconds, as the library measures it (none it doesn't
+        // know yet), for choosing the input delay.
+        std::vector<int> round_trips_ms() const;
 
         // What has happened since the last poll.
         std::vector<Event> poll();

@@ -18,14 +18,16 @@
 
 namespace conker::netplay {
     // Changes whenever any packet's layout or meaning does: peers with another one are refused.
-    constexpr uint16_t protocol_version = 4;
+    constexpr uint16_t protocol_version = 7;
     // The game's controller ports.
     constexpr int max_players = 4;
     // The most reads an Inputs packet carries: a peer catching up can send several at once. (Inputs are
     // sent reliably, so none is lost: lockstep can't go on without every one.)
     constexpr int input_window = 8;
     // The largest packet, to size buffers.
-    constexpr size_t max_packet_size = 64;
+    constexpr size_t max_packet_size = 144;
+    // The most reads a peer's own pads are sent ahead of the game (the input delay).
+    constexpr int max_delay = 8;
 
     // One controller read of one pad, as the N64 gives it to the game (the harness's 5 bytes).
     struct Pad {
@@ -35,6 +37,31 @@ namespace conker::netplay {
         uint8_t err_no = 0;
         bool operator==(const Pad&) const = default;
     };
+    // A player's settings that change what their mouse, gyro, stick and camera do in the game (motion.cpp,
+    // field_of_view.cpp): each machine applies every player's own. The bits: 0 mouse Direct, 1 gyro Direct,
+    // 2 stick Direct, 3 the mouse doesn't turn the camera, 4-5 mouse invert, 6-7 gyro invert, 8-9 stick
+    // invert (0 None, 1 X, 2 Y, 3 both), 10-15 their camera's field of view: 0 the game's own, 1 to
+    // fov_codes for 35 to 80 degrees (34 + the code); a code past that, and the packet is refused.
+    using Controls = uint16_t;
+    constexpr Controls controls_mask = 0x03FF;  // the bits besides the field of view
+    constexpr int fov_shift = 10;
+    constexpr int fov_codes = 46;
+    constexpr bool valid_controls(Controls c) { return (c >> fov_shift) <= fov_codes; }
+    // One controller read's mouse and gyro movement for one player, beside their pad: what moved since their
+    // previous read, already scaled by their sensitivity (motion.cpp), in fixed point so every machine
+    // gives the game exactly the same. The mouse in 1/8 pixel, gyro in halves of recompinput's unit, the
+    // scroll wheel in notches; and the player's Controls as they are at that read, so a change of setting
+    // takes effect at the same read on every machine.
+    struct Motion {
+        int16_t mouse_x = 0;
+        int16_t mouse_y = 0;
+        int16_t gyro_x = 0;
+        int16_t gyro_y = 0;
+        int8_t wheel = 0;
+        Controls controls = 0;
+        bool operator==(const Motion&) const = default;
+    };
+
     // The N64's two unused button bits; a pad with them set is refused.
     constexpr uint16_t reserved_buttons = 0x00C0;
     // A pad's err_no: 0, or the N64's "no controller" (CONT_NO_RESPONSE_ERROR).
@@ -80,12 +107,13 @@ namespace conker::netplay {
         Reason reason = Reason::protocol;
         bool operator==(const Refuse&) const = default;
     };
-    // One port's pads for reads first_read to first_read + count - 1.
+    // One port's pads and movement for reads first_read to first_read + count - 1.
     struct Inputs {
         uint8_t port = 0;
         uint32_t first_read = 0;
         uint8_t count = 0;
         std::array<Pad, input_window> pads{};   // the first `count` are used, the rest are zero
+        std::array<Motion, input_window> motions{};
         bool operator==(const Inputs&) const = default;
     };
     // The XXH3-64 of the game's memory as the sender made read `read`.
@@ -94,12 +122,13 @@ namespace conker::netplay {
         uint64_t hash = 0;
         bool operator==(const Hash&) const = default;
     };
-    // Host to everyone, once every port is taken: the match starts, with this many players, and whether
-    // every player sees only their own view of the split screen (the host's rule for the match: 1), or each
-    // chooses (0).
+    // Host to everyone, once every port is taken: the match starts, with this many players, whether every
+    // player sees only their own view of the split screen (the host's rule for the match: 1) or each chooses
+    // (0), and the input delay everyone uses (0 to max_delay).
     struct Start {
         uint8_t players = 0;
         uint8_t own_view = 0;
+        uint8_t delay = 0;
         bool operator==(const Start&) const = default;
     };
     // Leaving, and why.

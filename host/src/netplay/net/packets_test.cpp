@@ -43,6 +43,8 @@ namespace {
         inputs.pads[0] = { 0x8000, -128, 127, 0 };
         inputs.pads[1] = { 0xFF3F, 5, -5, 0 };
         inputs.pads[2] = { 0, 0, 0, err_no_controller };
+        inputs.motions[0] = { -32768, 32767, 0x1234, -2, -128, 0x0305 };
+        inputs.motions[2] = { 1, 0, 0, 0, 3, controls_mask };
         return inputs;
     }
 }
@@ -53,11 +55,11 @@ int main() {
     CHECK(round_trips(Welcome{ 1, 2 }, 7));
     CHECK(round_trips(Welcome{ 3, 4 }, 7));
     CHECK(round_trips(Refuse{ Reason::rom }, 6));
-    CHECK(round_trips(some_inputs(), 51));
+    CHECK(round_trips(some_inputs(), 139));
     CHECK(round_trips(Hash{ 4000000000u, 0xFEDCBA9876543210ull }, 17));
     CHECK(round_trips(Bye{ Reason::desync }, 6));
-    CHECK(round_trips(Start{ 3, 0 }, 7));
-    CHECK(round_trips(Start{ 4, 1 }, 7));
+    CHECK(round_trips(Start{ 3, 0 }, 8));
+    CHECK(round_trips(Start{ 4, 1, max_delay }, 8));
 
     // The layout: header, then little-endian fields.
     const std::vector<uint8_t> hello = bytes_of(Hello{ 0x0807060504030201ull, 0, 0, 0x1112131415161718ull, 0x2122232425262728ull });
@@ -68,6 +70,11 @@ int main() {
     CHECK(inputs[6] == 0xE8 && inputs[7] == 0x03 && inputs[8] == 0 && inputs[9] == 0);  // first read 1000
     CHECK(inputs[10] == 3);                                                     // count
     CHECK(inputs[11] == 0x00 && inputs[12] == 0x80 && inputs[13] == 0x80 && inputs[14] == 0x7F);  // pad 0
+    CHECK(inputs[51] == 0x00 && inputs[52] == 0x80 && inputs[53] == 0xFF && inputs[54] == 0x7F &&  // motion 0
+          inputs[55] == 0x34 && inputs[56] == 0x12 && inputs[57] == 0xFE && inputs[58] == 0xFF && inputs[59] == 0x80 &&
+          inputs[60] == 0x05 && inputs[61] == 0x03);
+    const std::vector<uint8_t> start = bytes_of(Start{ 2, 1, 3 });
+    CHECK(start.size() == 8 && start[5] == 2 && start[6] == 1 && start[7] == 3);
 
     // Out-of-range fields are neither sent nor accepted.
     CHECK(bytes_of(Welcome{ 2, 2 }).empty());       // port not below players
@@ -76,6 +83,8 @@ int main() {
     CHECK(bytes_of(Start{ 1 }).empty());
     CHECK(bytes_of(Start{ 5 }).empty());
     CHECK(bytes_of(Start{ 2, 2 }).empty());          // own view is 0 or 1
+    CHECK(bytes_of(Start{ 2, 0, max_delay + 1 }).empty());
+
     CHECK(bytes_of(Refuse{ (Reason)0 }).empty());
     CHECK(bytes_of(Bye{ (Reason)(last_reason + 1) }).empty());
     Inputs bad = some_inputs();
@@ -98,6 +107,15 @@ int main() {
     bad.pads[5].stick_x = 1;                        // an unused pad that isn't zero
     CHECK(bytes_of(bad).empty());
     bad = some_inputs();
+    bad.motions[3].wheel = 1;                       // an unused motion that isn't zero
+    CHECK(bytes_of(bad).empty());
+    bad = some_inputs();
+    bad.motions[1].controls = (fov_codes + 1) << fov_shift;  // a field of view past the codes
+    CHECK(bytes_of(bad).empty());
+    bad = some_inputs();
+    bad.motions[1].controls = (fov_codes << fov_shift) | controls_mask;  // the last code, every other bit: fine
+    CHECK(!bytes_of(bad).empty());
+    bad = some_inputs();
     bad.first_read = UINT32_MAX - 1;                // its last read past 2^32 - 1
     CHECK(bytes_of(bad).empty());
     bad.first_read = UINT32_MAX - 2;                // ...and just fitting
@@ -118,9 +136,18 @@ int main() {
     data = inputs;
     data[11] |= 0x80;                               // pad 0's reserved button
     CHECK(!decodes(data));
+    data = inputs;
+    data[51 + 11 * 7] = 1;                          // motion 7, unused
+    CHECK(!decodes(data));
+    data = inputs;
+    data[51 + 11 * 1 + 10] = (uint8_t)(((fov_codes + 1) << fov_shift) >> 8);  // motion 1's field of view: past the codes
+    CHECK(!decodes(data));
+    data = start;
+    data[7] = max_delay + 1;
+    CHECK(!decodes(data));
 
     // Sizes, versions, kinds and the magic.
-    for (size_t size = 0; size < 64; size++) {
+    for (size_t size = 0; size <= max_packet_size; size++) {
         std::vector<uint8_t> resized = inputs;
         resized.resize(size);
         CHECK(decodes(resized) == (size == inputs.size()));
