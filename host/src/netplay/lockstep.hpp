@@ -32,6 +32,10 @@
 //                                outage=<read>:<s> (nothing sent or received for that long from that read)
 //                                and lag-at=<read>:<ms> (the lag changes), separated by commas. It only makes
 //                                this player's own match worse, so it's in every build, like the above
+//   --netplay-stall-at <read>:<ms>  (a test) the game stops at that read for that long, as on a hitch
+//
+// A peer that falls behind the others (a hitch: loading, the system) catches up on its own: it runs the
+// timeline faster than real time until the others' inputs are no further ahead of it than the delay.
 //
 // As a match ends, it prints how many reads waited for the others' input and for how long (for the tests:
 // tools/netplay/network.sh).

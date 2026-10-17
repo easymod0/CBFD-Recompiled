@@ -1070,10 +1070,10 @@ index 0000000..a653fe4
 +#endif
 diff --git a/ultramodern/include/ultramodern/timeline.hpp b/ultramodern/include/ultramodern/timeline.hpp
 new file mode 100644
-index 0000000..c888735
+index 0000000..3ae1bdd
 --- /dev/null
 +++ b/ultramodern/include/ultramodern/timeline.hpp
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,60 @@
 +#ifndef __ULTRAMODERN_TIMELINE_HPP__
 +#define __ULTRAMODERN_TIMELINE_HPP__
 +
@@ -1095,6 +1095,9 @@ index 0000000..c888735
 +        // real time to reach each event (headless replays).
 +        void enable(bool fast);
 +        bool enabled();
++        // While on, the timeline doesn't wait for real time either, as `fast`: a game that fell behind (netplay,
++        // behind the other players) catches up. Once off, it's paced again from where it is (any game thread).
++        void set_catching_up(bool on);
 +        // The time of the last delivery (ticks): the time on the game's side between delivery points, as
 +        // events have reached the game. Unlike the game's clock, reading it doesn't move it. On a game
 +        // thread.
@@ -2004,10 +2007,10 @@ index 6e3ed18..221ad3d 100644
  
 diff --git a/ultramodern/src/timeline.cpp b/ultramodern/src/timeline.cpp
 new file mode 100644
-index 0000000..3d6d278
+index 0000000..eafc296
 --- /dev/null
 +++ b/ultramodern/src/timeline.cpp
-@@ -0,0 +1,208 @@
+@@ -0,0 +1,215 @@
 +#include <algorithm>
 +#include <atomic>
 +#include <chrono>
@@ -2032,6 +2035,7 @@ index 0000000..3d6d278
 +
 +    std::atomic_bool deterministic = false;
 +    bool fast = false;
++    std::atomic_bool catching_up = false;
 +    // The time of the last delivery, and the next VI's number (VI k is at k × ticks_per_vi).
 +    uint64_t now = 0;
 +    uint64_t next_vi = 1;
@@ -2083,7 +2087,7 @@ index 0000000..3d6d278
 +    // Waits for real time to reach virtual time `ticks`.
 +    void pace(uint64_t ticks) {
 +        using namespace std::chrono_literals;
-+        if (fast) {
++        if (fast || catching_up.load(std::memory_order_relaxed)) {
 +            return;
 +        }
 +        const auto target = real_start + ticks_to_duration(ticks);
@@ -2105,6 +2109,12 @@ index 0000000..3d6d278
 +    ultramodern::timeline_parts::clock_enable();
 +    ultramodern::timeline_parts::vi_take_over();
 +    real_start = std::chrono::high_resolution_clock::now();
++}
++
++void ultramodern::timeline::set_catching_up(bool on) {
++    // Paced again from where the game is: pace moves real_start on at the first event over 100 ms late,
++    // and races to the time of any less than that.
++    catching_up = on;
 +}
 +
 +bool ultramodern::timeline::enabled() {

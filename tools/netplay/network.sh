@@ -15,10 +15,12 @@
 #   bad        both send with 100 ms lag, 10 ms jitter, 5% loss, 2% reordered and 1% duplicated
 #   outage     30 ms lag, and the joiner's network out for 3 s from read 300
 #   lag-change 20 ms lag, then 150 ms from read 300 (the delay chosen at the start no longer covers it)
+#   stall      input delay 4, 30 ms lag, and the joiner's game stopped for 1.5 s at read 300 (a hitch): the
+#              host runs on until it needs the joiner's input, so the joiner is behind and must catch up
 # For each copy it prints how many reads waited for the other, the time in all and the longest wait;
 # --record <file> also adds them to <file>, a line per copy with the date and commit, to compare runs over
 # time. It exits 0 if every match gave the solo replay's game, 1 if not. The logs are kept in --out;
-# without it they're in a temporary folder, deleted if all passed. It uses UDP ports 27320 to 27323.
+# without it they're in a temporary folder, deleted if all passed. It uses UDP ports 27320 to 27324.
 set -u
 
 cd "$(dirname "$0")/../.."
@@ -38,7 +40,7 @@ while [ $# -gt 0 ]; do
         --timeout) TIMEOUT=$2; shift 2 ;;
         --out) OUT=$2; shift 2 ;;
         --record) RECORD=$2; shift 2 ;;
-        -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -62,17 +64,20 @@ echo "solo"
 start solo
 finish "was the last: quitting" solo || exit 1
 
-# match <name> <UDP port> <host's fake network> <joiner's>: starts a match (paced).
+# match <name> <UDP port> <host's fake network> <joiner's> [<host's options> [<joiner's>]]: starts a match (paced).
 match() {
-    paced=1 pads=1.pads start "$1-host" --netplay-host "$2" --netplay-address 127.0.0.1 --players 2 --netplay-fake-network "$3"
-    paced=1 pads=2.pads start "$1-join" --netplay-join "$(code_of "$1-host")" --netplay-fake-network "$4"
+    # shellcheck disable=SC2086
+    paced=1 pads=1.pads start "$1-host" --netplay-host "$2" --netplay-address 127.0.0.1 --players 2 --netplay-fake-network "$3" ${5:-}
+    # shellcheck disable=SC2086
+    paced=1 pads=2.pads start "$1-join" --netplay-join "$(code_of "$1-host")" --netplay-fake-network "$4" ${6:-}
 }
-echo "lan, bad, outage, lag-change (at once, $READS reads each on real time)"
+echo "lan, bad, outage, lag-change, stall (at once, $READS reads each on real time)"
 match lan 27320 "lag=0" "lag=0"
 match bad 27321 "lag=100,jitter=10,loss=5,reorder=2,dup=1" "lag=100,jitter=10,loss=5,reorder=2,dup=1"
 match outage 27322 "lag=30" "lag=30,outage=300:3"
 match lag-change 27323 "lag=20,lag-at=300:150" "lag=20,lag-at=300:150"
-names="lan-host lan-join bad-host bad-join outage-host outage-join lag-change-host lag-change-join"
+match stall 27324 "lag=30" "lag=30" "--input-delay 4" "--netplay-stall-at 300:1500"
+names="lan-host lan-join bad-host bad-join outage-host outage-join lag-change-host lag-change-join stall-host stall-join"
 # shellcheck disable=SC2086
 if finish "was the last: quitting" $names; then
     commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
@@ -82,6 +87,12 @@ if finish "was the last: quitting" $names; then
         echo "    waits: ${waits:-none printed}"
         [ -n "$RECORD" ] && echo "$(date +%Y-%m-%dT%H:%M:%S) $commit $name $waits" >> "$RECORD"
     done
+    if grep -q 'caught up (' "$OUT/stall-join.out"; then
+        echo "  stall-join: $(grep -m1 'reads behind the others' "$OUT/stall-join.out" | sed 's/^\[netplay\] //'); $(grep -m1 'caught up (' "$OUT/stall-join.out" | sed 's/^\[netplay\] //')"
+    else
+        echo "  stall-join didn't catch up after its stall"
+        failed=1
+    fi
 else
     failed=1
 fi
@@ -92,4 +103,4 @@ if [ $failed -ne 0 ]; then
     exit 1
 fi
 if [ $KEEP -eq 1 ]; then echo "logs: $OUT"; else rm -rf "$OUT"; fi
-echo "passed: every match gave each copy the same game as the replay alone"
+echo "passed: every match gave each copy the same game as the replay alone, and a stalled copy caught up"

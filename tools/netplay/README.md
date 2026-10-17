@@ -266,12 +266,22 @@ the region and compare to that byte. About 60 s.
 
 **Bad networks.** `--netplay-fake-network <spec>` has the library make this peer's network worse: `lag=<ms>`,
 `jitter=<ms>`, `loss=<%>`, `reorder=<%>` and `dup=<%>` on what it sends, `outage=<read>:<s>` (nothing sent or
-received for that long from that read) and `lag-at=<read>:<ms>` (the lag changes), separated by commas. As a
-match ends, each peer prints how many of its reads waited for the others' input, the time in all and the
-longest wait. `network.sh` plays matches at once on real time (as a player's game, not `--fast`): on loopback
-as it is, with 100 ms lag, jitter, 5% loss, reordering and duplicates, with a 3 s outage, and with the lag
-going from 20 to 150 ms partway. Each must give the solo replay's game; the waits are printed, and
+received for that long from that read) and `lag-at=<read>:<ms>` (the lag changes), separated by commas;
+`--netplay-stall-at <read>:<ms>` stops the game at a read for that long, as a hitch would. As a match ends,
+each peer prints how many of its reads waited for the others' input (the time in all and the longest), and
+how many came over 50 ms after the one before: what a player feels, as a read that waits where the game
+would have slept until its time anyway costs nothing. `network.sh` plays matches at once on real time (as a
+player's game, not `--fast`): on loopback as it is, with 100 ms lag, jitter, 5% loss, reordering and
+duplicates, with a 3 s outage, with the lag going from 20 to 150 ms partway, and with a 1.5 s stall. Each
+must give the solo replay's game, and the stalled copy must catch up; the waits are printed, and
 `--record <file>` keeps them, a line per copy with the date and commit, to compare over time. About 70 s.
+
+**Catching up.** A peer that falls behind (a hitch: loading, the system) lets the others run on until they
+need its input, up to the input delay ahead; from then on they'd wait on it at every read, the delay used
+up. So when the others' inputs reach 2 or more reads further than they would if the others were at this
+peer's read, it runs the timeline faster than real time (`ultramodern::timeline::set_catching_up`, as
+`--fast`) until they no longer do, then goes back to real time. The sound queued meanwhile is capped as
+always (`audio_output.cpp`), and nothing else needs to change: the game is the same at any speed.
 
 ## The scripts
 

@@ -28,6 +28,7 @@
 
 #include "librecomp/game.hpp"
 #include "librecomp/save_states.hpp"
+#include "ultramodern/timeline.hpp"
 
 #include "hello.hpp"
 #include "net/session.hpp"
@@ -77,6 +78,9 @@ namespace {
     double outage_until = 0;
     uint64_t lag_at = never;
     int lag_then = 0;
+    // --netplay-stall-at's: the game stops at that read for that long, as on a hitch (loading, the system).
+    uint64_t stall_at = never;
+    long stall_ms = 0;
     bool options_valid = true;
 
     bool library_started = false;
@@ -96,8 +100,30 @@ namespace {
         double seconds = 0;
         double longest = 0;
         uint64_t longest_read = 0;
+        uint64_t catch_ups = 0;
+        // What a player feels: reads that came late after the one before (a frame is 33 ms at 30 a second;
+        // a read waiting where the game would have slept until its time anyway costs nothing).
+        double last_read_at = 0;
+        uint64_t late = 0;
+        double latest = 0;
+        uint64_t latest_read = 0;
         bool printed = false;
     } waits;
+    constexpr double late_seconds = 0.050;
+    // Catching up (#16): when the others' inputs reach this many reads further ahead than they would if they
+    // were at this peer's read, this peer has fallen behind them (a hitch here: the others ran on until they
+    // needed its inputs, then waited, and would wait on it at every read from then on). It runs the timeline
+    // faster than real time until they're no further ahead than that again. The input delay is the furthest
+    // anyone can get ahead, so with a delay of 0 or 1 it never needs to.
+    constexpr int64_t behind_to_catch_up = 2;
+    bool catching_up = false;
+    uint64_t caught_up_from = 0;
+    double catching_up_since = 0;
+
+    void set_catching_up(bool on) {
+        catching_up = on;
+        ultramodern::timeline::set_catching_up(on);
+    }
 
     std::array<std::vector<Input>, conker::netplay::max_players> received;
     std::array<bool, conker::netplay::max_players> gone{};
@@ -153,13 +179,17 @@ namespace {
     void print_waits() {
         if (waits.printed || waits.reads == 0) return;
         waits.printed = true;
-        std::printf("[netplay] waits: %llu of %llu reads waited for the others, %.0f ms in all, the longest %.0f ms (read %llu); input delay %d\n",
+        std::printf("[netplay] waits: %llu of %llu reads waited for the others, %.0f ms in all, the longest %.0f ms (read %llu); "
+            "%llu reads came over %.0f ms after the one before, the latest %.0f ms (read %llu); input delay %d; caught up %llu times\n",
             (unsigned long long)waits.waited, (unsigned long long)waits.reads, waits.seconds * 1000, waits.longest * 1000,
-            (unsigned long long)waits.longest_read, delay);
+            (unsigned long long)waits.longest_read, (unsigned long long)waits.late, late_seconds * 1000, waits.latest * 1000,
+            (unsigned long long)waits.latest_read, delay, (unsigned long long)waits.catch_ups);
     }
 
     void end_match(Reason reason, const char* why) {
         print_waits();
+        // The game goes on without the match (the menu's): on real time.
+        if (catching_up) set_catching_up(false);
         std::printf("[netplay] the match is over: %s\n", why);
         why_over = why;
         if (!left && session != nullptr) {
@@ -530,6 +560,19 @@ bool conker::lockstep::parse_option(int argc, char** argv, int& i) {
         }
         return true;
     }
+    if (std::strcmp(option, "--netplay-stall-at") == 0) {
+        unsigned long long at = 0;
+        long ms = 0;
+        char end = 0;
+        if (value == nullptr || std::sscanf(value, "%llu:%ld%c", &at, &ms, &end) != 2 || ms <= 0 || ms > 8000) {
+            std::fprintf(stderr, "[netplay] --netplay-stall-at takes <read>:<ms>, up to 8000 ms\n");
+            options_valid = false;
+        }
+        stall_at = at;
+        stall_ms = ms;
+        if (value != nullptr) i++;
+        return true;
+    }
     if (std::strcmp(option, "--netplay-desync-at") == 0) {
         number(0, LONG_MAX, n);
         desync_at = (uint64_t)n;
@@ -664,6 +707,7 @@ bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
     why_over.clear();
     waits = {};
     outage_until = 0;
+    if (catching_up) set_catching_up(false);
     initial_sent = false;
     for (auto& pads : received) pads.clear();
     gone = {};
@@ -896,6 +940,15 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, net
         netplay::set_fake_network(fake);
         std::printf("[netplay] read %llu: the lag is %d ms now (--netplay-fake-network)\n", (unsigned long long)read, lag_then);
     }
+    if (read == stall_at) {
+        std::printf("[netplay] read %llu: the game stops for %ld ms (--netplay-stall-at)\n", (unsigned long long)read, stall_ms);
+        lock.unlock();
+        std::this_thread::sleep_for(std::chrono::milliseconds(stall_ms));
+        lock.lock();
+        if (stopping) {
+            return false;
+        }
+    }
     if (read == desync_at) {
         rdram[recomp::save_states::game_memory_size / 2] ^= 0x5A;
         std::printf("[netplay] read %llu: game memory changed, as --netplay-desync-at asked\n", (unsigned long long)read);
@@ -953,7 +1006,36 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, net
         }
     }
 
-    const double waited = now() - since;
+    // How far behind the others this peer is: the reads past read + delay that their inputs reach.
+    int64_t behind = INT64_MIN;
+    for (int port = 0; port < match_players; port++) {
+        if ((own_ports & (1u << port)) == 0) {
+            behind = std::max(behind, (int64_t)received[port].size() - 1 - (int64_t)(read + delay));
+        }
+    }
+    if (!catching_up && behind >= behind_to_catch_up) {
+        std::printf("[netplay] read %llu: %lld reads behind the others: catching up\n", (unsigned long long)read, (long long)behind);
+        set_catching_up(true);
+        caught_up_from = read;
+        catching_up_since = now();
+        waits.catch_ups++;
+    }
+    else if (catching_up && behind <= 0) {
+        std::printf("[netplay] read %llu: caught up (%llu reads in %.0f ms)\n", (unsigned long long)read,
+            (unsigned long long)(read - caught_up_from), (now() - catching_up_since) * 1000);
+        set_catching_up(false);
+    }
+
+    const double done = now();
+    const double waited = done - since;
+    if (waits.reads > 0 && done - waits.last_read_at > late_seconds) {
+        waits.late++;
+        if (done - waits.last_read_at > waits.latest) {
+            waits.latest = done - waits.last_read_at;
+            waits.latest_read = read;
+        }
+    }
+    waits.last_read_at = done;
     waits.reads++;
     if (waited > 0.001) {
         waits.waited++;
@@ -992,6 +1074,7 @@ const std::string& conker::lockstep::why_ended() {
 void conker::lockstep::leave() {
     std::scoped_lock lock(session_mutex);
     print_waits();
+    if (catching_up) set_catching_up(false);
     if (session != nullptr && !left) {
         session->leave(Reason::quit);
         left = true;
