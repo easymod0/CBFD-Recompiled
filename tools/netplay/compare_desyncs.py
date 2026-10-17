@@ -44,6 +44,9 @@ def ports(report):
 def summary(r):
     print(f"{r['path']}: port(s) {ports(r)}, read {r['read']}, compared with port {r['compared_with_port']}")
     print(f"  build {r['build_id']}, {r['players']} players, input delay {r['input_delay']}")
+    left = [f"port {p + 1} from read {at}" for p, at in enumerate(r.get("idle_from", [])) if at is not None]
+    if left:
+        print(f"  players that left, idle: {', '.join(left)}")
     regions = r["differing_regions"]
     if regions:
         print(f"  regions that differ from port {r['compared_with_port']}'s: {len(regions)}")
@@ -85,7 +88,7 @@ def main():
     a, b = reports
     print()
     same = True
-    for key in ("build_id", "rom", "profile", "mods", "players", "input_delay", "own_view", "view_pairs", "region_size"):
+    for key in ("build_id", "rom", "profile", "mods", "players", "input_delay", "own_view", "view_pairs", "region_size", "idle_from"):
         if a[key] != b[key]:
             print(f"  {key} differs: {a[key]} vs {b[key]}")
             same = False

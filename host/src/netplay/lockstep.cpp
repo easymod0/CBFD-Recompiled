@@ -249,6 +249,8 @@ namespace {
         return std::string(text.begin(), text.end());
     }
 
+    Input idle_input(int port);
+
     // Writes this peer's desync report (lockstep.hpp) for a difference from `port`'s at `read`, and the memory
     // kept at that read beside it. Its path, or empty if it couldn't.
     std::string write_report(int port, uint32_t read, const OwnHash& own, const Hash& theirs, const std::vector<int>& regions) {
@@ -292,11 +294,16 @@ namespace {
         // Each player's input for the reads up to the desync's (the reads before it made the memory compared;
         // the read's own is given after): [buttons, stick x, stick y, mouse x, y, gyro x, y, wheel, Controls].
         const uint32_t first = read > report_reads ? read - report_reads : 0;
-        std::fprintf(file, "  \"inputs_from_read\": %u,\n  \"inputs\": [", first);
+        // Players that left: the read their port was idle from (the inputs then are the idle ones), or null.
+        std::fprintf(file, "  \"idle_from\": [");
+        for (int p = 0; p < match_players; p++) {
+            std::fprintf(file, "%s%s", p == 0 ? "" : ", ", idle_from[p] == never ? "null" : std::to_string(idle_from[p]).c_str());
+        }
+        std::fprintf(file, "],\n  \"inputs_from_read\": %u,\n  \"inputs\": [", first);
         for (int p = 0; p < match_players; p++) {
             std::fprintf(file, "%s\n    [", p == 0 ? "" : ",");
-            for (uint32_t r = first; r <= read && r < received[p].size(); r++) {
-                const Input& in = received[p][r];
+            for (uint32_t r = first; r <= read && (r < received[p].size() || r >= idle_from[p]); r++) {
+                const Input in = r < idle_from[p] ? received[p][r] : idle_input(p);
                 std::fprintf(file, "%s[%u, %d, %d, %d, %d, %d, %d, %d, %u]", r == first ? "" : (r - first) % 4 == 0 ? ",\n     " : ", ",
                     in.pad.buttons, in.pad.stick_x, in.pad.stick_y, in.motion.mouse_x, in.motion.mouse_y,
                     in.motion.gyro_x, in.motion.gyro_y, in.motion.wheel, in.motion.controls);

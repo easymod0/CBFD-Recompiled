@@ -316,7 +316,8 @@ namespace conker::netplay {
                 // its Bye). A Bye among them ends the peer itself.
                 drain(info->m_hConn, pending_events);
                 Peer* peer = find(info->m_hConn);
-                sockets->CloseConnection(info->m_hConn, 0, nullptr, false);
+                // With why, should the other end still hear it (a connection that timed out here only).
+                sockets->CloseConnection(info->m_hConn, k_ESteamNetConnectionEnd_App_Min + (int)reason_of(info->m_info), nullptr, false);
                 if (peer == nullptr) {
                     break;
                 }
