@@ -37,7 +37,7 @@ Its options (see `host/src/netplay/harness.cpp`):
 | `--jitter <us>` | sleeps at random, up to `us` microseconds, at the game's OS calls and in the graphics thread: a test that the host's speed doesn't change the game |
 | `--state-test <s>:<l>` | takes a save state after read `s` and loads it at read `l`, so the game goes back and on again: the hash log then holds the reads after the load, which should match a run without it |
 | `--real-time` | runs the game on the time, as normally, instead of the timeline, to compare |
-| `--own-view` | plays as a match whose rule is that every player sees only their own view (it widens the split screen's culls, see `host/src/netplay/view.cpp`); the recording says so, and its replay does the same |
+| `--own-view` | records or hashes as a match whose rule is that every player sees only their own view (it widens the split screen's culls, see `host/src/netplay/view.cpp`); the recording says so, and its replay does the same (a replay can't be given it: it goes by its recording's) |
 
 While any of these are used, the game starts from an empty save of its own (`saves/harness/`, emptied
 each run; your own save isn't touched) and sees fixed controllers. Reads are counted from the first,

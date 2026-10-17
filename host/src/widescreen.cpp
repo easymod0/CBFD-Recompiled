@@ -835,8 +835,11 @@ extern "C" void conker_widen_backdrop_sectors(uint8_t* rdram, recomp_context* ct
     const gpr camera = (gpr)(int32_t)MEM_W(0, (gpr)(int32_t)0x800BE628) + (gpr)(int32_t)(camera_index * 0x180);
     const gpr view = (gpr)(int32_t)(0x800D9C10 + camera_index * 0x40);
     const float half_x = conker::game_trig::atan(conker::game_trig::tan(read_float(rdram, camera, 0x74) * 0.5f * degrees_to_radians) * ratio);
-    const float half_y = conker::game_trig::atan(conker::game_trig::tan(read_float(rdram, camera, 0x78) * 0.5f * degrees_to_radians) *
-        own_view_height(rdram, camera));
+    float half_y = read_float(rdram, camera, 0x78) * 0.5f * degrees_to_radians;
+    const float taller = own_view_height(rdram, camera);
+    if (taller > 1.0f) {
+        half_y = conker::game_trig::atan(conker::game_trig::tan(half_y) * taller);
+    }
     // The camera looks along -z of its view: the y part of that is its pitch.
     const float pitch = conker::game_trig::asin(std::clamp(-read_float(rdram, view, 0x18), -1.0f, 1.0f));
     const float corner_pitch = std::fabs(pitch) + half_y;

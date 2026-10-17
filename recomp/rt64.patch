@@ -90,10 +90,10 @@ index f79adbf..e40a61d 100644
          int32_t uly;
 diff --git a/src/common/rt64_conker_view_focus.h b/src/common/rt64_conker_view_focus.h
 new file mode 100644
-index 0000000..9b8fe04
+index 0000000..bfc402f
 --- /dev/null
 +++ b/src/common/rt64_conker_view_focus.h
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,142 @@
 +//
 +// RT64
 +//
@@ -125,7 +125,8 @@ index 0000000..9b8fe04
 +    };
 +
 +    // Set by the game's host each frame (defined in rt64_vi_renderer.cpp). ownImages: the addresses of two images
-+    // as wide as the frame that aren't it (0 for none), the game's own copies of it (the pause menu's picture).
++    // as wide as the frame that aren't it (0 for none), the game's own copies of it (the pause menu's picture, which
++    // is also the depth image: its clear covers the whole frame, which the focus leaves alone anyway).
 +    void setViewFocusRedraw(bool on, float left, float top, float right, float bottom, float frameWidth, float frameHeight,
 +        uint32_t ownImage0, uint32_t ownImage1);
 +    ConkerViewFocus conkerViewFocus();

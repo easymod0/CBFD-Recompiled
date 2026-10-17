@@ -25,8 +25,9 @@
 //                       without it). The keys' save states (F5, F7) don't work in that run
 //   --jitter <us>       sleeps at random, up to <us> microseconds, at the game's OS calls and in the
 //                       graphics thread: a test that the host's speed doesn't change the game
-//   --own-view          plays as a match whose rule is that every player sees only their own view (its
-//                       culls, netplay/view.cpp), recorded in the recording; a replay of one made so has it
+//   --own-view          records or hashes as a match whose rule is that every player sees only their own
+//                       view (its culls, netplay/view.cpp), recorded in the recording; a replay goes by its
+//                       recording's rule instead (not with --replay)
 //   --netplay-host, --netplay-join, ...  a netplay match in lockstep (lockstep.hpp)
 //
 // Controller reads are counted from the first, so read <n> of one run is read <n> of another. The pads
@@ -682,6 +683,11 @@ bool conker::harness::prepare() {
         std::fprintf(stderr, "[harness] --dump-at needs --hash-log (the dump is named after it)\n");
         return false;
     }
+    if (own_view_option && !replay_path.empty()) {
+        // A replay goes by its recording's rule, so it gives the game its recording did.
+        std::fprintf(stderr, "[harness] --own-view is for recording or hashing: a replay has its recording's rule\n");
+        return false;
+    }
     if (!replay_path.empty() && !load_replay()) {
         return false;
     }
@@ -747,7 +753,7 @@ bool conker::harness::own_view_rule() {
     if (conker::lockstep::connected()) {
         return conker::lockstep::own_view_for_everyone();
     }
-    return own_view_option || (!replay.empty() && (replay_flags & own_view_flag) != 0);
+    return !replay.empty() ? (replay_flags & own_view_flag) != 0 : own_view_option;
 }
 
 bool conker::harness::fixes_ports() {

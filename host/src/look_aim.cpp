@@ -471,9 +471,10 @@ extern "C" void conker_aim_lock_on(uint8_t* rdram, recomp_context* ctx) {
 //   alone's walk is 0x224 (func_15064B94, its case for state 0x3B, 0x15065184; 0x223 below speed 20).
 namespace {
     // Player 1 aiming with R and not Z, the sticks swapped (single player: D_800CC290 is theirs). Only the shotgun's
-    // state (0x3B) runs these hooks and reads what's set.
+    // state (0x3B) runs these hooks and reads what's set. Not while the harness is used (netplay's multiplayer): which
+    // player's character runs them isn't known here, and player 1's setting and buttons would decide for every one.
     bool shotgun_laser_on_r(uint8_t* rdram) {
-        if (!conker::look_aim::swap_sticks_now(0)) {
+        if (conker::netplay_profile::active() || !conker::look_aim::swap_sticks_now(0)) {
             return false;
         }
         const uint32_t held = (uint32_t)MEM_W(0, (gpr)(int32_t)0x800CC290);
@@ -533,8 +534,9 @@ extern "C" void conker_look_view(uint8_t* rdram, recomp_context* ctx) {
     const float aim_yaw = swap_view_yaw_set[player] ? swap_view_yaw[player] : read_float(rdram, camera, current_yaw);
     swap_view_yaw_set[player] = false;
     const float yaw = (270.0f - aim_yaw) * degrees_to_radians;
-    write_float(rdram, camera, 0x2E0, ex + std::cos(yaw) * across);
-    write_float(rdram, camera, 0x2E8, ez + std::sin(yaw) * across);
+    // game_trig's: in netplay the same on every platform, as the C library's rounds some last bits differently.
+    write_float(rdram, camera, 0x2E0, ex + conker::game_trig::cos(yaw) * across);
+    write_float(rdram, camera, 0x2E8, ez + conker::game_trig::sin(yaw) * across);
 #endif
 }
 
@@ -686,18 +688,33 @@ extern "C" void conker_camera_turn_invert(uint8_t* rdram, recomp_context* ctx) {
 }
 
 #if defined(CONKER_RT64)
+// The mouse aiming's remainders, then Swap Sticks' view yaw for each player and whether it's set (bit per player):
+// the look mode sets it and the view takes it, and a state can fall between them.
 std::vector<uint32_t> conker::look_aim::state() {
-    std::vector<uint32_t> words(4);
+    std::vector<uint32_t> words(9);
     std::memcpy(words.data(), aim_remainder, sizeof(aim_remainder));
+    std::memcpy(words.data() + 4, swap_view_yaw, sizeof(swap_view_yaw));
+    for (int i = 0; i < aim_players; i++) {
+        words[8] |= swap_view_yaw_set[i] ? (1u << i) : 0u;
+    }
     return words;
 }
 
 void conker::look_aim::set_state(const std::vector<uint32_t>& words) {
+    std::fill(std::begin(swap_view_yaw), std::end(swap_view_yaw), 0.0f);
+    std::fill(std::begin(swap_view_yaw_set), std::end(swap_view_yaw_set), false);
     if (words.size() < 4) {
         std::fill(std::begin(aim_remainder), std::end(aim_remainder), 0.0f);
         return;
     }
     std::memcpy(aim_remainder, words.data(), sizeof(aim_remainder));
+    // States from before have the remainders alone.
+    if (words.size() >= 9) {
+        std::memcpy(swap_view_yaw, words.data() + 4, sizeof(swap_view_yaw));
+        for (int i = 0; i < aim_players; i++) {
+            swap_view_yaw_set[i] = (words[8] & (1u << i)) != 0;
+        }
+    }
 }
 
 float conker::look_aim::camera_turn_speed() {

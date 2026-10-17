@@ -59,8 +59,11 @@ namespace {
     constexpr uint8_t none_yet = 0xFF;
     constexpr uint8_t aim_linger_reads = 2;
     std::array<std::atomic<uint8_t>, ports> reads_since_aim = { none_yet, none_yet, none_yet, none_yet };
-    // This machine's port, kept at each read for the input thread (lockstep's is the game thread's).
+    // This machine's port, kept at each read for the input thread (lockstep's is the game thread's), and every
+    // port's Controls (pending's) for it too.
     std::atomic<int> local = 0;
+    std::array<std::atomic<uint32_t>, ports> controls_now = { conker::motion::default_controls, conker::motion::default_controls,
+                                                               conker::motion::default_controls, conker::motion::default_controls };
 
     // `total` in fixed point, as far as an int16 goes; what's left stays in `total`.
     int16_t take_fixed(float& total, float unit) {
@@ -114,6 +117,7 @@ void conker::motion::set_read(const netplay::Motion* motions) {
     local = (port >= 0 && port < ports) ? port : 0;
     for (int i = 0; i < ports; i++) {
         pending[i] = motions[i];
+        controls_now[i] = motions[i].controls;
         aim_taken[i] = false;
         orbit_taken[i] = false;
         const uint8_t since = reads_since_aim[i].load();
@@ -156,7 +160,7 @@ bool conker::motion::take_orbit(int port, Turn& out) {
 }
 
 uint32_t conker::motion::controls(int port) {
-    return (port >= 0 && port < ports) ? pending[port].controls : default_controls;
+    return (port >= 0 && port < ports) ? controls_now[port].load() : default_controls;
 }
 
 // Per port: mouse x and y (low and high 16 bits), gyro x and y, then the wheel (low 8 bits), whether the
@@ -194,5 +198,8 @@ void conker::motion::set_state(const std::vector<uint32_t>& words) {
         aim_taken[i] = (w[2] & 0x100) != 0;
         orbit_taken[i] = (w[2] & 0x200) != 0;
         reads_since_aim[i] = (per_port == 3) ? none_yet : (uint8_t)(w[2] >> 16);
+    }
+    for (int i = 0; i < ports; i++) {
+        controls_now[i] = pending[i].controls;
     }
 }

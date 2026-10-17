@@ -17,7 +17,9 @@
 // frame (D_800BE9C4, made as the pause starts, widescreen.cpp), drawn into an image as wide as the frame: RT64 is
 // told it isn't the frame, so the copy is left alone, and shows this player's view as it was drawn. (Taken for
 // the frame, the copy's tiles moved with the view or were left out, and the picture behind the menu was what
-// was in memory: green and pink stripes.) The motion blur's copy (D_800BE570) likewise.
+// was in memory: green and pink stripes.) The motion blur's copy (D_800BE570) likewise. D_800BE9C4 is the depth
+// image too (func_1501A39C's G_SETZIMG), cleared each frame across the whole frame (func_151106A8), which the
+// focus left as it was anyway.
 //
 // Each frame, the game's cameras (D_800BE628, 0x180 bytes each, the same as reticle.cpp's and
 // widescreen.cpp's) say where each player's view is on the N64's screen: + 0x24 top, + 0x28 bottom,

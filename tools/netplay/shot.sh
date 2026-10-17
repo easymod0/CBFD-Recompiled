@@ -22,7 +22,7 @@ out=$data/out.txt
 
 # The game quits at the recording's last read, so the shot is taken a little before it: once the hash log
 # reaches 300 reads short of the end (the recording's reads, from its version as check.sh works them out).
-reads=$(python3 -c "import struct,sys; d=open(sys.argv[1],'rb').read(); v=struct.unpack_from('<I',d,8)[0]; print((len(d)-(40 if v==4 else 32))//{4: 73, 3: 65}.get(v, 21))" "$pads")
+reads=$(python3 -c "import struct,sys; d=open(sys.argv[1],'rb').read(); v=struct.unpack_from('<I',d,8)[0]; print((len(d)-{4: 40, 1: 16}.get(v, 32))//{4: 73, 3: 65}.get(v, 21))" "$pads")
 log=$data/hashes.log
 SDL_VIDEODRIVER=x11 "$EXE" --rom "$ROM" --data "$data/data" --window "${WINDOW:-960x540}" --replay "$pads" --fast \
     --hash-log "$log" "$@" > "$out" 2>&1 &
