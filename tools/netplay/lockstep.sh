@@ -15,11 +15,14 @@
 #   mouse      a 3-player Deathmatch where everyone moves their mouse, gyro and scroll wheel and aims
 #              (make_match.py --mouse), alone and as a match of three at the automatic input delay, each
 #              copy with the others' pads and movement scrambled: all three must match the solo replay
+#   tall       a 2-player Deathmatch (make_match.py --mouse): the split screen's two views are drawn taller in
+#              "my view only", the match's rule, so every copy widens each camera's culls up and down: both copies
+#              of a match of two must match its solo replay
 #   jittery    the same with input delay 0 and random sleeps (--jitter 500) on the joiner, so the two
 #              are out of step and wait for each other all the time
 #   desync     the host changes a byte of its memory at read 300: both must stop for a desync
 # It exits 0 if all is as it should be, 1 if not. The logs are kept in --out (a temporary folder
-# otherwise). As in check.sh, a run is judged by what it prints and then stopped. It uses UDP ports 27310 to 27313 on 127.0.0.1.
+# otherwise). As in check.sh, a run is judged by what it prints and then stopped. It uses UDP ports 27310 to 27314 on 127.0.0.1.
 set -u
 
 cd "$(dirname "$0")/../.."
@@ -37,7 +40,7 @@ while [ $# -gt 0 ]; do
         --seed) SEED=$2; shift 2 ;;
         --timeout) TIMEOUT=$2; shift 2 ;;
         --out) OUT=$2; shift 2 ;;
-        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -59,7 +62,7 @@ real_path, other_path, ports, prefix = sys.argv[1], sys.argv[2], int(sys.argv[3]
 real = open(real_path, "rb").read()
 other = open(other_path, "rb").read()
 assert len(real) == len(other)
-header, read_size, pad_size, motion_size = 32, 65, 5, 11   # version 3 (harness.cpp)
+header, read_size, pad_size, motion_size = 40, 73, 5, 13   # version 4 (harness.cpp)
 for own in range(ports):
     scrambled = bytearray(real)
     for port in range(ports):
@@ -75,13 +78,19 @@ for own in range(ports):
 PY
 }
 
-python3 tools/netplay/make_inputs.py "$OUT/inputs.pads" --reads "$READS" --seed "$SEED" --ports 2 --mouse || exit 2
-python3 tools/netplay/make_inputs.py "$OUT/other.pads" --reads "$READS" --seed "$((SEED + 1))" --ports 2 --mouse > /dev/null || exit 2
+# The recordings say everyone sees only their own view, as the matches below are (the host's rule by default),
+# so the solo replays have the same culls.
+python3 tools/netplay/make_inputs.py "$OUT/inputs.pads" --reads "$READS" --seed "$SEED" --ports 2 --mouse --own-view || exit 2
+python3 tools/netplay/make_inputs.py "$OUT/other.pads" --reads "$READS" --seed "$((SEED + 1))" --ports 2 --mouse --own-view > /dev/null || exit 2
 scramble "$OUT/inputs.pads" "$OUT/other.pads" 2 "$OUT/" || exit 2
-python3 tools/netplay/make_match.py "$OUT/mouse.pads" --mode deathmatch --players 3 --mouse --seed "$SEED" || exit 2
-python3 tools/netplay/make_match.py "$OUT/mouse-other.pads" --mode deathmatch --players 3 --mouse --seed "$((SEED + 1))" > /dev/null || exit 2
+python3 tools/netplay/make_match.py "$OUT/mouse.pads" --mode deathmatch --players 3 --mouse --seed "$SEED" --own-view || exit 2
+python3 tools/netplay/make_match.py "$OUT/mouse-other.pads" --mode deathmatch --players 3 --mouse --seed "$((SEED + 1))" --own-view > /dev/null || exit 2
 scramble "$OUT/mouse.pads" "$OUT/mouse-other.pads" 3 "$OUT/mouse-" || exit 2
-MOUSE_READS=$(( ($(wc -c < "$OUT/mouse.pads") - 32) / 65 ))
+MOUSE_READS=$(( ($(wc -c < "$OUT/mouse.pads") - 40) / 73 ))
+python3 tools/netplay/make_match.py "$OUT/tall.pads" --mode deathmatch --players 2 --mouse --seed "$SEED" --own-view || exit 2
+python3 tools/netplay/make_match.py "$OUT/tall-other.pads" --mode deathmatch --players 2 --mouse --seed "$((SEED + 1))" --own-view > /dev/null || exit 2
+scramble "$OUT/tall.pads" "$OUT/tall-other.pads" 2 "$OUT/tall-" || exit 2
+TALL_READS=$(( ($(wc -c < "$OUT/tall.pads") - 40) / 73 ))
 
 # start <name> [options...]: one copy in the background, with its own data folder, its hash log in
 # $OUT/<name>.log and its output in $OUT/<name>.out; its PID is added to $pids.
@@ -202,6 +211,19 @@ pads=mouse-3.pads start mouse-join2 --netplay-join "$code"
 if finish "was the last: quitting" mouse-host mouse-join1 mouse-join2; then
     for name in mouse-host mouse-join1 mouse-join2; do
         same $name mouse-solo "$MOUSE_READS" || failed=1
+    done
+else
+    failed=1
+fi
+
+echo "tall"
+pads=tall.pads start tall-solo
+finish "was the last: quitting" tall-solo || exit 1
+pads=tall-1.pads start tall-host --netplay-host 27314 --netplay-address 127.0.0.1 --players 2
+pads=tall-2.pads start tall-join --netplay-join "$(code_of tall-host)"
+if finish "was the last: quitting" tall-host tall-join; then
+    for name in tall-host tall-join; do
+        same $name tall-solo "$TALL_READS" || failed=1
     done
 else
     failed=1

@@ -4,9 +4,13 @@
 // frame with its projection made taller to match, so it isn't stretched and shows more of the scene, and leaves
 // the other views out (rt64.patch, RT64::setViewFocusRedraw; widescreen then widens it as any full-frame view).
 // Only the renderer changes, not game memory, so it can't desync. It's on when the player chooses it, or when
-// the host's rule for the match is that everyone sees only their own view (lockstep.hpp: the default). That
-// rule can't be enforced against a modified build (every machine draws every view); it keeps honest players
-// on the same footing.
+// the host's rule for the match is that everyone sees only their own view (lockstep.hpp: the default; a
+// replay's recording says whether its match had it). That rule can't be enforced against a modified build
+// (every machine draws every view); it keeps honest players on the same footing.
+//
+// Drawn taller, the view would show the world above and below what the game culled it for. So while the rule
+// is on, the game's culls for every view are made as tall on every machine (widescreen.cpp's own_view_height:
+// game memory, so by the match's rule, never by a player's own choice alone).
 //
 // While the game is paused its menu is drawn over the whole split screen, so the picture is left as the game
 // draws it (the pause counter D_80082F90, widescreen.cpp).
@@ -78,7 +82,7 @@ void conker::netplay_view::game_frame(uint8_t* rdram) {
     const uint32_t cameras = (uint32_t)MEM_W(0, cameras_pointer);
     const int32_t frame_width = MEM_W(0, frame_width_address);
     // The player's choice, or the match's rule (the host's) that everyone sees only their own view.
-    const bool wanted = mine_only || conker::lockstep::own_view_for_everyone();
+    const bool wanted = mine_only || conker::harness::own_view_rule();
     if (!wanted || !(in_match || conker::harness::replaying()) || port < 0 || cameras < 0x80000000u || cameras >= 0x80800000u ||
         frame_width < 16 || frame_width > 640) {
         show(0, 0, 1, 1, frame_width);

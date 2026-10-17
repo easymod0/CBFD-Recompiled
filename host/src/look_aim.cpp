@@ -110,6 +110,8 @@ namespace {
     // mode, from the game thread (steady clock ticks), for the input thread (swap_sticks_now). Like the reticle's,
     // it counts as aiming a little over two game frames after, so a frame the game takes longer over doesn't swap
     // the sticks back for a poll. Each player's, so in split screen each controller swaps as its player aims.
+    // While the harness is used, by reads instead (motion.cpp), and with each player's own setting (their
+    // Controls): what the swap writes into game memory (conker_look_targets) is then the same on every machine.
     constexpr int aim_players = 4;
     std::atomic<int64_t> last_aim_ticks[aim_players] = {};
     // The aim's yaw for each player's view this frame, from the look mode (conker_look_currents), while swapped.
@@ -127,6 +129,7 @@ namespace {
     void note_aiming(uint8_t* rdram, gpr camera, int player) {
         if (player >= 0 && player < aim_players) {
             last_aim_ticks[player] = std::chrono::steady_clock::now().time_since_epoch().count();
+            conker::motion::note_aim(player);
             const gpr character = (gpr)(int32_t)MEM_W(0x3D0, camera);
             shotgun_aiming[player] = (((uint32_t)character & 0xFF000000u) == 0x80000000u) && (MEM_BU(0x4, character) == shotgun_aim_state);
         }
@@ -329,7 +332,7 @@ void conker::look_aim::add_camera_options(recomp::config::Config& config) {
         reticle_sizes, ReticleSize::Medium);
     config.add_enum_option(options::aim_swap_sticks, "Aiming: Swap Sticks",
         "Controls aiming like a third-person shooter: while you aim, the right stick aims and the left stick moves, as "
-        "the C-buttons do (e.g. the shotgun, the slingshot, the sniper scope, R-Look), in single player. "
+        "the C-buttons do (e.g. the shotgun, the slingshot, the sniper scope, R-Look), in single player and netplay matches. "
         "Conker keeps facing where you aim and walks the way you push, sideways and back too. With the mouse, the keys "
         "bound to the stick (W, A, S, D) move. With the "
         "shotgun, holding R alone shows the laser sight, so you can move and strafe with it; holding Z as well, the left "
@@ -389,18 +392,19 @@ void conker::look_aim::add_mouse_gyro_options(recomp::config::Config& config) {
 }
 #endif
 
-uint16_t conker::motion::local_controls() {
-    uint16_t c = 0;
+uint32_t conker::motion::local_controls() {
+    uint32_t c = 0;
 #if defined(CONKER_RT64)
     if (own_option(options::mouse_response, Response::Smooth) == Response::Direct) c |= 0x1;
     if (own_option(options::gyro_response, Response::Smooth) == Response::Direct) c |= 0x2;
     if (own_option(options::stick_response, Response::Smooth) == Response::Direct) c |= 0x4;
     if (own_option(options::mouse_camera, Toggle::On) == Toggle::Off) c |= 0x8;
-    c |= (uint16_t)((uint32_t)own_option(options::mouse_invert, Invert::None) << 4);
-    c |= (uint16_t)((uint32_t)own_option(options::gyro_invert, Invert::None) << 6);
-    c |= (uint16_t)((uint32_t)own_option(options::stick_invert, Invert::Y) << 8);
+    c |= (uint32_t)own_option(options::mouse_invert, Invert::None) << 4;
+    c |= (uint32_t)own_option(options::gyro_invert, Invert::None) << 6;
+    c |= (uint32_t)own_option(options::stick_invert, Invert::Y) << 8;
     c &= 0x03FF;    // only Controls' bits (a value out of range in the config would make the others refuse the packet)
-    c |= (uint16_t)(conker::motion::field_of_view_code(own_number(options::camera_fov, 0.0)) << 10);
+    c |= conker::motion::field_of_view_code(own_number(options::camera_fov, 0.0)) << 10;
+    if (own_option(options::aim_swap_sticks, Toggle::Off) == Toggle::On) c |= 0x10000;
 #endif
     return c;
 }
@@ -535,10 +539,13 @@ extern "C" void conker_look_view(uint8_t* rdram, recomp_context* ctx) {
 }
 
 bool conker::look_aim::swap_sticks_now(int player) {
-    if (option<Toggle>(options::aim_swap_sticks) != Toggle::On || !recompinput::players::is_single_player_mode()) {
+    if (player < 0 || player >= aim_players) {
         return false;
     }
-    if (player < 0 || player >= aim_players) {
+    if (per_player()) {
+        return conker::motion::swap_sticks(conker::motion::controls(player)) && conker::motion::aimed_lately(player);
+    }
+    if (option<Toggle>(options::aim_swap_sticks) != Toggle::On || !recompinput::players::is_single_player_mode()) {
         return false;
     }
     const int64_t since = std::chrono::steady_clock::now().time_since_epoch().count() - last_aim_ticks[player].load();
