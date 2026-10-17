@@ -27,6 +27,14 @@
 //                                match starts. The host tells everyone (Start)
 //   --netplay-desync-at <read>   (a test) changes a byte of game memory at that read (in region 64,
 //                                0x80400003), which the next hash comparison must catch
+//   --netplay-fake-network <spec>  (a test) fakes a bad network on this peer's side, through the library:
+//                                lag=<ms>, jitter=<ms>, loss=<%>, reorder=<%> and dup=<%> on what it sends,
+//                                outage=<read>:<s> (nothing sent or received for that long from that read)
+//                                and lag-at=<read>:<ms> (the lag changes), separated by commas. It only makes
+//                                this player's own match worse, so it's in every build, like the above
+//
+// As a match ends, it prints how many reads waited for the others' input and for how long (for the tests:
+// tools/netplay/network.sh).
 //
 // The game waits at its start for every player to join. With --replay, each peer's own pads come from
 // its ports in the recording instead of its controllers: peers replaying the same recording give the

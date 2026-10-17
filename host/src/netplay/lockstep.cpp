@@ -68,6 +68,15 @@ namespace {
     // The match's, from the host (Start).
     int delay = 2;
     uint64_t desync_at = never;
+    // --netplay-fake-network's: the network faked from the start, and changes at reads (an outage of
+    // `outage_seconds` from read `outage_at`; the lag `lag_then` from read `lag_at`).
+    conker::netplay::FakeNetwork fake;
+    bool faking = false;
+    uint64_t outage_at = never;
+    double outage_seconds = 0;
+    double outage_until = 0;
+    uint64_t lag_at = never;
+    int lag_then = 0;
     bool options_valid = true;
 
     bool library_started = false;
@@ -79,6 +88,16 @@ namespace {
     bool ended = false;         // the match is over for this peer: nothing more is sent
     bool left = false;
     std::string why_over;       // why the match ended, for the player
+    // How long the game waited for the others' input, for tests (printed as the match ends): the reads that
+    // waited over a millisecond, the time in all and the longest wait.
+    struct Waits {
+        uint64_t reads = 0;
+        uint64_t waited = 0;
+        double seconds = 0;
+        double longest = 0;
+        uint64_t longest_read = 0;
+        bool printed = false;
+    } waits;
 
     std::array<std::vector<Input>, conker::netplay::max_players> received;
     std::array<bool, conker::netplay::max_players> gone{};
@@ -131,7 +150,16 @@ namespace {
         return (count == 1 ? "port " : "ports ") + numbers;
     }
 
+    void print_waits() {
+        if (waits.printed || waits.reads == 0) return;
+        waits.printed = true;
+        std::printf("[netplay] waits: %llu of %llu reads waited for the others, %.0f ms in all, the longest %.0f ms (read %llu); input delay %d\n",
+            (unsigned long long)waits.waited, (unsigned long long)waits.reads, waits.seconds * 1000, waits.longest * 1000,
+            (unsigned long long)waits.longest_read, delay);
+    }
+
     void end_match(Reason reason, const char* why) {
+        print_waits();
         std::printf("[netplay] the match is over: %s\n", why);
         why_over = why;
         if (!left && session != nullptr) {
@@ -465,6 +493,43 @@ bool conker::lockstep::parse_option(int argc, char** argv, int& i) {
         delay_option = (int)n;
         return true;
     }
+    if (std::strcmp(option, "--netplay-fake-network") == 0) {
+        // e.g. lag=100,jitter=10,loss=5,reorder=2,dup=1,outage=300:3,lag-at=600:150
+        std::string spec = value != nullptr ? value : "";
+        if (value != nullptr) i++;
+        faking = true;
+        bool good = !spec.empty();
+        for (size_t at = 0; good && at < spec.size();) {
+            size_t end = spec.find(',', at);
+            if (end == std::string::npos) end = spec.size();
+            const std::string item = spec.substr(at, end - at);
+            at = end + 1;
+            const size_t equals = item.find('=');
+            const std::string key = item.substr(0, equals);
+            const char* text = equals == std::string::npos ? "" : item.c_str() + equals + 1;
+            char* rest = nullptr;
+            const double a = std::strtod(text, &rest);
+            double b = 0;
+            const bool pair = *rest == ':';
+            if (pair) b = std::strtod(rest + 1, &rest);
+            good = rest != text && *rest == '\0' && a >= 0 && b >= 0;
+            if (!good) break;
+            if (key == "lag" && !pair && a <= 2000) fake.lag_ms = (int)a;
+            else if (key == "jitter" && !pair && a <= 500) fake.jitter_ms = (float)a;
+            else if (key == "loss" && !pair && a <= 50) fake.loss = (float)a;
+            else if (key == "reorder" && !pair && a <= 50) fake.reorder = (float)a;
+            else if (key == "dup" && !pair && a <= 50) fake.dup = (float)a;
+            else if (key == "outage" && pair && b > 0 && b <= 8) { outage_at = (uint64_t)a; outage_seconds = b; }
+            else if (key == "lag-at" && pair && b <= 2000) { lag_at = (uint64_t)a; lag_then = (int)b; }
+            else good = false;
+        }
+        if (!good) {
+            std::fprintf(stderr, "[netplay] --netplay-fake-network takes lag=<ms>, jitter=<ms>, loss=<%%>, reorder=<%%>, dup=<%%>, "
+                "outage=<read>:<s> (8 s at most) and lag-at=<read>:<ms>, separated by commas\n");
+            options_valid = false;
+        }
+        return true;
+    }
     if (std::strcmp(option, "--netplay-desync-at") == 0) {
         number(0, LONG_MAX, n);
         desync_at = (uint64_t)n;
@@ -569,6 +634,12 @@ bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
         }
         library_started = true;
     }
+    if (faking) {
+        fake.outage = false;
+        netplay::set_fake_network(fake);
+        std::printf("[netplay] faking a bad network: lag %d ms, jitter %.0f ms, loss %.1f%%, reorder %.1f%%, dup %.1f%%\n",
+            fake.lag_ms, fake.jitter_ms, fake.loss, fake.reorder, fake.dup);
+    }
     cancel();
     session = new netplay::Session();
     const bool hosting = host_port > 0;
@@ -591,6 +662,8 @@ bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
     match_own_view = false;
     match_pairs = 0;
     why_over.clear();
+    waits = {};
+    outage_until = 0;
     initial_sent = false;
     for (auto& pads : received) pads.clear();
     gone = {};
@@ -812,6 +885,17 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, net
         }
     }
 
+    if (faking && read == outage_at) {
+        fake.outage = true;
+        netplay::set_fake_network(fake);
+        outage_until = now() + outage_seconds;
+        std::printf("[netplay] read %llu: the network is out for %.1f s (--netplay-fake-network)\n", (unsigned long long)read, outage_seconds);
+    }
+    if (faking && read == lag_at) {
+        fake.lag_ms = lag_then;
+        netplay::set_fake_network(fake);
+        std::printf("[netplay] read %llu: the lag is %d ms now (--netplay-fake-network)\n", (unsigned long long)read, lag_then);
+    }
     if (read == desync_at) {
         rdram[recomp::save_states::game_memory_size / 2] ^= 0x5A;
         std::printf("[netplay] read %llu: game memory changed, as --netplay-desync-at asked\n", (unsigned long long)read);
@@ -830,6 +914,12 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, net
     const double since = now();
     double last_note = since;
     while (true) {
+        if (outage_until != 0 && now() >= outage_until) {
+            outage_until = 0;
+            fake.outage = false;
+            netplay::set_fake_network(fake);
+            std::printf("[netplay] read %llu: the network is back (--netplay-fake-network)\n", (unsigned long long)read);
+        }
         for (const Event& event : session->poll()) {
             handle(event);
         }
@@ -863,6 +953,17 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, net
         }
     }
 
+    const double waited = now() - since;
+    waits.reads++;
+    if (waited > 0.001) {
+        waits.waited++;
+        waits.seconds += waited;
+        if (waited > waits.longest) {
+            waits.longest = waited;
+            waits.longest_read = read;
+        }
+    }
+
     for (int port = 0; port < match_players; port++) {
         const Input& input = received[port][read];
         pads[port] = { input.pad.buttons, input.pad.stick_x, input.pad.stick_y, input.pad.err_no };
@@ -890,6 +991,7 @@ const std::string& conker::lockstep::why_ended() {
 
 void conker::lockstep::leave() {
     std::scoped_lock lock(session_mutex);
+    print_waits();
     if (session != nullptr && !left) {
         session->leave(Reason::quit);
         left = true;

@@ -264,12 +264,23 @@ host's relay); the same match with two players on one copy (the host's, then a j
 desync (`--netplay-desync-at <read>`, which changes a byte in region 64) is caught, with reports that name
 the region and compare to that byte. About 60 s.
 
+**Bad networks.** `--netplay-fake-network <spec>` has the library make this peer's network worse: `lag=<ms>`,
+`jitter=<ms>`, `loss=<%>`, `reorder=<%>` and `dup=<%>` on what it sends, `outage=<read>:<s>` (nothing sent or
+received for that long from that read) and `lag-at=<read>:<ms>` (the lag changes), separated by commas. As a
+match ends, each peer prints how many of its reads waited for the others' input, the time in all and the
+longest wait. `network.sh` plays matches at once on real time (as a player's game, not `--fast`): on loopback
+as it is, with 100 ms lag, jitter, 5% loss, reordering and duplicates, with a 3 s outage, and with the lag
+going from 20 to 150 ms partway. Each must give the solo replay's game; the waits are printed, and
+`--record <file>` keeps them, a line per copy with the date and commit, to compare over time. About 70 s.
+
 ## The scripts
 
 | Script | |
 |---|---|
 | `check.sh` | the determinism check: replays a made-up recording headless twice, with `--jitter` and with `--state-test`, and fails unless all four give the same hashes (about 30 s; the CI runs it, `.github/workflows/netplay.yml`) |
 | `lockstep.sh` | the lockstep check: copies in a match over loopback give the same game as a replay alone (2 players, 3 with the mouse, and 3 with two on one copy), and a desync is caught and reported (about 60 s) |
+| `network.sh` | the bad-network check: matches with lag, jitter, loss, an outage and a change of lag give the same game as a replay alone, and how long each waited (about 70 s) |
+| `lib.sh` | what `lockstep.sh` and `network.sh` share: starting copies, waiting for them, comparing their hash logs |
 | `compare_hashes.py` | the first read two hash logs differ at (it exits 1 if they differ); with dumps, the ranges that differ, by data symbol |
 | `compare_desyncs.py` | two peers' desync reports: whether they're comparable, the regions and (with their memory) the ranges that differ, by data symbol |
 | `make_match.py` | a recording that plays from boot into a multiplayer match (`--mode`, `--players`, `--variant`, `--pause`; `--mouse` has everyone move, aim and use their mouse and gyro), the same every time: for looking at multiplayer (split screen, "my view only") without the menus |

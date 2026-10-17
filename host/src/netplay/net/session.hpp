@@ -58,6 +58,22 @@ namespace conker::netplay {
     bool startup(std::string& error);
     void shutdown();
 
+    // A bad network, faked by the library for tests (lockstep's --netplay-fake-network): what this process
+    // sends is held back `lag_ms`, plus jitter (an average of `jitter_ms`, at most 4 times that), `loss`% of
+    // its packets dropped, `reorder`% held back 20 ms more (so they arrive out of order) and `dup`% sent twice.
+    // `outage`: everything this process sends and receives is dropped, until it's set false.
+    struct FakeNetwork {
+        int lag_ms = 0;
+        float jitter_ms = 0;
+        float loss = 0;
+        float reorder = 0;
+        float dup = 0;
+        bool outage = false;
+        bool operator==(const FakeNetwork&) const = default;
+    };
+    // Sets it for every connection, once the library is started.
+    void set_fake_network(const FakeNetwork& fake);
+
     class Session {
     public:
         Session();
@@ -93,8 +109,8 @@ namespace conker::netplay {
         void send(const Inputs& inputs);
         // This peer's memory hash (a joiner's go to the host, the host's to everyone).
         void send(const Hash& hash);
-        // Says goodbye to every peer and closes the connections. The goodbyes go out as the library is
-        // polled: poll a moment before deleting the session or stopping the library, or they may be lost.
+        // Says goodbye to every peer and closes the connections, once what was sent has arrived (up to 2 s,
+        // for a lossy network). Poll a moment before deleting the session or stopping the library.
         void leave(Reason reason);
         // The furthest read a peer's Inputs may reach (their first read plus their count); beyond it they're
         // refused as broken or hostile, before the host passes them on. Lockstep sets it as the game goes;
@@ -121,6 +137,8 @@ namespace conker::netplay {
         // Takes every message still unread from `connection` (a peer that closed it).
         void drain(uint32_t connection, std::vector<Event>& events);
         void drop(Peer& peer, Reason reason, std::vector<Event>* events);
+        // Waits until every peer has acknowledged what was sent to it (up to 2 s).
+        void flush();
         void send_to(uint32_t connection, const Packet& packet);
         Peer* find(uint32_t connection);
         friend void status_changed_callback(void* info);

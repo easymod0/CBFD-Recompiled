@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <bit>
 #include <chrono>
+#include <thread>
 #include <cstdio>
 
 #if defined(_WIN32)
@@ -136,6 +137,20 @@ namespace conker::netplay {
 
     void shutdown() {
         GameNetworkingSockets_Kill();
+    }
+
+    void set_fake_network(const FakeNetwork& fake) {
+        ISteamNetworkingUtils* utils = SteamNetworkingUtils();
+        utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, fake.lag_ms);
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Avg, fake.jitter_ms);
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Max, 4 * fake.jitter_ms);
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketJitter_Send_Pct, fake.jitter_ms > 0 ? 100.0f : 0.0f);
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, fake.outage ? 100.0f : fake.loss);
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Recv, fake.outage ? 100.0f : 0.0f);
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketReorder_Send, fake.reorder);
+        utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketReorder_Time, 20);
+        utils->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketDup_Send, fake.dup);
+        utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketDup_TimeMax, 20);
     }
 
     Session::Session() {
@@ -561,6 +576,27 @@ namespace conker::netplay {
         }
     }
 
+    void Session::flush() {
+        // Long enough for a few resends at a bad network's round trip; a peer that's gone isn't waited for.
+        constexpr double flush_seconds = 2.0;
+        const double until = now() + flush_seconds;
+        while (now() < until) {
+            bool pending = false;
+            for (const Peer& peer : peers) {
+                SteamNetConnectionRealTimeStatus_t status;
+                if (SteamNetworkingSockets()->GetConnectionRealTimeStatus(peer.connection, &status, 0, nullptr) == k_EResultOK &&
+                    status.m_eState == k_ESteamNetworkingConnectionState_Connected &&
+                    status.m_cbPendingReliable + status.m_cbSentUnackedReliable > 0) {
+                    pending = true;
+                }
+            }
+            if (!pending) {
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+
     void Session::drop(Peer& peer, Reason reason, std::vector<Event>* events) {
         send_to(peer.connection, Bye{ reason });
         SteamNetworkingSockets()->CloseConnection(peer.connection, k_ESteamNetConnectionEnd_App_Min + (int)reason,
@@ -605,8 +641,17 @@ namespace conker::netplay {
     }
 
     void Session::leave(Reason reason) {
+        // The goodbyes first, then a moment for everything sent to arrive, as on a lossy network some of it is
+        // still being resent: the program quitting would drop what isn't acknowledged yet (a quitting player's
+        // last inputs and goodbye among it), and the others would wait for the connection to time out.
+        for (const Peer& peer : peers) {
+            send_to(peer.connection, Bye{ reason });
+        }
+        flush();
         while (!peers.empty()) {
-            drop(peers.back(), reason, nullptr);
+            SteamNetworkingSockets()->CloseConnection(peers.back().connection, k_ESteamNetConnectionEnd_App_Min + (int)reason,
+                describe(reason), true);
+            peers.pop_back();
         }
         // The listen socket stays open (nobody more is let in) until the session goes: closing it closes
         // every connection accepted on it at once, goodbyes not yet sent and all.
