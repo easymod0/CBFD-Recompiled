@@ -24,13 +24,20 @@
 #              of a match of two must match its solo replay
 #   jittery    the same with input delay 0 and random sleeps (--jitter 500) on the joiner, so the two
 #              are out of step and wait for each other all the time
+#   leave      the mouse match, the second joiner quitting at read 1500: the host and the first joiner play on,
+#              port 3 idle from the read the host says (both must say the same), and must match a solo replay
+#              of the recording with port 3 idle from there
+#   leave-crash the same with the second joiner killed at about read 1500 (no goodbye): the host notices it stopped
+#              answering, and the two play on as above
+#   leave-couch the couch match with ports 2 and 3 on a joiner that quits at read 1500: the host plays on, both
+#              ports idle from the same read, and must match a solo replay so
 #   desync     the host changes a byte of its memory at read 300: both must stop for a desync, and each
 #              write a desync report naming the region changed (64, at 0x80400000) with its memory, which
 #              compare_desyncs.py must find the byte in
 # It exits 0 if all is as it should be, 1 if not. The logs are kept in --out; without it they're in a
 # temporary folder, deleted if all passed. The data folders it makes for the copies (about 1 GB in all) are
 # always deleted. As in check.sh, a run is judged by what it prints and then stopped. It uses UDP ports
-# 27310 to 27316 on 127.0.0.1.
+# 27310 to 27319 on 127.0.0.1.
 set -u
 
 cd "$(dirname "$0")/../.."
@@ -48,7 +55,7 @@ while [ $# -gt 0 ]; do
         --seed) SEED=$2; shift 2 ;;
         --timeout) TIMEOUT=$2; shift 2 ;;
         --out) OUT=$2; shift 2 ;;
-        -h|--help) sed -n '2,31p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -128,6 +135,126 @@ if finish "was the last: quitting" mouse-host mouse-join1 mouse-join2; then
     for name in mouse-host mouse-join1 mouse-join2; do
         same $name mouse-solo "$MOUSE_READS" || failed=1
     done
+else
+    failed=1
+fi
+
+# idle_from <recording> <out> <ports> <read>: <out>, the recording with each of <ports> (port numbers from 1, e.g.
+# 23) idle from <read> on, as a match gives a player that left: nothing pressed or moved, their last Controls.
+idle_from() {
+    python3 - "$@" <<'PY'
+import sys
+src, out, ports, first = sys.argv[1], sys.argv[2], sys.argv[3], int(sys.argv[4])
+data = bytearray(open(src, "rb").read())
+header, read_size, pad_size, motion_size = 40, 73, 5, 13   # version 4 (harness.cpp)
+reads = (len(data) - header) // read_size
+assert 0 < first <= reads
+for port in (int(p) - 1 for p in ports):
+    last = header + (first - 1) * read_size + 1 + 4 * pad_size + port * motion_size
+    controls = data[last + 9:last + 13]
+    for start in range(header + first * read_size, len(data), read_size):
+        pad = start + 1 + port * pad_size
+        motion = start + 1 + 4 * pad_size + port * motion_size
+        data[pad:pad + pad_size] = bytes(pad_size)
+        data[motion:motion + motion_size] = bytes(9) + controls
+open(out, "wb").write(data)
+PY
+}
+
+# left_at <name> <port>: the read from which <name> said port <port> plays no more.
+left_at() {
+    sed -n "s/^\[netplay\] port $2 plays no more: no input from read \([0-9]*\).*/\1/p" "$OUT/$1.out" | head -n 1
+}
+
+echo "leave"
+# The same 3-player match, the second joiner (port 3) quitting at read 1500: the host and the first joiner play on
+# with port 3 idle from the read the host says, and must match a solo replay of the recording so.
+pads=mouse-1.pads start leave-host --netplay-host 27317 --netplay-address 127.0.0.1 --players 3
+code=$(code_of leave-host)
+pads=mouse-2.pads start leave-join1 --netplay-join "$code"
+i=0
+while ! grep -q "in, on port 2" "$OUT/leave-join1.out" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+pads=mouse-3.pads start leave-join2 --netplay-join "$code" --stop-after 1500
+if finish "was the last: quitting" leave-host leave-join1 leave-join2; then
+    from=$(left_at leave-host 3)
+    if [ -z "$from" ] || [ "$(left_at leave-join1 3)" != "$from" ]; then
+        echo "  the host and the first joiner don't say the same read for port 3 leaving ('$from', '$(left_at leave-join1 3)')"
+        failed=1
+    else
+        echo "  port 3 idle from read $from"
+        idle_from "$OUT/mouse.pads" "$OUT/leave-solo.pads" 3 "$from" || exit 2
+        pads=leave-solo.pads start leave-solo
+        if finish "was the last: quitting" leave-solo; then
+            same leave-host leave-solo "$MOUSE_READS" || failed=1
+            same leave-join1 leave-solo "$MOUSE_READS" || failed=1
+            # Port 3 idle must make a difference, or this shows nothing.
+            if python3 tools/netplay/compare_hashes.py "$OUT/mouse-solo.log" "$OUT/leave-host.log" > /dev/null; then
+                echo "  leave-host is the same as mouse-solo: port 3 leaving changed nothing"
+                failed=1
+            fi
+        else
+            failed=1
+        fi
+    fi
+else
+    failed=1
+fi
+
+echo "leave-couch"
+# Two players on one joiner (ports 2 and 3) leaving together at read 1500: the host plays on alone.
+pads=couch-1.pads start leave-couch-host --netplay-host 27318 --netplay-address 127.0.0.1 --players 3
+pads=couch-23.pads start leave-couch-join --netplay-join "$(code_of leave-couch-host)" --local-players 2 --stop-after 1500
+if finish "was the last: quitting" leave-couch-host leave-couch-join; then
+    from=$(left_at leave-couch-host 2)
+    if [ -z "$from" ] || [ "$(left_at leave-couch-host 3)" != "$from" ]; then
+        echo "  ports 2 and 3 didn't leave at the same read"
+        failed=1
+    else
+        echo "  ports 2 and 3 idle from read $from"
+        idle_from "$OUT/couch-solo23.pads" "$OUT/leave-couch-solo.pads" 23 "$from" || exit 2
+        pads=leave-couch-solo.pads start leave-couch-solo
+        if finish "was the last: quitting" leave-couch-solo; then
+            same leave-couch-host leave-couch-solo "$MOUSE_READS" || failed=1
+        else
+            failed=1
+        fi
+    fi
+else
+    failed=1
+fi
+
+echo "leave-crash"
+# The 3-player match again, the second joiner killed at read 1500 (no goodbye): the host notices it stopped answering
+# (in about 10 s), and the two play on, as above.
+pads=mouse-1.pads start crash-host --netplay-host 27319 --netplay-address 127.0.0.1 --players 3
+code=$(code_of crash-host)
+pads=mouse-2.pads start crash-join1 --netplay-join "$code"
+i=0
+while ! grep -q "in, on port 2" "$OUT/crash-join1.out" 2>/dev/null && [ $i -lt 300 ]; do sleep 0.1; i=$((i + 1)); done
+pads=mouse-3.pads start crash-join2 --netplay-join "$code"
+crashed=${pids##* }
+i=0
+while [ "$(cat "$OUT/crash-join2.log" 2>/dev/null | wc -l)" -lt 1500 ] && [ $i -lt 1200 ]; do sleep 0.1; i=$((i + 1)); done
+kill -9 "$crashed" 2>/dev/null
+wait "$crashed" 2>/dev/null
+# It isn't waited for to finish.
+procs=$(echo "$procs" | tr ' ' '\n' | grep -v '^crash-join2:' | tr '\n' ' ')
+if finish "was the last: quitting" crash-host crash-join1; then
+    from=$(left_at crash-host 3)
+    if [ -z "$from" ] || [ "$(left_at crash-join1 3)" != "$from" ]; then
+        echo "  the host and the first joiner don't say the same read for port 3 ('$from', '$(left_at crash-join1 3)')"
+        failed=1
+    else
+        echo "  port 3 stopped answering; idle from read $from"
+        idle_from "$OUT/mouse.pads" "$OUT/crash-solo.pads" 3 "$from" || exit 2
+        pads=crash-solo.pads start crash-solo
+        if finish "was the last: quitting" crash-solo; then
+            same crash-host crash-solo "$MOUSE_READS" || failed=1
+            same crash-join1 crash-solo "$MOUSE_READS" || failed=1
+        else
+            failed=1
+        fi
+    fi
 else
     failed=1
 fi

@@ -34,7 +34,8 @@ namespace conker::netplay {
             joined,     // host: a joiner passed the handshake, on `ports`
             welcomed,   // joiner: accepted, on `ports`, in a match of `players`
             started,    // joiner: every port is taken and the match starts
-            packet,     // `packet` arrived (Inputs or Hash), from `port`'s peer (via the host for a joiner)
+            packet,     // `packet` arrived (Inputs, Hash, or for a joiner the host's Gone), from `port`'s peer (via
+                        // the host for a joiner; Gone: the port gone)
             left,       // host: the peer on `ports` left or was dropped, for `reason`
             ended,      // joiner: refused, or the connection to the host ended, for `reason`
         };
@@ -109,6 +110,8 @@ namespace conker::netplay {
         void send(const Inputs& inputs);
         // This peer's memory hash (a joiner's go to the host, the host's to everyone).
         void send(const Hash& hash);
+        // Host: a player has left, to the joiners still in (after their last inputs, passed on as they came).
+        void send(const Gone& gone);
         // Says goodbye to every peer and closes the connections, once what was sent has arrived (up to 2 s,
         // for a lossy network). Poll a moment before deleting the session or stopping the library.
         void leave(Reason reason);

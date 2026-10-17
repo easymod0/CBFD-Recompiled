@@ -16,6 +16,7 @@
 //   6 Bye      u8 reason                                                               6 bytes
 //   7 Start    u8 players (2 to 4), u8 own view (0 or 1), u8 delay (0 to 8), u8 pairs  9 bytes
 //              (ports below players, an even number of them)
+//   8 Gone     u8 port (1 to 3: never the host's 0), u32 from read                     10 bytes
 // A packet of any other size, version or kind, or with any field out of range, is refused.
 
 #include "packets.hpp"
@@ -25,7 +26,7 @@
 
 namespace conker::netplay {
     namespace {
-        enum Kind : uint8_t { hello = 1, welcome, refuse, inputs, hash, bye, start };
+        enum Kind : uint8_t { hello = 1, welcome, refuse, inputs, hash, bye, start, gone };
         constexpr size_t header_size = 5;
         constexpr size_t pad_size = 5;
         constexpr size_t motion_size = 13;
@@ -39,6 +40,7 @@ namespace conker::netplay {
                 case hash: return header_size + 12 + 2 * memory_regions;
                 case bye: return header_size + 1;
                 case start: return header_size + 4;
+                case gone: return header_size + 5;
             }
             return 0;
         }
@@ -78,6 +80,9 @@ namespace conker::netplay {
         }
         bool valid_fields(const Bye& p) {
             return valid_reason(p.reason);
+        }
+        bool valid_fields(const Gone& p) {
+            return p.port >= 1 && p.port < max_players;
         }
         bool valid_fields(const Start& p) {
             return p.players >= 2 && p.players <= max_players && p.own_view <= 1 && p.delay <= max_delay &&
@@ -182,6 +187,10 @@ namespace conker::netplay {
                     w.u16(region);
                 }
             }
+            else if constexpr (std::is_same_v<T, Gone>) {
+                w.u8(p.port);
+                w.u32(p.from_read);
+            }
             else if constexpr (std::is_same_v<T, Start>) {
                 w.u8(p.players);
                 w.u8(p.own_view);
@@ -270,6 +279,13 @@ namespace conker::netplay {
                     packet = p;
                 }
                 break;
+            case gone: {
+                Gone p;
+                p.port = r.u8();
+                p.from_read = r.u32();
+                packet = p;
+                break;
+            }
         }
         if (!valid_packet(packet)) {
             return std::nullopt;

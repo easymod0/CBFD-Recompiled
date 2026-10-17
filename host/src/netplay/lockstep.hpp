@@ -34,6 +34,10 @@
 //                                this player's own match worse, so it's in every build, like the above
 //   --netplay-stall-at <read>:<ms>  (a test) the game stops at that read for that long, as on a hitch
 //
+// A joiner's machine that leaves (or stops answering) leaves the others playing: the host tells them from which
+// read its ports get no input (Gone), and every machine gives them an idle pad from there. The host leaving
+// ends the match.
+//
 // A peer that falls behind the others (a hitch: loading, the system) catches up on its own: it runs the
 // timeline faster than real time until the others' inputs are no further ahead of it than the delay.
 //

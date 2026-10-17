@@ -30,6 +30,7 @@
 #include "librecomp/save_states.hpp"
 #include "ultramodern/timeline.hpp"
 
+#include "../conker.hpp"
 #include "hello.hpp"
 #include "net/session.hpp"
 
@@ -38,6 +39,7 @@
 extern std::atomic_bool exited;
 
 using conker::netplay::Event;
+using conker::netplay::Gone;
 using conker::netplay::Hash;
 using conker::netplay::Inputs;
 using conker::netplay::Motion;
@@ -127,6 +129,10 @@ namespace {
 
     std::array<std::vector<Input>, conker::netplay::max_players> received;
     std::array<bool, conker::netplay::max_players> gone{};
+    // A player that left the match while it went on (#17): from this read their port gets an idle pad (never:
+    // they're in, or the match ends without them). The host decides it, the read after the last of their
+    // inputs it had, and tells the others (Gone); nobody can be past it, as everyone needed those inputs.
+    std::array<uint64_t, conker::netplay::max_players> idle_from;
     // Whether a peer that's gone stopped answering, rather than saying goodbye (a crash, a lost connection),
     // so it's told as maybe having quit.
     bool gone_silently = false;
@@ -354,6 +360,18 @@ namespace {
         }
     }
 
+    // `port` plays no more from read `from`: an idle pad, with their last Controls (their camera's settings).
+    void let_go(int port, uint64_t from) {
+        idle_from[port] = from;
+        std::printf("[netplay] port %d plays no more: no input from read %llu, the others play on\n", port + 1, (unsigned long long)from);
+    }
+
+    Input idle_input(int port) {
+        Input idle;
+        idle.motion.controls = received[port].empty() ? conker::motion::default_controls : received[port].back().motion.controls;
+        return idle;
+    }
+
     void handle(const Event& event) {
         switch (event.type) {
             case Event::Type::joined:
@@ -361,6 +379,7 @@ namespace {
             case Event::Type::started:
                 break;
             case Event::Type::left:
+                // The host's: a joiner's machine left (all its ports), saying goodbye or not answering.
                 std::printf("[netplay] %s left: %s\n", ports_text(event.ports).c_str(), conker::netplay::describe(event.reason));
                 for (int port = 0; port < conker::netplay::max_players; port++) {
                     if ((event.ports & (1u << port)) != 0) gone[port] = true;
@@ -368,6 +387,16 @@ namespace {
                 gone_silently = gone_silently || event.reason == Reason::timeout;
                 if (event.reason == Reason::desync) {
                     other_desynced();
+                }
+                else if (!ended) {
+                    // The others play on: every input of theirs this host had was passed on as it came, so
+                    // the read after the last is the same for everyone, and none of them is past it.
+                    for (int port = 0; port < conker::netplay::max_players; port++) {
+                        if ((event.ports & (1u << port)) != 0 && idle_from[port] == never) {
+                            let_go(port, received[port].size());
+                            session->send(Gone{ (uint8_t)port, (uint32_t)received[port].size() });
+                        }
+                    }
                 }
                 break;
             case Event::Type::ended:
@@ -396,6 +425,17 @@ namespace {
                     for (int i = 0; i < inputs->count; i++) {
                         got.push_back({ inputs->pads[i], inputs->motions[i] });
                     }
+                }
+                else if (const Gone* g = std::get_if<Gone>(&event.packet)) {
+                    // The host's word that a player left: from the read after the last of their inputs it passed on,
+                    // all of which came first.
+                    if (idle_from[g->port] != never || g->from_read != received[g->port].size()) {
+                        end_match(Reason::protocol, "the host said a player left at a read that doesn't fit");
+                        return;
+                    }
+                    std::printf("[netplay] %s left\n", ports_text((uint8_t)(1u << g->port)).c_str());
+                    gone[g->port] = true;
+                    let_go(g->port, g->from_read);
                 }
                 else if (const Hash* hash = std::get_if<Hash>(&event.packet)) {
                     // Hashes come every hash_every reads, within the horizon; one for a read this peer no
@@ -472,10 +512,10 @@ namespace {
         return std::min(chosen, conker::netplay::max_delay);
     }
 
-    // Whether every player's pad for `read` is here.
+    // Whether every player's pad for `read` is here (or they've left).
     bool all_here(uint64_t read) {
         for (int port = 0; port < match_players; port++) {
-            if (received[port].size() <= read) return false;
+            if (received[port].size() <= read && read < idle_from[port]) return false;
         }
         return true;
     }
@@ -711,6 +751,7 @@ bool conker::lockstep::begin(const netplay::Hello& me, std::string& error) {
     initial_sent = false;
     for (auto& pads : received) pads.clear();
     gone = {};
+    idle_from.fill(never);
     gone_silently = false;
     own_hashes.clear();
     their_hashes.clear();
@@ -984,7 +1025,7 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, net
             break;
         }
         for (int port = 0; port < match_players; port++) {
-            if (received[port].size() <= read && gone[port]) {
+            if (received[port].size() <= read && gone[port] && read < idle_from[port]) {
                 end_match(Reason::quit, gone_silently ? "a player stopped answering (they may have quit)" : "a player left");
                 return false;
             }
@@ -1009,7 +1050,7 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, net
     // How far behind the others this peer is: the reads past read + delay that their inputs reach.
     int64_t behind = INT64_MIN;
     for (int port = 0; port < match_players; port++) {
-        if ((own_ports & (1u << port)) == 0) {
+        if ((own_ports & (1u << port)) == 0 && idle_from[port] == never) {
             behind = std::max(behind, (int64_t)received[port].size() - 1 - (int64_t)(read + delay));
         }
     }
@@ -1047,7 +1088,7 @@ bool conker::lockstep::on_read(uint64_t read, ultramodern::input::Pad* pads, net
     }
 
     for (int port = 0; port < match_players; port++) {
-        const Input& input = received[port][read];
+        const Input input = read < idle_from[port] ? received[port][read] : idle_input(port);
         pads[port] = { input.pad.buttons, input.pad.stick_x, input.pad.stick_y, input.pad.err_no };
         motions[port] = input.motion;
     }

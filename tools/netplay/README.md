@@ -233,7 +233,7 @@ with three, the whole split screen is shown.
 In a window, the launcher's **Netplay** menu (`host/src/netplay/menu.cpp`, #9) does the same: host
 (players, port, input delay, and the host's own address, from which it shows the join code to send once hosting) or
 join by code. It says how the connecting goes and why a peer was refused, and the game starts on every
-machine once all are in. When a match started there ends (a desync, a player gone), a prompt says why
+machine once all are in. When a match started there ends (a desync, the host gone), a prompt says why
 instead of the game quitting.
 
 **Screens.** Every machine draws the whole split screen (that keeps the games the same), but a window can
@@ -260,9 +260,11 @@ copies against each other on this machine (`--data` gives each its own folder) a
 gets exactly the game a replay alone does (each copy's recording has the other's port scrambled, so it
 only does if the pads came over the network), with input delay 0 and `--jitter` on one side too; a
 3-player Deathmatch where everyone moves their mouse and aims, at the automatic delay (through the
-host's relay); the same match with two players on one copy (the host's, then a joiner's); and that a
+host's relay); the same match with two players on one copy (the host's, then a joiner's); a joiner leaving partway, quitting or killed, and two
+players on one joiner leaving together (the others must match a solo replay of the recording with those
+ports idle from the read the host says); and that a
 desync (`--netplay-desync-at <read>`, which changes a byte in region 64) is caught, with reports that name
-the region and compare to that byte. About 60 s.
+the region and compare to that byte. About 100 s.
 
 **Bad networks.** `--netplay-fake-network <spec>` has the library make this peer's network worse: `lag=<ms>`,
 `jitter=<ms>`, `loss=<%>`, `reorder=<%>` and `dup=<%>` on what it sends, `outage=<read>:<s>` (nothing sent or
@@ -276,6 +278,14 @@ duplicates, with a 3 s outage, with the lag going from 20 to 150 ms partway, and
 must give the solo replay's game, and the stalled copy must catch up; the waits are printed, and
 `--record <file>` keeps them, a line per copy with the date and commit, to compare over time. About 70 s.
 
+**A player leaving.** When a joiner's machine leaves (saying goodbye, or not answering for about 10 s: a
+crash, a lost connection), the others play on. The host decides from which read its ports get no input: the
+read after the last of its inputs the host had, as every joiner's inputs reach the others only through the
+host, in order, so nobody can be past it. It tells the joiners still in (`Gone`, sent after those inputs), and
+from that read every machine gives those ports an idle pad: nothing pressed, nothing moved, the player's last
+Controls. Several players on the leaving machine leave together. The host leaving still ends the match (it's
+the hub). Telling the players on screen is for the status display (#19); the log says who left and from when.
+
 **Catching up.** A peer that falls behind (a hitch: loading, the system) lets the others run on until they
 need its input, up to the input delay ahead; from then on they'd wait on it at every read, the delay used
 up. So when the others' inputs reach 2 or more reads further than they would if the others were at this
@@ -288,7 +298,7 @@ always (`audio_output.cpp`), and nothing else needs to change: the game is the s
 | Script | |
 |---|---|
 | `check.sh` | the determinism check: replays a made-up recording headless twice, with `--jitter` and with `--state-test`, and fails unless all four give the same hashes (about 30 s; the CI runs it, `.github/workflows/netplay.yml`) |
-| `lockstep.sh` | the lockstep check: copies in a match over loopback give the same game as a replay alone (2 players, 3 with the mouse, and 3 with two on one copy), and a desync is caught and reported (about 60 s) |
+| `lockstep.sh` | the lockstep check: copies in a match over loopback give the same game as a replay alone (2 players, 3 with the mouse, and 3 with two on one copy), players leaving partway, and a desync is caught and reported (about 100 s) |
 | `network.sh` | the bad-network check: matches with lag, jitter, loss, an outage and a change of lag give the same game as a replay alone, and how long each waited (about 70 s) |
 | `lib.sh` | what `lockstep.sh` and `network.sh` share: starting copies, waiting for them, comparing their hash logs |
 | `compare_hashes.py` | the first read two hash logs differ at (it exits 1 if they differ); with dumps, the ranges that differ, by data symbol |

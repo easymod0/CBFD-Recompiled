@@ -68,6 +68,9 @@ int main() {
     CHECK(round_trips(Start{ 3, 0 }, 9));
     CHECK(round_trips(Start{ 4, 1, max_delay }, 9));
     CHECK(round_trips(Start{ 4, 1, 2, 0x0C }, 9));
+    CHECK(round_trips(Gone{ 3, 4000000000u }, 10));
+    const std::vector<uint8_t> gone = bytes_of(Gone{ 2, 0x01020304 });
+    CHECK(gone[4] == 8 && gone[5] == 2 && gone[6] == 4 && gone[9] == 1);
 
     // The layout: header, then little-endian fields.
     const std::vector<uint8_t> hello = bytes_of(Hello{ 0x0807060504030201ull, 0, 0, 0x1112131415161718ull, 0x2122232425262728ull, 2 });
@@ -142,6 +145,12 @@ int main() {
     std::vector<uint8_t> data = bytes_of(Welcome{ 0x02, 2 });
     data[5] = 0x03;
     CHECK(!decodes(data));
+    data = gone;
+    data[5] = 0;                                    // the host's port
+    CHECK(!decodes(data));
+    data = gone;
+    data[5] = 4;
+    CHECK(!decodes(data));
     data = hello;
     data[45] = 4;
     CHECK(!decodes(data));
@@ -187,7 +196,7 @@ int main() {
     data = hello;
     data[0] = 'X';
     CHECK(!decodes(data));
-    for (int kind : { 0, 8, 255 }) {
+    for (int kind : { 0, 9, 255 }) {
         data = hello;
         data[4] = (uint8_t)kind;
         CHECK(!decodes(data));
