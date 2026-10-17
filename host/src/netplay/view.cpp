@@ -13,7 +13,11 @@
 // game memory, so by the match's rule, never by a player's own choice alone).
 //
 // While the game is paused its menu is drawn over the whole split screen, so the picture is left as the game
-// draws it (the pause counter D_80082F90, widescreen.cpp).
+// draws it (the pause counter D_80082F90, widescreen.cpp). The menu's background is the game's copy of the last
+// frame (D_800BE9C4, made as the pause starts, widescreen.cpp), drawn into an image as wide as the frame: RT64 is
+// told it isn't the frame, so the copy is left alone, and shows this player's view as it was drawn. (Taken for
+// the frame, the copy's tiles moved with the view or were left out, and the picture behind the menu was what
+// was in memory: green and pink stripes.) The motion blur's copy (D_800BE570) likewise.
 //
 // Each frame, the game's cameras (D_800BE628, 0x180 bytes each, the same as reticle.cpp's and
 // widescreen.cpp's) say where each player's view is on the N64's screen: + 0x24 top, + 0x28 bottom,
@@ -32,14 +36,17 @@
 
 namespace RT64 {
     // rt64.patch: one view of the split screen drawn anew across the whole frame, the others not drawn
-    // (rectangles in pixels of the frame).
-    void setViewFocusRedraw(bool on, float left, float top, float right, float bottom, float frameWidth, float frameHeight);
+    // (rectangles in pixels of the frame); not in the two images given, the game's own copies of the frame.
+    void setViewFocusRedraw(bool on, float left, float top, float right, float bottom, float frameWidth, float frameHeight,
+        uint32_t ownImage0, uint32_t ownImage1);
 }
 
 namespace {
     constexpr gpr cameras_pointer = (gpr)(int32_t)0x800BE628;
     constexpr gpr frame_width_address = (gpr)(int32_t)0x800BE620;
     constexpr gpr pause_counter_address = (gpr)(int32_t)0x80082F90;
+    constexpr gpr pause_picture_address = (gpr)(int32_t)0x800BE9C4;   // D_800BE9C4, the pause's copy of the frame
+    constexpr gpr motion_blur_copy_address = (gpr)(int32_t)0x800BE570; // D_800BE570, the motion blur's
     constexpr uint32_t camera_size = 0x180;
     constexpr int32_t camera_top = 0x24, camera_bottom = 0x28, camera_left = 0x2C, camera_right = 0x30;
     constexpr float frame_height = 216.0f;
@@ -55,11 +62,14 @@ namespace {
     }
 
     // Draws the part of the frame given (shares of it) across the whole frame; (0, 0, 1, 1) draws it all as it is.
-    void show(float left, float top, float right, float bottom, int32_t frame_width) {
+    void show(uint8_t* rdram, float left, float top, float right, float bottom, int32_t frame_width) {
         const float next[4] = { left, top, right, bottom };
         const bool whole = left <= 0.0f && top <= 0.0f && right >= 1.0f && bottom >= 1.0f;
         const float w = (float)frame_width;
-        RT64::setViewFocusRedraw(!whole, left * w, top * frame_height, right * w, bottom * frame_height, w, frame_height);
+        const uint32_t pause_picture = (uint32_t)MEM_W(0, pause_picture_address);
+        const uint32_t motion_blur_copy = (uint32_t)MEM_W(0, motion_blur_copy_address);
+        RT64::setViewFocusRedraw(!whole, left * w, top * frame_height, right * w, bottom * frame_height, w, frame_height,
+            pause_picture, motion_blur_copy);
         if (std::memcmp(next, shown, sizeof(shown)) != 0) {
             std::memcpy(shown, next, sizeof(shown));
             std::printf("[netplay] drawing %.3f %.3f %.3f %.3f of the picture across it\n", left, top, right, bottom);
@@ -85,7 +95,7 @@ void conker::netplay_view::game_frame(uint8_t* rdram) {
     const bool wanted = mine_only || conker::harness::own_view_rule();
     if (!wanted || !(in_match || conker::harness::replaying()) || port < 0 || cameras < 0x80000000u || cameras >= 0x80800000u ||
         frame_width < 16 || frame_width > 640) {
-        show(0, 0, 1, 1, frame_width);
+        show(rdram, 0, 0, 1, 1, frame_width);
         return;
     }
     auto rect = [&](int index, float out[4]) {
@@ -102,7 +112,7 @@ void conker::netplay_view::game_frame(uint8_t* rdram) {
     // (D_80082F90 counts the frames since the pause, widescreen.cpp; 0 while not paused.)
     const uint32_t pause_counter = (uint32_t)MEM_W(0, pause_counter_address);
     if (pause_counter != 0) {
-        show(0, 0, 1, 1, frame_width);
+        show(rdram, 0, 0, 1, 1, frame_width);
         return;
     }
     float first[4];
@@ -110,14 +120,14 @@ void conker::netplay_view::game_frame(uint8_t* rdram) {
     // Player 1's view reaches every side (to within the 2-pixel border): not split.
     const bool split = !(first[0] < 0.03f && first[1] < 0.03f && first[2] > 0.97f && first[3] > 0.97f);
     if (!split) {
-        show(0, 0, 1, 1, frame_width);
+        show(rdram, 0, 0, 1, 1, frame_width);
         return;
     }
     float own[4];
     rect(port, own);
     if (own[2] - own[0] < 0.05f || own[3] - own[1] < 0.05f) {
-        show(0, 0, 1, 1, frame_width);
+        show(rdram, 0, 0, 1, 1, frame_width);
         return;
     }
-    show(own[0], own[1], own[2], own[3], frame_width);
+    show(rdram, own[0], own[1], own[2], own[3], frame_width);
 }
